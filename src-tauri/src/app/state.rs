@@ -6,8 +6,9 @@ use crate::config::Config;
 use crate::services::{CatalogService, HistoryService, SettingsService, ShortcutService};
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct AppState {
+    /// Stored for sub-projects 2/3 (path resolution etc.); no Foundation command reads it yet.
+    #[allow(dead_code)]
     pub config: Config,
     pub settings: SettingsService,
     pub history: HistoryService,

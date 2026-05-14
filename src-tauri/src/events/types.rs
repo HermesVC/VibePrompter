@@ -56,6 +56,9 @@ pub struct ShortcutUpdatedPayload {
 /// Every event the backend can emit. The associated `name()` is the stable
 /// string the frontend listens on.
 #[derive(Debug, Clone)]
+// Suppression covers the dormant variants (ShortcutTriggered, AiRequest*, ModeChanged,
+// ProviderChanged, ClipboardOperation, OverlayOpened). The three Foundation variants
+// (AppReady, SettingsChanged, ShortcutUpdated) are actively constructed and used.
 #[allow(dead_code)]
 pub enum AppEvent {
     AppReady,
