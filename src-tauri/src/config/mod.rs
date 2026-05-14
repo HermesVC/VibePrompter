@@ -1,1 +1,5 @@
-// populated in a later task
+//! Process/environment configuration.
+
+pub mod settings;
+
+pub use settings::Config;
