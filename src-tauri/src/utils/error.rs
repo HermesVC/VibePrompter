@@ -14,6 +14,10 @@ pub enum AppError {
     #[error("migration error: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
 
+    /// Configuration errors. The `String` is NOT passed to the wire (`safe_message`
+    /// returns a generic message), but it IS emitted to `tracing` logs via `Display`.
+    /// Callers may include internal detail (paths, env values) — that detail goes to
+    /// logs only, never to the frontend.
     #[error("configuration error: {0}")]
     Config(String),
 
@@ -26,6 +30,10 @@ pub enum AppError {
     #[error("{entity} not found: {id}")]
     NotFound { entity: &'static str, id: String },
 
+    /// Validation errors — the `String` payload IS passed through to the wire.
+    /// It MUST be a statically authored, user-facing message (e.g. "name must be
+    /// <= 100 chars"), never a raw external value such as a provider response body
+    /// or OS error string.
     #[error("validation error: {0}")]
     Validation(String),
 
