@@ -1,0 +1,10 @@
+export { SettingsWindow } from './ui/SettingsWindow';
+export { GeneralPanel } from './ui/panels/GeneralPanel';
+export { ShortcutsPanel } from './ui/panels/ShortcutsPanel';
+export { ModesPanel } from './ui/panels/ModesPanel';
+export { ProvidersPanel } from './ui/panels/ProvidersPanel';
+export { HistoryPanel } from './ui/panels/HistoryPanel';
+export { AppearancePanel } from './ui/panels/AppearancePanel';
+export { AdvancedPanel } from './ui/panels/AdvancedPanel';
+export { AboutPanel } from './ui/panels/AboutPanel';
+export type { SettingsTabId } from './domain';
