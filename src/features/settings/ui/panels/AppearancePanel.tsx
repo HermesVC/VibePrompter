@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import { Group, I, PanelHead, SettingRow, Slider, Toggle } from '@shared/ui';
+import { useAppSettingsQuery, useSaveSettingsMutation } from '../../application/settings.query';
 
 const ACCENTS = [
   { id: 'violet', color: '#a78bfa' },
@@ -14,9 +14,15 @@ const THEMES = ['dark', 'light', 'system'] as const;
 const DENSITIES = ['compact', 'regular', 'comfy'] as const;
 
 export function AppearancePanel() {
-  const [theme, setTheme] = useState<(typeof THEMES)[number]>('dark');
-  const [accent, setAccent] = useState('violet');
-  const [density, setDensity] = useState<(typeof DENSITIES)[number]>('regular');
+  const { data: settings } = useAppSettingsQuery();
+  const saveSettings = useSaveSettingsMutation();
+  if (!settings) return null;
+  const theme = settings.theme as (typeof THEMES)[number];
+  const accent = settings.accent;
+  const density = settings.density as (typeof DENSITIES)[number];
+  const setTheme = (t: (typeof THEMES)[number]) => saveSettings.mutate({ ...settings, theme: t });
+  const setAccent = (a: string) => saveSettings.mutate({ ...settings, accent: a });
+  const setDensity = (d: (typeof DENSITIES)[number]) => saveSettings.mutate({ ...settings, density: d });
 
   return (
     <>

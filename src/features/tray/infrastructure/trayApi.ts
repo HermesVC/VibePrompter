@@ -1,12 +1,7 @@
+import { invokeCommand } from '@kernel/infrastructure/tauri';
 import type { TrayMenuItem, TrayToggleConfig } from '../domain';
 
-const TOGGLES: TrayToggleConfig[] = [
-  { id: 'enabled', label: 'Enable AI', iconName: 'bolt', defaultValue: true },
-  { id: 'shortcuts', label: 'Global shortcuts', iconName: 'keyboard', defaultValue: true, kbd: ['Ctrl', '⇧', '␣'] },
-  { id: 'boot', label: 'Start on boot', iconName: 'power', defaultValue: true },
-  { id: 'clip', label: 'Clipboard monitor', iconName: 'clipboard', defaultValue: false },
-];
-
+// Tray menu items are static UI labels — their actions are wired in sub-project 3.
 const ITEMS_PRIMARY: TrayMenuItem[] = [
   { id: 'palette', label: 'Open Palette', iconName: 'wand', kbd: ['Ctrl', '⇧', '␣'], accent: true },
   { id: 'mode', label: 'Switch Mode', iconName: 'layers', kbd: ['Ctrl', '⇧', 'M'] },
@@ -20,8 +15,24 @@ const ITEMS_SECONDARY: TrayMenuItem[] = [
   { id: 'quit', label: 'Quit PromptHelper', iconName: 'power', danger: true },
 ];
 
+interface BackendSettings {
+  boot_start: boolean;
+  clipboard_fallback: boolean;
+}
+
+// Toggles are derived from the real settings aggregate. The 'enabled' and
+// 'shortcuts' toggles have no Foundation backing yet — they default to true
+// until sub-project 3 owns them.
 export const trayApi = {
-  getToggles: async () => TOGGLES,
-  getPrimaryItems: async () => ITEMS_PRIMARY,
-  getSecondaryItems: async () => ITEMS_SECONDARY,
+  getToggles: async (): Promise<TrayToggleConfig[]> => {
+    const s = await invokeCommand<BackendSettings>('get_settings');
+    return [
+      { id: 'enabled', label: 'Enable AI', iconName: 'bolt', defaultValue: true },
+      { id: 'shortcuts', label: 'Global shortcuts', iconName: 'keyboard', defaultValue: true, kbd: ['Ctrl', '⇧', '␣'] },
+      { id: 'boot', label: 'Start on boot', iconName: 'power', defaultValue: s.boot_start },
+      { id: 'clip', label: 'Clipboard monitor', iconName: 'clipboard', defaultValue: s.clipboard_fallback },
+    ];
+  },
+  getPrimaryItems: async (): Promise<TrayMenuItem[]> => ITEMS_PRIMARY,
+  getSecondaryItems: async (): Promise<TrayMenuItem[]> => ITEMS_SECONDARY,
 };

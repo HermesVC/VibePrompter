@@ -1,10 +1,16 @@
-import { useState } from 'react';
 import { Group, I, PanelHead, PhButton, PhInput, SettingRow, Toggle } from '@shared/ui';
+import { useAppSettingsQuery, useSaveSettingsMutation } from '../../application/settings.query';
 
 const RETENTIONS = ['7d', '30d', '90d', 'Forever'];
 
 export function AdvancedPanel() {
-  const [retention, setRetention] = useState(1);
+  const { data: settings } = useAppSettingsQuery();
+  const saveSettings = useSaveSettingsMutation();
+  if (!settings) return null;
+  const retention = RETENTIONS.indexOf(settings.history_retention);
+  const setRetention = (i: number) =>
+    saveSettings.mutate({ ...settings, history_retention: RETENTIONS[i] });
+
   return (
     <>
       <PanelHead title="Advanced" hint="Power-user settings. Be careful." />
@@ -56,20 +62,20 @@ export function AdvancedPanel() {
         <SettingRow
           icon={<I.code size={14} />}
           label="Enable developer tools"
-          control={<Toggle value={false} onChange={() => {}} />}
+          control={<Toggle value={settings.dev_tools} onChange={(v) => saveSettings.mutate({ ...settings, dev_tools: v })} />}
         />
         <SettingRow
           icon={<I.cpu size={14} />}
           label="Log raw model responses"
           hint="Useful for debugging prompt regressions."
-          control={<Toggle value={false} onChange={() => {}} />}
+          control={<Toggle value={settings.log_raw_responses} onChange={(v) => saveSettings.mutate({ ...settings, log_raw_responses: v })} />}
         />
         <SettingRow
           icon={<I.link size={14} />}
           label="Custom proxy URL"
           control={
             <div style={{ width: 240 }}>
-              <PhInput mono placeholder="https://proxy.example.com" />
+              <PhInput mono placeholder="https://proxy.example.com" value={settings.proxy_url} onChange={(e) => saveSettings.mutate({ ...settings, proxy_url: e.target.value })} />
             </div>
           }
         />
