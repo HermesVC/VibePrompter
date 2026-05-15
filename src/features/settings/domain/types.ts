@@ -61,6 +61,9 @@ export interface ShortcutItem {
   label: string;
   hint: string;
   iconName: string;
+  accelerator: string;
+  action: string;
+  enabled: boolean;
   keys: string[];
 }
 

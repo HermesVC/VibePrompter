@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { settingsApi } from '../infrastructure/settingsApi';
+import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 const k = (...parts: string[]) => ['settings', ...parts];
 
@@ -15,8 +16,6 @@ export const useHistoryQuery = () =>
   useQuery({ queryKey: k('history'), queryFn: settingsApi.getHistory });
 export const useShortcutsQuery = () =>
   useQuery({ queryKey: k('shortcuts'), queryFn: settingsApi.getShortcuts });
-
-import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 /** The user-facing settings aggregate — mirrors the Rust `Settings` struct. */
 export interface AppSettings {
