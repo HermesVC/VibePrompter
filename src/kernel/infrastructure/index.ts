@@ -6,3 +6,4 @@ export * from './api';
 
 // Storage utilities
 export * from './storage';
+export * from './tauri';
