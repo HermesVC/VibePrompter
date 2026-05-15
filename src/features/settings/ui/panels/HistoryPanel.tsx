@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { I, PanelHead, PhButton, PhInput, Pill, type IconName } from '@shared/ui';
+import { EmptyState, I, Kbd, PanelHead, PhButton, PhInput, Pill, type IconName } from '@shared/ui';
 import { useHistoryQuery } from '../../application/settings.query';
 
 const labelStyle: React.CSSProperties = {
@@ -11,7 +11,7 @@ const labelStyle: React.CSSProperties = {
 };
 
 export function HistoryPanel() {
-  const { data: history = [] } = useHistoryQuery();
+  const { data: history = [], isLoading } = useHistoryQuery();
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(1);
 
@@ -23,15 +23,12 @@ export function HistoryPanel() {
   );
   const current = history.find((x) => x.id === sel) ?? history[0];
 
-  if (!current) return null;
-  const CurIcon = I[current.iconName as IconName];
-
-  return (
-    <>
-      <PanelHead
-        title="History"
-        hint="The last 30 days of transformations. Stored locally."
-        actions={
+  const head = (
+    <PanelHead
+      title="History"
+      hint="The last 30 days of transformations. Stored locally."
+      actions={
+        history.length > 0 ? (
           <div className="flex gap-1.5">
             <PhButton size="sm" variant="ghost" icon={<I.filter size={12} />}>
               Filter
@@ -43,8 +40,45 @@ export function HistoryPanel() {
               Clear all
             </PhButton>
           </div>
-        }
-      />
+        ) : undefined
+      }
+    />
+  );
+
+  // Loading: render head only; the panel-level fade-in covers the visual gap.
+  if (isLoading) return head;
+
+  // Empty: no transformations yet — onboarding state.
+  if (history.length === 0) {
+    return (
+      <>
+        {head}
+        <EmptyState
+          icon={<I.history size={22} />}
+          title="No transformations yet"
+          description={
+            <>
+              Highlight text anywhere on your system and press{' '}
+              <Kbd keys={['Ctrl', '⇧', '␣']} size="sm" /> to open the command palette.
+              Every transformation you run will appear here.
+            </>
+          }
+          action={
+            <PhButton size="sm" variant="ghost" icon={<I.wand size={12} />}>
+              Learn about shortcuts
+            </PhButton>
+          }
+        />
+      </>
+    );
+  }
+
+  if (!current) return head;
+  const CurIcon = I[current.iconName as IconName];
+
+  return (
+    <>
+      {head}
 
       <div className="grid gap-4" style={{ gridTemplateColumns: '380px 1fr' }}>
         <div className="flex flex-col gap-2">
@@ -102,9 +136,17 @@ export function HistoryPanel() {
               );
             })}
             {items.length === 0 && (
-              <div className="p-8 text-center text-[13px] text-fg-mute">
-                No matches for "{q}"
-              </div>
+              <EmptyState
+                compact
+                icon={<I.search size={16} />}
+                title={`No matches for “${q}”`}
+                description="Try a shorter query, or clear the search to browse all history."
+                action={
+                  <PhButton size="sm" variant="ghost" onClick={() => setQ('')}>
+                    Clear search
+                  </PhButton>
+                }
+              />
             )}
           </div>
         </div>

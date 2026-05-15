@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import {
+  EmptyState,
   I,
   PanelHead,
   PhButton,
@@ -44,23 +45,47 @@ const glyphFor = (id: ProviderInfo['id']): ReactNode => {
 };
 
 export function ProvidersPanel() {
-  const { data: providers = [] } = useProvidersQuery();
+  const { data: providers = [], isLoading } = useProvidersQuery();
   const [sel, setSel] = useState<ProviderInfo['id']>('openai');
   const current = providers.find((p) => p.id === sel) ?? providers[0];
 
-  if (!current) return null;
+  const head = (
+    <PanelHead
+      title="Providers"
+      hint="Bring your own keys. PromptHelper routes per-mode."
+      actions={
+        <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
+          Add provider
+        </PhButton>
+      }
+    />
+  );
+
+  if (isLoading) return head;
+
+  if (providers.length === 0) {
+    return (
+      <>
+        {head}
+        <EmptyState
+          icon={<I.cloud size={22} />}
+          title="No providers configured"
+          description="Connect at least one provider (OpenAI, Anthropic, Gemini, or Ollama) to start running transformations. Your keys are stored encrypted on this device."
+          action={
+            <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
+              Add provider
+            </PhButton>
+          }
+        />
+      </>
+    );
+  }
+
+  if (!current) return head;
 
   return (
     <>
-      <PanelHead
-        title="Providers"
-        hint="Bring your own keys. PromptHelper routes per-mode."
-        actions={
-          <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
-            Add provider
-          </PhButton>
-        }
-      />
+      {head}
 
       <div className="grid grid-cols-2 gap-2 mb-[18px]">
         {providers.map((p) => (

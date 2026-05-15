@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { I, PanelHead, PhButton, PhInput, Slider, type IconName } from '@shared/ui';
+import { EmptyState, I, PanelHead, PhButton, PhInput, Slider, type IconName } from '@shared/ui';
 import { useModesQuery } from '../../application/settings.query';
 import type { PromptMode } from '../../domain';
 
@@ -12,7 +12,7 @@ const labelStyle: React.CSSProperties = {
 };
 
 export function ModesPanel() {
-  const { data: seed = [] } = useModesQuery();
+  const { data: seed = [], isLoading } = useModesQuery();
   const [modes, setModes] = useState<PromptMode[]>([]);
   const [sel, setSel] = useState<string>('');
 
@@ -27,29 +27,58 @@ export function ModesPanel() {
   const setCurrent = (patch: Partial<PromptMode>) =>
     setModes((xs) => xs.map((m) => (m.id === sel ? { ...m, ...patch } : m)));
 
-  if (!current) return null;
+  const head = (
+    <PanelHead
+      title="Prompt Modes"
+      hint="Each mode is a saved persona with its own system prompt and parameters."
+      actions={
+        <div className="flex gap-1.5">
+          <PhButton size="sm" variant="ghost" icon={<I.upload size={12} />}>
+            Import
+          </PhButton>
+          <PhButton size="sm" variant="ghost" icon={<I.download size={12} />}>
+            Export
+          </PhButton>
+          <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
+            New mode
+          </PhButton>
+        </div>
+      }
+    />
+  );
+
+  if (isLoading) return head;
+
+  if (modes.length === 0) {
+    return (
+      <>
+        {head}
+        <EmptyState
+          icon={<I.layers size={22} />}
+          title="No prompt modes yet"
+          description="Modes are saved personas — a system prompt plus model and parameters. Start from a preset or write one from scratch."
+          action={
+            <>
+              <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
+                Create your first mode
+              </PhButton>
+              <PhButton size="sm" variant="ghost" icon={<I.upload size={12} />}>
+                Import
+              </PhButton>
+            </>
+          }
+        />
+      </>
+    );
+  }
+
+  if (!current) return head;
 
   const CurIcon = I[current.iconName as IconName];
 
   return (
     <>
-      <PanelHead
-        title="Prompt Modes"
-        hint="Each mode is a saved persona with its own system prompt and parameters."
-        actions={
-          <div className="flex gap-1.5">
-            <PhButton size="sm" variant="ghost" icon={<I.upload size={12} />}>
-              Import
-            </PhButton>
-            <PhButton size="sm" variant="ghost" icon={<I.download size={12} />}>
-              Export
-            </PhButton>
-            <PhButton size="sm" variant="primary" icon={<I.plus size={12} sw={2.4} />}>
-              New mode
-            </PhButton>
-          </div>
-        }
-      />
+      {head}
 
       <div className="grid gap-4" style={{ gridTemplateColumns: '220px 1fr', minHeight: 460 }}>
         {/* Mode list */}

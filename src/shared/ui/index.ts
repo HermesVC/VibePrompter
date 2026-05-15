@@ -13,6 +13,7 @@ export { Slider } from './Slider';
 export { PhButton } from './PhButton';
 export { PhInput } from './PhInput';
 export { SelectCard } from './SelectCard';
+export { EmptyState } from './EmptyState';
 export {
   NavItem,
   Group,
