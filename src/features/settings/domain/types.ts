@@ -23,7 +23,7 @@ export interface PromptMode {
   sys: string;
   temp: number;
   maxTok: number;
-  provider: string;
+  provider: string | null;
   iconName: string;
 }
 
