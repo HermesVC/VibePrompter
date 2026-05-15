@@ -11,7 +11,9 @@ type Theme = 'light' | 'dark' | 'system';
 interface ThemeContextType {
   theme: Theme;
   resolvedTheme: 'light' | 'dark';
+  accent: string;
   setTheme: (theme: Theme) => void;
+  setAccent: (accent: string) => void;
   toggleTheme: () => void;
 }
 
@@ -20,83 +22,86 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 interface ThemeProviderProps {
   children: ReactNode;
   defaultTheme?: Theme;
+  defaultAccent?: string;
   storageKey?: string;
+  accentStorageKey?: string;
 }
 
-/**
- * Get the system color scheme preference
- */
 function getSystemTheme(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light';
+  if (typeof window === 'undefined') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 /**
- * Theme Provider - Manages light/dark mode
+ * Theme Provider — manages light/dark mode and accent color.
+ *
+ * Writes `data-theme` and `data-accent` attributes on <html> so the design-token CSS
+ * (which keys off `[data-theme="dark"]` / `[data-accent="..."]`) applies correctly.
  */
 export function ThemeProvider({
   children,
   defaultTheme = 'system',
+  defaultAccent = 'violet',
   storageKey = 'app-theme',
+  accentStorageKey = 'app-accent',
 }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window === 'undefined') return defaultTheme;
     return (localStorage.getItem(storageKey) as Theme) || defaultTheme;
   });
 
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() => {
-    if (theme === 'system') return getSystemTheme();
-    return theme;
+  const [accent, setAccentState] = useState<string>(() => {
+    if (typeof window === 'undefined') return defaultAccent;
+    return localStorage.getItem(accentStorageKey) || defaultAccent;
   });
 
-  // Update resolved theme when theme or system preference changes
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
+    theme === 'system' ? getSystemTheme() : theme,
+  );
+
+  // Sync `data-theme` attribute and resolved theme with current selection / system.
   useEffect(() => {
-    const updateResolvedTheme = () => {
+    const apply = () => {
       const resolved = theme === 'system' ? getSystemTheme() : theme;
       setResolvedTheme(resolved);
-      
-      // Update document class
       const root = window.document.documentElement;
+      root.setAttribute('data-theme', resolved);
+      // Clean up any legacy class-based theming from older versions.
       root.classList.remove('light', 'dark');
-      root.classList.add(resolved);
     };
-
-    updateResolvedTheme();
-
-    // Listen for system preference changes
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = () => {
-      if (theme === 'system') {
-        updateResolvedTheme();
-      }
-    };
-
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    apply();
+    if (theme !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
-    localStorage.setItem(storageKey, newTheme);
-    setThemeState(newTheme);
+  // Sync `data-accent` attribute.
+  useEffect(() => {
+    window.document.documentElement.setAttribute('data-accent', accent);
+  }, [accent]);
+
+  const setTheme = (next: Theme) => {
+    localStorage.setItem(storageKey, next);
+    setThemeState(next);
   };
 
-  const toggleTheme = () => {
-    const nextTheme = resolvedTheme === 'light' ? 'dark' : 'light';
-    setTheme(nextTheme);
+  const setAccent = (next: string) => {
+    localStorage.setItem(accentStorageKey, next);
+    setAccentState(next);
   };
+
+  const toggleTheme = () => setTheme(resolvedTheme === 'light' ? 'dark' : 'light');
 
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider
+      value={{ theme, resolvedTheme, accent, setTheme, setAccent, toggleTheme }}
+    >
       {children}
     </ThemeContext.Provider>
   );
 }
 
-/**
- * Hook to access theme context
- */
 export function useTheme() {
   const context = useContext(ThemeContext);
   if (context === undefined) {
