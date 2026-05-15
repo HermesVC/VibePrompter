@@ -25,34 +25,35 @@ export function PhButton({
   variant = 'subtle',
   size = 'md',
   style,
+  disabled,
   ...rest
 }: PhButtonProps) {
-  const [h, setH] = useState(false);
+  const [hover, setHover] = useState(false);
   const s = SIZES[size];
 
   const variants = {
     primary: {
-      bg: h ? 'var(--accent-deep)' : 'var(--accent)',
+      bg: hover ? 'var(--accent-deep)' : 'var(--accent)',
       color: '#1a0f2e',
       border: '.5px solid transparent',
-      shadow: h
+      shadow: hover
         ? '0 0 0 1px var(--accent-deep), 0 0 18px rgba(167,139,250,0.35)'
         : '0 1px 2px rgba(0,0,0,0.20), inset 0 1px 0 rgba(255,255,255,0.18)',
     },
     subtle: {
-      bg: h ? 'var(--surface-3)' : 'var(--surface-2)',
+      bg: hover ? 'var(--surface-3)' : 'var(--surface-2)',
       color: 'var(--fg)',
       border: '.5px solid var(--border-strong)',
       shadow: 'none',
     },
     ghost: {
-      bg: h ? 'var(--surface-2)' : 'transparent',
-      color: h ? 'var(--fg)' : 'var(--fg-mute)',
+      bg: hover ? 'var(--surface-2)' : 'transparent',
+      color: hover ? 'var(--fg)' : 'var(--fg-mute)',
       border: '.5px solid transparent',
       shadow: 'none',
     },
     danger: {
-      bg: h ? 'rgba(248,113,113,0.18)' : 'rgba(248,113,113,0.10)',
+      bg: hover ? 'rgba(248,113,113,0.18)' : 'rgba(248,113,113,0.10)',
       color: 'var(--danger)',
       border: '.5px solid rgba(248,113,113,0.30)',
       shadow: 'none',
@@ -62,9 +63,19 @@ export function PhButton({
   return (
     <button
       type="button"
-      onMouseEnter={() => setH(true)}
-      onMouseLeave={() => setH(false)}
-      className="inline-flex items-center whitespace-nowrap cursor-pointer transition-[background,color,box-shadow] duration-100"
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className={[
+        'inline-flex items-center whitespace-nowrap select-none',
+        // Tactile press: a tiny 1px drop on active, instant settle on release.
+        // The `transition` covers bg/color/shadow + transform for the press,
+        // and `prefers-reduced-motion` is clamped globally by tokens.css.
+        'transition-[background,color,box-shadow,transform] duration-150',
+        disabled
+          ? 'cursor-not-allowed opacity-50'
+          : 'cursor-pointer active:translate-y-px active:duration-75',
+      ].join(' ')}
       style={{
         gap: s.gap,
         height: s.h,
