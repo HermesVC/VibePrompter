@@ -6,9 +6,10 @@ interface ActionRowProps {
   action: QuickAction;
   active: boolean;
   onHover: () => void;
+  onClick?: () => void;
 }
 
-export function ActionRow({ action, active, onHover }: ActionRowProps) {
+export function ActionRow({ action, active, onHover, onClick }: ActionRowProps) {
   const [hover, setHover] = useState(false);
   const isActive = active || hover;
   const Icon = I[action.iconName as IconName];
@@ -21,7 +22,8 @@ export function ActionRow({ action, active, onHover }: ActionRowProps) {
         onHover();
       }}
       onMouseLeave={() => setHover(false)}
-      className="flex items-center gap-2.5 px-2.5 py-2 border-0 text-left text-fg rounded-md cursor-pointer transition-colors duration-75"
+      onClick={onClick}
+      className="w-full flex items-center gap-2.5 px-2.5 py-2 border-0 text-left text-fg rounded-md cursor-pointer transition-colors duration-75"
       style={{ background: isActive ? 'var(--accent-tint)' : 'transparent' }}
     >
       <span

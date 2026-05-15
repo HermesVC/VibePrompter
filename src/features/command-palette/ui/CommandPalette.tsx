@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   I,
   Kbd,
@@ -34,10 +34,28 @@ export function CommandPalette({ initialState = 'idle' }: CommandPaletteProps) {
 
   const showResult = state === 'loading' || state === 'result';
 
+  // Reset focus to top of the list whenever the filter changes.
+  useEffect(() => {
+    setFocus(0);
+  }, [query, filtered.length]);
+
+  // Keep the focused row scrolled into view.
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (showResult) return;
+    const el = rowsRef.current?.querySelector<HTMLElement>(`[data-row-index="${focus}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [focus, showResult]);
+
+  const triggerAction = (index: number) => {
+    if (!filtered[index]) return;
+    setState('loading');
+  };
+
   return (
     <div className="ph-root flex justify-center p-6 bg-transparent">
       <div
-        className="w-[680px] flex flex-col overflow-hidden rounded-xl border-[0.5px] border-border-strong"
+        className="ph-anim-pop-in w-[680px] flex flex-col overflow-hidden rounded-xl border-[0.5px] border-border-strong"
         style={{
           background: 'var(--glass)',
           backdropFilter: 'blur(32px) saturate(160%)',
@@ -91,7 +109,36 @@ export function CommandPalette({ initialState = 'idle' }: CommandPaletteProps) {
                 if (state === 'typing' && !e.target.value) setState('idle');
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && query.trim()) setState('loading');
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  if (filtered.length > 0) setFocus((f) => (f + 1) % filtered.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  if (filtered.length > 0)
+                    setFocus((f) => (f - 1 + filtered.length) % filtered.length);
+                  return;
+                }
+                if (e.key === 'Home') {
+                  e.preventDefault();
+                  setFocus(0);
+                  return;
+                }
+                if (e.key === 'End') {
+                  e.preventDefault();
+                  if (filtered.length > 0) setFocus(filtered.length - 1);
+                  return;
+                }
+                if (e.key === 'Enter') {
+                  if (filtered.length > 0) {
+                    triggerAction(focus);
+                  } else if (query.trim()) {
+                    // No match → send the typed text as a custom instruction.
+                    setState('loading');
+                  }
+                  return;
+                }
                 if (e.key === 'Escape') {
                   setQuery('');
                   setState('idle');
@@ -171,9 +218,16 @@ export function CommandPalette({ initialState = 'idle' }: CommandPaletteProps) {
                 No actions match. Press <Kbd keys={['↵']} size="sm" /> to send as a custom instruction.
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-0.5">
+              <div ref={rowsRef} className="grid grid-cols-2 gap-0.5" role="listbox" aria-label="Quick actions">
                 {filtered.map((a, i) => (
-                  <ActionRow key={a.id} action={a} active={i === focus} onHover={() => setFocus(i)} />
+                  <div key={a.id} data-row-index={i} role="option" aria-selected={i === focus}>
+                    <ActionRow
+                      action={a}
+                      active={i === focus}
+                      onHover={() => setFocus(i)}
+                      onClick={() => triggerAction(i)}
+                    />
+                  </div>
                 ))}
               </div>
             )}
