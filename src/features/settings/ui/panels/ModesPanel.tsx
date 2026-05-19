@@ -206,7 +206,7 @@ export function ModesPanel() {
     <div className="flex flex-col gap-6">
       <PanelHead
         title="Prompt modes"
-        sub="A mode bundles a system prompt + sampling settings. Pick one as the active mode (tray, hotkey, dashboard) and prompts run with these settings. Optionally pin a mode to a specific connection."
+        hint="A mode bundles a system prompt + sampling settings. Pick one as the active mode (tray, hotkey, dashboard) and prompts run with these settings. Optionally pin a mode to a specific connection."
       />
 
       {err && (

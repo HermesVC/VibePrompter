@@ -1,12 +1,13 @@
 import type { InputHTMLAttributes, ReactNode, CSSProperties } from 'react';
 import { useState } from 'react';
 
-interface PhInputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size' | 'style'> {
+interface PhInputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size' | 'style' | 'onChange'> {
   icon?: ReactNode;
   suffix?: ReactNode;
   mono?: boolean;
   size?: 'sm' | 'md' | 'lg';
   style?: CSSProperties;
+  onChange?: (value: string) => void;
 }
 
 export function PhInput({
@@ -40,7 +41,7 @@ export function PhInput({
       {icon && <span className="text-fg-mute flex">{icon}</span>}
       <input
         value={value}
-        onChange={onChange}
+        onChange={(e) => onChange?.(e.target.value)}
         onFocus={() => setF(true)}
         onBlur={() => setF(false)}
         className="flex-1 min-w-0 h-full bg-transparent border-0 outline-none text-fg p-0"

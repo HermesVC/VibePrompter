@@ -62,7 +62,7 @@ export function AboutPanel() {
     <div className="flex flex-col gap-6">
       <PanelHead
         title="About VibePrompter"
-        sub="Build info, where your data lives, and a tail of the rolling log file."
+        hint="Build info, where your data lives, and a tail of the rolling log file."
       />
 
       <div className="grid grid-cols-2 gap-3">

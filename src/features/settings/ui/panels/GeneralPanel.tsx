@@ -58,7 +58,7 @@ export function GeneralPanel() {
               <PhInput
                 style={{ width: 64 }}
                 value={settings.response_timeout}
-                onChange={(e) => set('response_timeout', Number(e.target.value))}
+                onChange={(v) => set('response_timeout', Number(v))}
               />
               <span className="text-xs text-fg-mute">seconds</span>
             </div>

@@ -54,6 +54,7 @@ export function ShortcutsPanel() {
   useEffect(() => {
     if (!recording) return;
     function onKey(e: KeyboardEvent) {
+      if (!recording) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         setRecording(null);

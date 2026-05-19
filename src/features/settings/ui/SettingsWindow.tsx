@@ -49,7 +49,7 @@ export function SettingsWindow() {
                   icon={<I.search size={12} />}
                   placeholder="Search settings…"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={setSearch}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && filteredTabs.length > 0) {
                       navigate(`/settings/${filteredTabs[0].id}`);

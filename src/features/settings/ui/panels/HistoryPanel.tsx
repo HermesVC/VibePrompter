@@ -206,7 +206,7 @@ export function HistoryPanel() {
             icon={<I.search size={13} />}
             placeholder="Search history…"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={setQ}
           />
           <div className="flex items-center gap-1.5">
             <button

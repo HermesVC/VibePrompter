@@ -286,7 +286,7 @@ export function ProvidersPanel() {
     <div className="flex flex-col gap-6">
       <PanelHead
         title="Provider connections"
-        sub="Connect any OpenAI-compatible vendor or the native Anthropic API. Models are free-text — fetch them live from the vendor instead of waiting for an app update."
+        hint="Connect any OpenAI-compatible vendor or the native Anthropic API. Models are free-text — fetch them live from the vendor instead of waiting for an app update."
       />
 
       {feedback && (

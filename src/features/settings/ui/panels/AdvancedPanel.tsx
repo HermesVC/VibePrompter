@@ -145,8 +145,8 @@ export function AdvancedPanel() {
                 mono
                 type="number"
                 value={String(settings.response_timeout)}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
+                onChange={(val) => {
+                  const v = Number(val);
                   if (Number.isFinite(v) && v > 0) {
                     saveSettings.mutate({ ...settings, response_timeout: Math.round(v) });
                   }
@@ -191,7 +191,7 @@ export function AdvancedPanel() {
           label="Custom proxy URL"
           control={
             <div style={{ width: 240 }}>
-              <PhInput mono placeholder="https://proxy.example.com" value={settings.proxy_url} onChange={(e) => saveSettings.mutate({ ...settings, proxy_url: e.target.value })} />
+              <PhInput mono placeholder="https://proxy.example.com" value={settings.proxy_url} onChange={(v) => saveSettings.mutate({ ...settings, proxy_url: v })} />
             </div>
           }
         />
