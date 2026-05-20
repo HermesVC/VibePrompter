@@ -2,8 +2,8 @@
    Dark-first with explicit light variant, two accent options. */
 
 :root, [data-theme="dark"] {
-  --bg:           #1c1b1a;
-  --bg-2:         #211f1e;
+  --bg:           #0a0b0f;
+  --bg-2:         #0d0e13;
   --surface:      #11131a;
   --surface-2:    #161922;
   --surface-3:    #1f2330;

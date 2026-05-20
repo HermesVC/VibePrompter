@@ -57,12 +57,17 @@ function LastRouteMemory() {
   const location = useLocation();
   const restored = useRef(false);
 
-  // One-shot restore.
+  // One-shot restore — only after confirming onboarding is done so we don't
+  // race against FirstRunGate and navigate away from /setup.
   useEffect(() => {
     if (restored.current) return;
-    restored.current = true;
     if (location.pathname !== '/') return; // user deep-linked — don't override
-    invokeCommand<string | null>('get_kv', { key: 'last_route' })
+    restored.current = true;
+    invokeCommand<boolean>('get_first_run_done')
+      .then((done) => {
+        if (!done) return; // FirstRunGate will handle the redirect
+        return invokeCommand<string | null>('get_kv', { key: 'last_route' });
+      })
       .then((raw) => {
         if (!raw) return;
         try {
@@ -166,7 +171,8 @@ function FirstRunGate() {
         if (!done) navigate('/setup', { replace: true });
       })
       .catch(() => {
-        /* swallow: in browser-only preview the command doesn't exist */
+        // Backend not available (browser preview) — assume onboarding needed.
+        navigate('/setup', { replace: true });
       });
   }, [location.pathname, navigate]);
 
