@@ -44,6 +44,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        // Updater. Reads the public key from tauri.conf.json `plugins.updater.pubkey`
+        // at compile time; the matching private key signs release artifacts during
+        // `tauri build`. Frontend can trigger checks via the updater JS API.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Persist window size/position across launches so the user's layout
         // sticks. Skips the `mode-hud` window — that's transparent, sized
         // by config, and re-centered on every show.

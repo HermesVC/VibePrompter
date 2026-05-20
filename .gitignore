@@ -69,3 +69,11 @@ Desktop.ini
 # Misc
 *.pem
 .env*.local
+
+# Tauri updater signing keys. The private key lives outside the repo by
+# default (~/.tauri/vibeprompter.key) but these patterns ensure nothing
+# leaks if a key is ever placed inside the project tree by mistake.
+*.key
+*.key.pub
+TAURI_SIGNING_PRIVATE_KEY*
+.tauri-signing/
