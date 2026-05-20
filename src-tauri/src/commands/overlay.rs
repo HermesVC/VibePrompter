@@ -161,6 +161,13 @@ pub async fn refine_switch_connection(app: AppHandle, conn_id: String) -> AppRes
     crate::overlay::switch_connection(app, conn_id).await
 }
 
+/// Summarize flow: write the result to the clipboard, dismiss the overlay,
+/// and DO NOT restore the prior clipboard (which `refine_reject` would).
+#[tauri::command]
+pub async fn refine_copy_and_hide(app: AppHandle, text: String) -> AppResult<()> {
+    crate::overlay::finish_with_clipboard(app, text)
+}
+
 /// Hide the main window to the tray. The window can be re-shown via the
 /// global `Ctrl+Shift+Space` shortcut, the tray icon left-click, or the tray
 /// menu's "Show VibePrompter" item.

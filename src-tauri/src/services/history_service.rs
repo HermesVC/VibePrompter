@@ -1,6 +1,7 @@
 //! History business logic. Foundation exposes list + clear; `record` is here
 //! for sub-project 2 to call after an AI transformation.
 
+use crate::events::{AppEvent, EventBus};
 use crate::models::{HistoryItem, HistoryQuery, NewHistoryItem};
 use crate::storage::repositories::HistoryRepo;
 use crate::utils::AppResult;
@@ -8,11 +9,22 @@ use crate::utils::AppResult;
 #[derive(Clone)]
 pub struct HistoryService {
     repo: HistoryRepo,
+    /// Optional so the legacy test helper (`HistoryService::new(repo)`)
+    /// can keep working without an event bus. Production construction
+    /// goes through `with_events` and always supplies one.
+    events: Option<EventBus>,
 }
 
 impl HistoryService {
     pub fn new(repo: HistoryRepo) -> Self {
-        Self { repo }
+        Self { repo, events: None }
+    }
+
+    /// Production constructor — wires the EventBus so every successful
+    /// `record()` fires a `history_changed` event the frontend can
+    /// invalidate caches on.
+    pub fn with_events(repo: HistoryRepo, events: EventBus) -> Self {
+        Self { repo, events: Some(events) }
     }
 
     /// List history newest-first.
@@ -20,9 +32,14 @@ impl HistoryService {
         self.repo.list(&query).await
     }
 
-    /// Delete all history; returns the number of rows removed.
+    /// Delete all history; returns the number of rows removed. Fires
+    /// `history_changed` so panels refresh immediately.
     pub async fn clear(&self) -> AppResult<u64> {
-        self.repo.clear().await
+        let n = self.repo.clear().await?;
+        if let Some(events) = &self.events {
+            events.emit(AppEvent::HistoryChanged);
+        }
+        Ok(n)
     }
 
     pub async fn count(&self) -> AppResult<i64> {
@@ -59,9 +76,17 @@ impl HistoryService {
     }
 
     /// Record a completed transformation. Used by sub-project 2.
+    /// Fires `history_changed` on success so the History settings panel +
+    /// dashboard recent-activity strip refresh without polling. Emit
+    /// failures are swallowed by the EventBus itself; the insert result
+    /// propagates either way.
     #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {
-        self.repo.insert(&item).await
+        let id = self.repo.insert(&item).await?;
+        if let Some(events) = &self.events {
+            events.emit(AppEvent::HistoryChanged);
+        }
+        Ok(id)
     }
 
     /// Apply the user's retention policy. `retention` is the same string the

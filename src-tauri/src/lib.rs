@@ -146,6 +146,7 @@ pub fn run() {
             commands::refine_retry,
             commands::refine_followup,
             commands::refine_switch_connection,
+            commands::refine_copy_and_hide,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

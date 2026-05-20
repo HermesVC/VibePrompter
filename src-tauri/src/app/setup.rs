@@ -40,7 +40,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     let events = EventBus::new(app.handle().clone());
 
     let settings = SettingsService::new(SettingsRepo::new(pool.clone()), events.clone());
-    let history = HistoryService::new(HistoryRepo::new(pool.clone()));
+    let history = HistoryService::with_events(HistoryRepo::new(pool.clone()), events.clone());
     let shortcuts = ShortcutService::new(ShortcutRepo::new(pool.clone()), events.clone());
     let catalog = CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
     let secrets: std::sync::Arc<dyn crate::security::SecretStore> =

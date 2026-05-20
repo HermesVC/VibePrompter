@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { listen } from '@tauri-apps/api/event';
 import { EmptyState, I, Kbd, PanelHead, PhButton, PhInput, Pill, useToast, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { useHistoryQuery } from '../../application/settings.query';
@@ -33,6 +34,23 @@ export function HistoryPanel() {
   useEffect(() => {
     invokeCommand<typeof conns>('list_connections').then(setConns).catch(() => {});
   }, []);
+
+  // Live refresh on new prompt runs / history clears. Backend's
+  // `HistoryService` emits `history_changed` on every successful insert
+  // and on `clear()`; without this listener the panel only updated on
+  // mount + manual user actions, so a hotkey run made in another window
+  // wouldn't show up until you re-opened the panel.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen('history_changed', () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'history'] });
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [queryClient]);
 
   const rerun = async (
     src: string,
@@ -98,7 +116,7 @@ export function HistoryPanel() {
       }
     } catch {}
     toast.ok(
-      `Original input copied. Paste anywhere and press Ctrl+Alt+Space${
+      `Original input copied. Paste anywhere and press Ctrl+Alt+F${
         item.mode ? ` (${item.mode} mode)` : ''
       }.`
     );
@@ -379,70 +397,87 @@ export function HistoryPanel() {
           className="rounded-lg p-[18px] flex flex-col gap-3.5"
           style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
         >
-          <div className="flex items-center gap-2">
-            <Pill tone="accent" icon={CurIcon ? <CurIcon size={12} /> : null}>
-              {current.mode}
-            </Pill>
-            <span className="text-fg-dim">·</span>
-            <span className="ph-mono text-[11.5px] text-fg-mute">{current.provider}</span>
-            <span className="flex-1" />
-            <PhButton
-              size="sm"
-              variant="ghost"
-              icon={<I.star size={12} fill={current.fav ? 'currentColor' : 'none'} />}
-              onClick={() => toggleFavorite(current.id, current.fav)}
-            >
-              {current.fav ? 'Saved' : 'Favorite'}
-            </PhButton>
-            <PhButton
-              size="sm"
-              variant="ghost"
-              icon={<I.copy size={12} />}
-              onClick={() => copySource({ src: current.src, mode: current.mode })}
-              title="Copy the original input to your clipboard and activate the original mode, then paste + run the global hotkey wherever you want."
-            >
-              Copy source
-            </PhButton>
-            <select
-              value=""
-              onChange={(e) => {
-                const id = e.target.value;
-                if (id) rerun(current.src, current.mode, id);
-              }}
-              disabled={rerunBusy || conns.filter((c) => c.hasKey).length === 0}
-              className="text-[11.5px] rounded px-2 py-1 outline-none"
-              style={{
-                background: 'var(--surface-2)',
-                border: '.5px solid var(--border)',
-                color: 'var(--fg)',
-                cursor: rerunBusy ? 'not-allowed' : 'pointer',
-              }}
-              title="Run this prompt again through a different connection / model"
-            >
-              <option value="">
-                {rerunBusy
-                  ? 'Re-running…'
-                  : conns.filter((c) => c.hasKey).length === 0
-                  ? 'No usable connections'
-                  : 'Re-run with…'}
-              </option>
-              {conns
-                .filter((c) => c.hasKey)
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                    {c.defaultModel ? ` · ${c.defaultModel}` : ''}
-                  </option>
-                ))}
-            </select>
-            <PhButton
-              size="sm"
-              variant="primary"
-              icon={<I.copy size={12} />}
-              onClick={() => copyOutput(current.out)}
-            >
-              Copy
-            </PhButton>
+          {/* Two-row header: labels on top, actions below. Each row uses
+              flex-wrap so the children flow to a second line if the
+              container is narrow, instead of overflowing horizontally. */}
+          <div className="flex flex-col gap-2.5">
+            {/* Row 1: mode pill + provider label, truncating instead of
+                breaking the layout if the model id is long. */}
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <Pill tone="accent" icon={CurIcon ? <CurIcon size={12} /> : null}>
+                {current.mode}
+              </Pill>
+              <span className="text-fg-dim flex-shrink-0">·</span>
+              <span
+                className="ph-mono text-[11.5px] text-fg-mute truncate min-w-0"
+                title={current.provider}
+                style={{ flex: '1 1 0', minWidth: 0 }}
+              >
+                {current.provider}
+              </span>
+            </div>
+            {/* Row 2: action buttons. flex-wrap so they reflow on narrow
+                widths instead of overflowing the card. */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <PhButton
+                size="sm"
+                variant="ghost"
+                icon={<I.star size={12} fill={current.fav ? 'currentColor' : 'none'} />}
+                onClick={() => toggleFavorite(current.id, current.fav)}
+              >
+                {current.fav ? 'Saved' : 'Favorite'}
+              </PhButton>
+              <PhButton
+                size="sm"
+                variant="ghost"
+                icon={<I.copy size={12} />}
+                onClick={() => copySource({ src: current.src, mode: current.mode })}
+                title="Copy the original input to your clipboard and activate the original mode, then paste + run the global hotkey wherever you want."
+              >
+                Copy source
+              </PhButton>
+              <select
+                value=""
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (id) rerun(current.src, current.mode, id);
+                }}
+                disabled={rerunBusy || conns.filter((c) => c.hasKey).length === 0}
+                className="text-[11.5px] rounded px-2 py-1 outline-none"
+                style={{
+                  background: 'var(--surface-2)',
+                  border: '.5px solid var(--border)',
+                  color: 'var(--fg)',
+                  cursor: rerunBusy ? 'not-allowed' : 'pointer',
+                  maxWidth: 180,
+                }}
+                title="Run this prompt again through a different connection / model"
+              >
+                <option value="">
+                  {rerunBusy
+                    ? 'Re-running…'
+                    : conns.filter((c) => c.hasKey).length === 0
+                    ? 'No usable connections'
+                    : 'Re-run with…'}
+                </option>
+                {conns
+                  .filter((c) => c.hasKey)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                      {c.defaultModel ? ` · ${c.defaultModel}` : ''}
+                    </option>
+                  ))}
+              </select>
+              <PhButton
+                size="sm"
+                variant="primary"
+                icon={<I.copy size={12} />}
+                onClick={() => copyOutput(current.out)}
+              >
+                Copy
+              </PhButton>
+            </div>
           </div>
 
           {(rerunResult || rerunError) && (

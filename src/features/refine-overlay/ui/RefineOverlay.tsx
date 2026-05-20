@@ -129,6 +129,11 @@ export function RefineOverlay() {
         setDone(null);
         setError(null);
         setActiveConnId(''); // new session — picker shows "Default / pinned"
+        // A previous session may have left `accepting` true (e.g. after a
+        // copy-and-hide). Without resetting here, the blur-to-reject
+        // listener would silently no-op on click-away, breaking the
+        // dismiss-by-clicking-elsewhere UX for the new session.
+        acceptingRef.current = false;
         // Windows often refuses cross-process focus-steal on show(),
         // leaving the first click consumed by window activation. Pull
         // focus back into the webview as soon as the new session begins.
@@ -227,11 +232,20 @@ export function RefineOverlay() {
   }
   function copyAndHide() {
     if (!text) return;
-    // Use the browser clipboard API (the refine-overlay webview already has
-    // clipboard-write via core:default). Restoring the user's prior clipboard
-    // is the refine_reject path's job, so we just dismiss the overlay after.
-    navigator.clipboard.writeText(text).catch(() => {});
-    getCurrentWindow().hide().catch(() => {});
+    // Reuse the accept guard so the blur-to-reject listener doesn't fire as
+    // soon as the overlay loses focus during hide. Without this guard,
+    // `refine_reject` runs on blur, restores the user's prior clipboard,
+    // and wipes the summary we just placed there.
+    acceptingRef.current = true;
+    // Dedicated backend command: writes the text to the OS clipboard via the
+    // Tauri clipboard manager, hides the overlay, clears the session, and
+    // explicitly skips the prior-clipboard restore that `refine_reject` does.
+    invoke<void>('refine_copy_and_hide', { text }).catch(() => {
+      // Fallback: best-effort web clipboard + window hide if the Tauri call
+      // fails for any reason. Still skipping the reject path on purpose.
+      navigator.clipboard.writeText(text).catch(() => {});
+      getCurrentWindow().hide().catch(() => {});
+    });
   }
 
   const kind: RefineKind = meta?.kind ?? 'rewrite';

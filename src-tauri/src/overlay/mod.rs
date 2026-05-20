@@ -494,7 +494,7 @@ async fn run_stream(
     // regardless of which user-rewrite mode happens to be active. The
     // history row should reflect the action the user actually invoked,
     // not the currently-selected rewrite mode (which only governs the
-    // Ctrl+Alt+Space hotkey). Use the kind's display label + icon for
+    // Ctrl+Alt+F hotkey). Use the kind's display label + icon for
     // those two cases; only plain Rewrite inherits the active mode.
     let (history_mode_name, history_icon) = match kind {
         RefineKind::Rewrite => (mode.name.clone(), mode.icon_name.clone()),
@@ -828,6 +828,26 @@ pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
         }
     });
 
+    clear_session(&app);
+    Ok(())
+}
+
+/// Copy-and-hide variant used by the Summarize flow's Copy button. Writes
+/// the final text to the clipboard, hides the overlay, and clears the
+/// session — but **does not** restore the user's prior clipboard. The
+/// whole point of the action is "I want this text on my clipboard," so
+/// the reject-path's clipboard-restore behaviour would defeat the user's
+/// intent. Stream seq is bumped so any in-flight tokens are dropped.
+pub fn finish_with_clipboard(app: AppHandle, text: String) -> AppResult<()> {
+    app.clipboard()
+        .write_text(text)
+        .map_err(|e| AppError::Validation(format!("write clipboard: {e}")))?;
+    if let Some(win) = app.get_webview_window("refine-overlay") {
+        let _ = win.hide();
+    }
+    if let Some(session) = app.try_state::<RefineSession>() {
+        session.stream_seq.fetch_add(1, Ordering::SeqCst);
+    }
     clear_session(&app);
     Ok(())
 }

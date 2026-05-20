@@ -168,10 +168,23 @@ export function HomePage() {
     const inFlightTimer = window.setInterval(pollInFlight, 1000);
 
     const modePromise = listen<ActiveMode>('mode_changed', (e) => setActive(e.payload));
+    // Backend fires `history_changed` after every successful prompt run or
+    // history clear. Refresh the recent-activity strip + cost widgets so
+    // the user sees a new run land without waiting for window focus.
+    const historyPromise = listen('history_changed', () => {
+      invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } })
+        .then(setRecent)
+        .catch(() => {});
+      invokeCommand<CostSummary>('get_cost_summary').then(setCost).catch(() => {});
+      invokeCommand<CostBreakdown>('get_cost_breakdown', { days: 30 })
+        .then(setCostBreakdown)
+        .catch(() => {});
+    });
     return () => {
       window.removeEventListener('focus', onFocus);
       window.clearInterval(inFlightTimer);
       modePromise.then((u) => u()).catch(() => {});
+      historyPromise.then((u) => u()).catch(() => {});
     };
   }, []);
 
@@ -372,7 +385,7 @@ export function HomePage() {
                       }}
                       title="Press anywhere to rewrite the selected text in any app"
                     >
-                      Ctrl+Alt+Space
+                      Ctrl+Alt+F
                     </kbd>
                   </div>
                   <div className="text-[20px] font-semibold text-fg-strong leading-tight mt-0.5">
@@ -777,7 +790,7 @@ export function HomePage() {
                       border: '.5px solid var(--border-strong)',
                     }}
                   >
-                    Ctrl+Alt+Space
+                    Ctrl+Alt+F
                   </kbd>{' '}
                   to refine highlighted text in any app.
                 </div>
@@ -1142,7 +1155,7 @@ function HotkeyTipCard({ onDismiss }: { onDismiss: () => void }) {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
         <TipHotkey
-          accel="Ctrl+Alt+Space"
+          accel="Ctrl+Alt+F"
           label="Rewrite"
           hint="Polishes the selection using your active mode."
         />

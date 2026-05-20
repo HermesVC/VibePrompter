@@ -63,6 +63,10 @@ pub struct ShortcutUpdatedPayload {
 pub enum AppEvent {
     AppReady,
     SettingsChanged,
+    /// A new history row was inserted (after a successful prompt run).
+    /// Drives live refresh of the History settings panel + dashboard's
+    /// recent-activity strip without polling.
+    HistoryChanged,
     ShortcutUpdated(ShortcutUpdatedPayload),
     // Dormant — emitted by later sub-projects.
     ShortcutTriggered(ShortcutTriggeredPayload),
@@ -82,6 +86,7 @@ impl AppEvent {
         match self {
             AppEvent::AppReady => "app_ready",
             AppEvent::SettingsChanged => "settings_changed",
+            AppEvent::HistoryChanged => "history_changed",
             AppEvent::ShortcutUpdated(_) => "shortcut_updated",
             AppEvent::ShortcutTriggered(_) => "shortcut_triggered",
             AppEvent::AiRequestStarted(_) => "ai_request_started",
@@ -98,7 +103,9 @@ impl AppEvent {
     /// The JSON payload for this event (`null` for payload-less events).
     pub fn payload(&self) -> serde_json::Value {
         match self {
-            AppEvent::AppReady | AppEvent::SettingsChanged => serde_json::Value::Null,
+            AppEvent::AppReady
+            | AppEvent::SettingsChanged
+            | AppEvent::HistoryChanged => serde_json::Value::Null,
             AppEvent::ShortcutUpdated(p) => serde_json::to_value(p).unwrap_or_default(),
             AppEvent::ShortcutTriggered(p) => serde_json::to_value(p).unwrap_or_default(),
             AppEvent::AiRequestStarted(p) | AppEvent::AiRequestCompleted(p) => {
