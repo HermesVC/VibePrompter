@@ -146,11 +146,13 @@ mod tests {
         let (settings,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM settings").fetch_one(&pool).await.unwrap();
         assert_eq!(providers, 4);
-        assert_eq!(modes, 6);
+        // 6 original seeded modes + 2 system modes (grammar, summarize).
+        assert_eq!(modes, 8);
         assert_eq!(shortcuts, 5);
-        // Three keys (auto_paste, clipboard_fallback, low_memory_mode) were
-        // dropped in migration 0005 — they no longer back any behavior.
-        assert_eq!(settings, 14);
+        // The consolidated migration only seeds keys that back real
+        // behavior — auto_paste, clipboard_fallback, low_memory_mode, and
+        // concurrent_requests are intentionally absent.
+        assert_eq!(settings, 13);
     }
 
     #[tokio::test]

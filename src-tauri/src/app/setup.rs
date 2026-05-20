@@ -45,19 +45,16 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     let catalog = CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
     let secrets: std::sync::Arc<dyn crate::security::SecretStore> =
         crate::security::init().into();
-    // Concurrent-request limit comes from settings at boot; resizing the
-    // semaphore at runtime would mean draining in-flight requests, so we
-    // keep it boot-time and the UI's "Save & restart" copy reflects that.
-    let max_concurrent = settings
-        .get()
-        .await
-        .map(|s| s.concurrent_requests)
-        .unwrap_or(3);
+    // Concurrent outbound-LLM-call cap. Used to be user-tunable but the
+    // realistic max in any UI flow is ~3 (overlay stream + a Settings Test
+    // + a Fetch models). A fixed 4 is enough headroom for the legitimate
+    // case and small enough to act as a defensive guard against a bug
+    // firing dozens of parallel requests.
     let connections = ConnectionService::new(
         ConnectionRepo::new(pool.clone()),
         secrets.clone(),
         settings.clone(),
-        max_concurrent,
+        4,
     );
     // One-shot migration: move any plaintext keys from older builds into the
     // OS keyring. Idempotent — rows with empty `api_key` are skipped.
@@ -203,10 +200,13 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     // `--autostart` in argv), hide the main window so we sit in the tray.
     // Manual launches keep the window visible — same UX as Slack/Discord.
     let launched_via_autostart = std::env::args().any(|a| a == "--autostart");
-    if launched_via_autostart {
-        if let Some(win) = app.get_webview_window("main") {
+    if let Some(win) = app.get_webview_window("main") {
+        if launched_via_autostart {
             let _ = win.hide();
-            tracing::info!("auto-launched — main window hidden to tray");
+            tracing::info!("auto-launched — main window stays hidden in tray");
+        } else {
+            let _ = win.show();
+            let _ = win.set_focus();
         }
     }
 

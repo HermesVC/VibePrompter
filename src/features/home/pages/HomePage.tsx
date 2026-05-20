@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-import { I, PhButton, useToast, type IconName } from '@shared/ui';
+import { I, PhButton, useToast, AppIcon, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 interface ActiveMode {
@@ -101,6 +101,12 @@ export function HomePage() {
   const [recent, setRecent] = useState<HistoryItem[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  // Tracks whether the initial parallel fetch batch has resolved. Until it
+  // flips true, empty arrays / null states are indistinguishable from "still
+  // loading", so each section renders a shimmer skeleton instead of its
+  // empty-state placeholder. A subsequent reload (window focus, event push)
+  // does NOT toggle this back — we only ever want the skeleton on first paint.
+  const [bootLoaded, setBootLoaded] = useState(false);
 
   const reloadSettings = () =>
     invokeCommand<AppSettings>('get_settings').then(setSettings).catch(() => {});
@@ -117,19 +123,22 @@ export function HomePage() {
   };
 
   useEffect(() => {
-    invokeCommand<ActiveMode>('get_active_mode').then(setActive).catch(() => {});
-    invokeCommand<CatalogMode[]>('list_modes')
-      .then((all) => setModes(all.filter((m) => m.enabled)))
-      .catch(() => setModes([]));
-    invokeCommand<ShortcutBinding[]>('list_global_shortcuts')
-      .then(setShortcuts)
-      .catch(() => setShortcuts([]));
-    reloadSettings();
-    invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } })
-      .then(setRecent)
-      .catch(() => setRecent([]));
-    invokeCommand<Connection[]>('list_connections').then(setConnections).catch(() => {});
-    invokeCommand<HealthReport>('run_health_check').then(setHealth).catch(() => {});
+    // Initial parallel fetch. Track completion via Promise.allSettled so the
+    // skeleton hides only after every section has its data (or has failed) —
+    // partial reveals look glitchier than waiting a beat for the full paint.
+    Promise.allSettled([
+      invokeCommand<ActiveMode>('get_active_mode').then(setActive),
+      invokeCommand<CatalogMode[]>('list_modes').then((all) =>
+        setModes(all.filter((m) => m.enabled))
+      ),
+      invokeCommand<ShortcutBinding[]>('list_global_shortcuts').then(setShortcuts),
+      reloadSettings(),
+      invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } }).then(
+        setRecent
+      ),
+      invokeCommand<Connection[]>('list_connections').then(setConnections),
+      invokeCommand<HealthReport>('run_health_check').then(setHealth),
+    ]).finally(() => setBootLoaded(true));
 
     // Browser-style window focus event — fires when the Tauri webview
     // regains focus (user clicks back into the window after using the tray).
@@ -389,9 +398,9 @@ export function HomePage() {
           'radial-gradient(60% 45% at 50% 30%, rgba(167,139,250,0.06), transparent 70%), radial-gradient(40% 40% at 80% 80%, rgba(107,138,253,0.05), transparent 70%), var(--bg)',
       }}
     >
-      <div className="max-w-[840px] mx-auto px-8 py-12 flex flex-col gap-8">
+      <div className="w-full px-6 sm:px-8 lg:px-10 py-8 flex flex-col gap-6">
         <header className="flex items-center gap-4">
-          <span className="ph-mark xl" />
+          <AppIcon size="xl" />
           <div className="flex-1 min-w-0">
             <h1
               className="m-0 text-[28px] font-semibold text-fg-strong"
@@ -426,7 +435,9 @@ export function HomePage() {
           </div>
         </header>
 
-        {health && health.issues.length > 0 && (
+        {!bootLoaded && <DashboardSkeleton />}
+
+        {bootLoaded && health && health.issues.length > 0 && (
           <section className="flex flex-col gap-1.5">
             {health.issues.map((issue) => (
               <div
@@ -469,7 +480,7 @@ export function HomePage() {
           </section>
         )}
 
-        {(() => {
+        {bootLoaded && (() => {
           const activeFull = modes.find((m) => m.id === active?.id) ?? null;
           const pinnedConn = activeFull?.provider
             ? connections.find((c) => c.id === activeFull.provider) ?? null
@@ -602,7 +613,7 @@ export function HomePage() {
           );
         })()}
 
-        {connections.length === 0 ? (
+        {bootLoaded && (connections.length === 0 ? (
           <section
             className="rounded-xl p-6 flex flex-col items-center text-center gap-3"
             style={{
@@ -853,9 +864,9 @@ export function HomePage() {
             )}
           </div>
         </section>
-        )}
+        ))}
 
-        {settings && (
+        {bootLoaded && settings && (
           <section
             className="rounded-lg px-4 py-3 flex items-center gap-2 flex-wrap"
             style={{
@@ -896,7 +907,7 @@ export function HomePage() {
           </section>
         )}
 
-        <section className="flex flex-col gap-2">
+        {bootLoaded && <section className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between">
             <h2
               className="m-0 text-[13px] font-semibold text-fg uppercase tracking-[0.10em]"
@@ -939,8 +950,9 @@ export function HomePage() {
               );
             })}
           </div>
-        </section>
+        </section>}
 
+        {bootLoaded && <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section className="flex flex-col gap-2">
           <h2
             className="m-0 text-[13px] font-semibold text-fg uppercase tracking-[0.10em]"
@@ -1151,6 +1163,7 @@ export function HomePage() {
             </div>
           )}
         </section>
+        </div>}
 
         <footer
           className="flex items-center justify-between pt-4"
@@ -1193,6 +1206,74 @@ export function HomePage() {
             </button>
           </div>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Loading-state skeleton for the dashboard. Mirrors the real layout's
+ * rough shape — active mode card, run-prompt area, mode grid, shortcuts,
+ * recent activity — so the page doesn't visibly jump when the data
+ * arrives.
+ */
+function DashboardSkeleton() {
+  return (
+    <div className="flex flex-col gap-8" aria-busy="true" aria-label="Loading dashboard">
+      <div
+        className="rounded-xl p-5 flex items-center gap-4"
+        style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+      >
+        <div className="ph-shimmer" style={{ width: 48, height: 48, borderRadius: 12 }} />
+        <div className="flex-1 flex flex-col gap-2 min-w-0">
+          <div className="ph-shimmer" style={{ height: 11, width: 90 }} />
+          <div className="ph-shimmer" style={{ height: 22, width: '38%' }} />
+          <div className="ph-shimmer" style={{ height: 12, width: '60%' }} />
+        </div>
+        <div className="ph-shimmer" style={{ height: 32, width: 140, borderRadius: 8 }} />
+      </div>
+
+      <div
+        className="rounded-xl p-5 flex flex-col gap-3"
+        style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+      >
+        <div className="ph-shimmer" style={{ height: 12, width: 110 }} />
+        <div className="ph-shimmer" style={{ height: 80, width: '100%', borderRadius: 8 }} />
+        <div className="flex justify-end gap-2">
+          <div className="ph-shimmer" style={{ height: 32, width: 80, borderRadius: 8 }} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div
+            key={i}
+            className="ph-shimmer"
+            style={{ height: 46, borderRadius: 10 }}
+          />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="ph-shimmer" style={{ height: 12, width: 140 }} />
+        <div
+          className="rounded-lg overflow-hidden flex flex-col"
+          style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+        >
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              className="px-4 py-3 flex items-center gap-3"
+              style={{ borderTop: i === 0 ? 'none' : '.5px solid var(--divider)' }}
+            >
+              <div className="flex-1 flex flex-col gap-1.5">
+                <div className="ph-shimmer" style={{ height: 12, width: '40%' }} />
+                <div className="ph-shimmer" style={{ height: 10, width: '25%' }} />
+              </div>
+              <div className="ph-shimmer" style={{ height: 22, width: 90, borderRadius: 4 }} />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

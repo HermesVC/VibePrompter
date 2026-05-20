@@ -24,7 +24,8 @@ impl ModeRepo {
         let modes: Vec<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
                     provider_override, icon_name, tags,
-                    CAST(enabled AS INTEGER) AS enabled
+                    CAST(enabled AS INTEGER) AS enabled,
+                    CAST(is_system AS INTEGER) AS is_system
              FROM prompt_modes ORDER BY sort_order ASC",
         )
         .fetch_all(&self.pool)
@@ -37,7 +38,8 @@ impl ModeRepo {
         let mode: Option<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
                     provider_override, icon_name, tags,
-                    CAST(enabled AS INTEGER) AS enabled
+                    CAST(enabled AS INTEGER) AS enabled,
+                    CAST(is_system AS INTEGER) AS is_system
              FROM prompt_modes WHERE id = ?1",
         )
         .bind(id)
@@ -48,12 +50,34 @@ impl ModeRepo {
 
     pub async fn upsert(&self, mode: &PromptMode, sort_order: i64) -> AppResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
+        // System modes are locked: callers can change the prompt + sampling +
+        // pinned provider + enabled, but the name, description, icon, tags,
+        // and is_system flag are preserved from the stored row. We detect the
+        // existing row by id so a brand-new user mode is unaffected.
+        let existing: Option<(String, String, String, String, i64)> = sqlx::query_as(
+            "SELECT name, description, icon_name, tags, CAST(is_system AS INTEGER)
+             FROM prompt_modes WHERE id = ?1",
+        )
+        .bind(&mode.id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let (name, description, icon_name, tags) = match &existing {
+            Some((n, d, i, t, is_sys)) if *is_sys != 0 => {
+                (n.clone(), d.clone(), i.clone(), t.clone())
+            }
+            _ => (
+                mode.name.clone(),
+                mode.description.clone(),
+                mode.icon_name.clone(),
+                mode.tags.clone(),
+            ),
+        };
         sqlx::query(
             "INSERT INTO prompt_modes
                (id, name, description, system_prompt, temperature, max_tokens,
                 provider_override, icon_name, tags, is_default, sort_order,
-                enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, ?12)
+                enabled, is_system, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, 0, ?12, ?12)
              ON CONFLICT(id) DO UPDATE SET
                name = ?2, description = ?3, system_prompt = ?4,
                temperature = ?5, max_tokens = ?6, provider_override = ?7,
@@ -61,14 +85,14 @@ impl ModeRepo {
                updated_at = ?12",
         )
         .bind(&mode.id)
-        .bind(&mode.name)
-        .bind(&mode.description)
+        .bind(&name)
+        .bind(&description)
         .bind(&mode.system_prompt)
         .bind(mode.temperature)
         .bind(mode.max_tokens)
         .bind(&mode.provider_override)
-        .bind(&mode.icon_name)
-        .bind(&mode.tags)
+        .bind(&icon_name)
+        .bind(&tags)
         .bind(sort_order)
         .bind(mode.enabled as i64)
         .bind(now)
@@ -78,6 +102,19 @@ impl ModeRepo {
     }
 
     pub async fn delete(&self, id: &str) -> AppResult<()> {
+        // Refuse to delete built-in modes; the UI hides the delete affordance,
+        // but a direct command invocation would otherwise succeed and the
+        // mode would be gone until reinstall (the seed uses INSERT OR IGNORE).
+        let is_system: Option<(i64,)> =
+            sqlx::query_as("SELECT CAST(is_system AS INTEGER) FROM prompt_modes WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        if matches!(is_system, Some((n,)) if n != 0) {
+            return Err(AppError::Validation(format!(
+                "Cannot delete built-in mode '{id}'. Disable it instead."
+            )));
+        }
         sqlx::query("DELETE FROM prompt_modes WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
@@ -102,11 +139,24 @@ mod tests {
     use crate::storage::pool::test_pool;
 
     #[tokio::test]
-    async fn list_returns_six_seeded_modes_in_order() {
+    async fn list_returns_seeded_modes_with_system_first() {
         let repo = ModeRepo::new(test_pool().await);
         let modes = repo.list().await.unwrap();
-        assert_eq!(modes.len(), 6);
-        assert_eq!(modes[0].id, "developer");
+        // 6 original user-editable seeds + 2 system modes (grammar, summarize).
+        assert_eq!(modes.len(), 8);
+        // Built-ins use negative sort_order so they sit at the top.
+        assert_eq!(modes[0].id, "grammar");
+        assert!(modes[0].is_system);
+        assert_eq!(modes[1].id, "summarize");
+        assert!(modes[1].is_system);
+        assert!(!modes[2].is_system);
+    }
+
+    #[tokio::test]
+    async fn delete_system_mode_is_rejected() {
+        let repo = ModeRepo::new(test_pool().await);
+        let err = repo.delete("grammar").await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[tokio::test]

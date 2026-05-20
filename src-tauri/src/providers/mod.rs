@@ -252,37 +252,62 @@ pub async fn complete(
     })
 }
 
-/// Retry a non-streaming completion on transient errors (5xx, 429, network
-/// hiccups). 4xx other than 429 are user errors — re-trying won't help, so
-/// they propagate immediately. Two attempts with 400ms then 1200ms backoff;
-/// any longer and the user is better off canceling and trying again.
+/// Retry a transient LLM call. We treat 429 (rate limit), 5xx (server
+/// errors), 529 (Anthropic "overloaded"), and network-class failures as
+/// retriable; 4xx other than 429 are user errors and propagate immediately.
+///
+/// Backoff: exponential (~500ms → 1.5s → 4s → 8s) with up to ±20% jitter so
+/// concurrent callers don't synchronize their retries. Total worst-case wait
+/// is ~14s before giving up — long enough to survive a brief overload spike,
+/// short enough that a stuck request still surfaces to the user.
+///
+/// Vendor-supplied `Retry-After` overrides our backoff up to a 30s cap (some
+/// providers ask for minutes on rate limit — that's better surfaced to the
+/// user than silently swallowed).
 async fn with_retry<F, Fut, T>(mut op: F) -> AppResult<T>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = AppResult<T>>,
 {
-    let defaults = [
-        std::time::Duration::from_millis(400),
-        std::time::Duration::from_millis(1200),
-    ];
+    const BASE_BACKOFFS_MS: [u64; 4] = [500, 1500, 4000, 8000];
     let mut last_err: Option<AppError> = None;
-    for attempt in 0..=defaults.len() {
+    for attempt in 0..=BASE_BACKOFFS_MS.len() {
         match op().await {
-            Ok(v) => return Ok(v),
+            Ok(v) => {
+                if attempt > 0 {
+                    tracing::info!("call succeeded on retry attempt {}", attempt + 1);
+                }
+                return Ok(v);
+            }
             Err(e) => {
-                if !is_transient(&e) || attempt == defaults.len() {
+                if !is_transient(&e) || attempt == BASE_BACKOFFS_MS.len() {
                     return Err(e);
                 }
-                // Prefer vendor-supplied Retry-After when the failure was
-                // a 429. Clamp so a misbehaving vendor can't stall us for
-                // a minute on a single retry — at that point the user
-                // should know about the rate limit.
+                let base = std::time::Duration::from_millis(BASE_BACKOFFS_MS[attempt]);
+                // Add ±20% jitter. `rand` isn't in scope here — use the
+                // attempt counter + nanos for cheap deterministic-ish spread.
+                let jitter_ms = {
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as u64)
+                        .unwrap_or(0);
+                    let spread = (BASE_BACKOFFS_MS[attempt] as i64) * 2 / 10; // 20%
+                    if spread == 0 {
+                        0
+                    } else {
+                        (nanos as i64 % (spread * 2 + 1)) - spread
+                    }
+                };
+                let backoff = base.saturating_add(std::time::Duration::from_millis(
+                    jitter_ms.max(0) as u64,
+                ));
                 let delay = parse_retry_after(&e.to_string())
-                    .map(|d| d.min(std::time::Duration::from_secs(15)))
-                    .unwrap_or(defaults[attempt]);
+                    .map(|d| d.min(std::time::Duration::from_secs(30)))
+                    .unwrap_or(backoff);
                 tracing::warn!(
-                    "attempt {} failed, retrying in {}ms: {e}",
+                    "transient failure on attempt {}/{} ({}ms backoff): {e}",
                     attempt + 1,
+                    BASE_BACKOFFS_MS.len() + 1,
                     delay.as_millis()
                 );
                 tokio::time::sleep(delay).await;
@@ -295,11 +320,28 @@ where
 
 fn is_transient(e: &AppError) -> bool {
     let msg = e.to_string();
+    let lower = msg.to_ascii_lowercase();
     // Network-class errors are always retriable.
-    if msg.contains("request to ")
-        || msg.contains("timed out")
-        || msg.contains("connection")
-        || msg.contains("dns")
+    if lower.contains("request to ")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection")
+        || lower.contains("dns")
+        || lower.contains("reset by peer")
+        || lower.contains("broken pipe")
+    {
+        return true;
+    }
+    // Vendor "overloaded" signals — Anthropic returns `overloaded_error`
+    // (sometimes as HTTP 529, sometimes 200 with an error body), OpenAI
+    // surfaces "server_error" / "engine overloaded", OpenRouter forwards
+    // upstream "overload" verbatim. Catch the keyword regardless of code.
+    if lower.contains("overload")
+        || lower.contains("overloaded_error")
+        || lower.contains("server_error")
+        || lower.contains("service unavailable")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
     {
         return true;
     }
@@ -309,7 +351,7 @@ fn is_transient(e: &AppError) -> bool {
         .take(3)
         .collect::<String>()
         .parse::<u16>()
-        .map(|code| code == 429 || (500..=599).contains(&code))
+        .map(|code| code == 408 || code == 425 || code == 429 || code == 529 || (500..=599).contains(&code))
         .unwrap_or(false)
 }
 
@@ -360,8 +402,9 @@ where
     let started = std::time::Instant::now();
     let base = normalize_base(&conn.base_url);
 
-    let (url, body, req_builder): (String, serde_json::Value, reqwest::RequestBuilder) = match kind
-    {
+    // Build url + body once; the `RequestBuilder` is rebuilt on each retry
+    // because `.send()` consumes it.
+    let (url, body): (String, serde_json::Value) = match kind {
         ConnectionKind::Openai => {
             let url = format!("{base}/chat/completions");
             let mut payload_messages: Vec<serde_json::Value> = Vec::new();
@@ -375,8 +418,8 @@ where
                 "model": model,
                 "messages": payload_messages,
                 "stream": true,
-                // OpenAI-compat: opt in to a final chunk that carries
-                // usage totals. Vendors that don't honor it just ignore it.
+                // OpenAI-compat: opt in to a final chunk that carries usage
+                // totals. Vendors that don't honor it just ignore it.
                 "stream_options": { "include_usage": true },
             });
             if let Some(t) = params.temperature {
@@ -385,11 +428,7 @@ where
             if let Some(mt) = params.max_tokens {
                 body["max_tokens"] = serde_json::json!(mt);
             }
-            let req = apply_extra_headers(
-                http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body),
-                conn,
-            );
-            (url, body, req)
+            (url, body)
         }
         ConnectionKind::Anthropic => {
             let url = format!("{base}/v1/messages");
@@ -412,31 +451,49 @@ where
             if let Some(t) = params.temperature {
                 body["temperature"] = serde_json::json!(t);
             }
-            let req = apply_extra_headers(
-                http(cfg)?
-                    .post(&url)
-                    .header("x-api-key", &conn.api_key)
-                    .header("anthropic-version", "2023-06-01")
-                    .json(&body),
-                conn,
-            );
-            (url, body, req)
+            (url, body)
         }
     };
-    let _ = body; // payload only retained for debugging
 
-    let resp = req_builder
-        .send()
-        .await
-        .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Validation(format!(
-            "{} (at {url})",
-            extract_vendor_error(status, &body)
-        )));
-    }
+    // Retry the connection + 2xx-or-bust handshake. Once headers are
+    // accepted we can't retry safely (we'd duplicate tokens already
+    // emitted via `on_token`), so the retry boundary stops here.
+    let url_for_retry = url.clone();
+    let body_for_retry = body.clone();
+    let resp = with_retry(|| {
+        let url = url_for_retry.clone();
+        let body = body_for_retry.clone();
+        async move {
+            let req = match kind {
+                ConnectionKind::Openai => apply_extra_headers(
+                    http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body),
+                    conn,
+                ),
+                ConnectionKind::Anthropic => apply_extra_headers(
+                    http(cfg)?
+                        .post(&url)
+                        .header("x-api-key", &conn.api_key)
+                        .header("anthropic-version", "2023-06-01")
+                        .json(&body),
+                    conn,
+                ),
+            };
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let raw = resp.text().await.unwrap_or_default();
+                return Err(AppError::Validation(format!(
+                    "{} (at {url})",
+                    extract_vendor_error(status, &raw)
+                )));
+            }
+            Ok(resp)
+        }
+    })
+    .await?;
 
     let mut text = String::new();
     let mut usage = TokenUsage::default();

@@ -34,7 +34,6 @@ export interface AppSettings {
   notifications: boolean;
   stream_response: boolean;
   response_timeout: number;
-  concurrent_requests: number;
   theme: string;
   accent: string;
   density: string;

@@ -6,6 +6,7 @@ import {
   PhButton,
   ProviderGlyphs,
   Spinner,
+  AppIcon,
 } from '@shared/ui';
 import { filterActions, type PaletteState } from '../domain';
 import {
@@ -252,8 +253,7 @@ export function CommandPalette({ initialState = 'idle' }: CommandPaletteProps) {
           style={{ background: 'rgba(255,255,255,0.015)' }}
         >
           <span className="inline-flex items-center gap-1.5">
-            <span
-              className="ph-mark"
+            <AppIcon
               style={{ width: 14, height: 14, fontSize: 10, borderRadius: 4 }}
             />
             <span className="font-medium text-fg">PromptHelper</span>

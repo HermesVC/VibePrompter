@@ -330,7 +330,7 @@ export function RefineOverlay() {
             {text ? (
               <BulletBlock text={text} showCaret={streaming} />
             ) : (
-              <span style={{ color: 'var(--fg-dim)' }}>Summarizing your selection…</span>
+              <ThinkingLoader kind="summarize" />
             )}
           </div>
         ) : streaming || !done ? (
@@ -363,9 +363,7 @@ export function RefineOverlay() {
                 />
               </>
             ) : (
-              <span style={{ color: 'var(--fg-dim)' }}>
-                Working on your selection…
-              </span>
+              <ThinkingLoader kind={kind} />
             )}
           </div>
         ) : (
@@ -502,6 +500,113 @@ function btnStyle(
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
   };
+}
+
+/**
+ * Claude-Code-style rotating phrase while the model is thinking. Stays on
+ * screen until the first streamed token arrives (caller swaps the loader
+ * for the streaming text). Phrases rotate every ~2.4s with a short fade so
+ * the user always sees something happening even on slow first-token
+ * latency. Phrase pool is per-kind so the wording matches the action.
+ */
+const THINKING_PHRASES: Record<RefineKind, string[]> = {
+  rewrite: [
+    'Pondering',
+    'Polishing',
+    'Reworking',
+    'Refining',
+    'Tightening',
+    'Massaging the prose',
+    'Picking better words',
+    'Reading it twice',
+    'Trimming the fat',
+  ],
+  grammar: [
+    'Proofreading',
+    'Checking commas',
+    'Hunting typos',
+    'Tightening punctuation',
+    'Reading carefully',
+    'Squinting at semicolons',
+    'Smoothing the rough edges',
+  ],
+  summarize: [
+    'Distilling',
+    'Highlighting',
+    'Pulling out the gist',
+    'Boiling it down',
+    'Cherry-picking the key bits',
+    'Compressing',
+    'Reading through',
+  ],
+};
+
+function ThinkingLoader({ kind }: { kind: RefineKind }) {
+  const phrases = THINKING_PHRASES[kind] ?? THINKING_PHRASES.rewrite;
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * phrases.length));
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    // Fade out → swap phrase → fade in. The total cycle is ~2.4s; the swap
+    // happens at the halfway point so neither state lingers awkwardly.
+    const cycle = window.setInterval(() => {
+      setVisible(false);
+      window.setTimeout(() => {
+        setIdx((i) => (i + 1) % phrases.length);
+        setVisible(true);
+      }, 220);
+    }, 2400);
+    return () => window.clearInterval(cycle);
+  }, [phrases.length]);
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        color: 'var(--fg-mute)',
+        fontSize: 13,
+      }}
+    >
+      <span
+        className="ph-pulse"
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: 'var(--accent)',
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(-2px)',
+          transition: 'opacity 220ms ease, transform 220ms ease',
+          display: 'inline-block',
+        }}
+      >
+        {phrases[idx]}
+        <DotEllipsis />
+      </span>
+    </span>
+  );
+}
+
+/** Three dots that fill in sequentially. Cheaper than animating each glyph
+ *  with keyframes — just a 1.2s setInterval ticking 0 → 1 → 2 → 3 → 0. */
+function DotEllipsis() {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setN((v) => (v + 1) % 4), 360);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <span style={{ display: 'inline-block', width: '1.5ch', textAlign: 'left' }}>
+      {'.'.repeat(n)}
+    </span>
+  );
 }
 
 /**

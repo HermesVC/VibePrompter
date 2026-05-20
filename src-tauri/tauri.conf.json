@@ -20,7 +20,8 @@
         "minHeight": 480,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false
+        "decorations": false,
+        "visible": false
       },
       {
         "label": "mode-hud",
@@ -68,6 +69,11 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer/hooks.nsh"
+      }
     }
   }
 }

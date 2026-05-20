@@ -28,6 +28,11 @@ pub struct PromptMode {
     /// re-enable them later without losing their prompt + settings.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Built-in mode shipped with the app. Cannot be renamed or deleted from
+    /// the UI; the repo also preserves this flag on every upsert so the
+    /// frontend cannot promote a user mode to system or vice versa.
+    #[serde(rename = "isSystem", default)]
+    pub is_system: bool,
 }
 
 fn default_enabled() -> bool {

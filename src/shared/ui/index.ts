@@ -27,3 +27,5 @@ export {
   PanelHead,
 } from './SettingsLayout';
 export { WindowTitlebar } from './WindowTitlebar';
+export { AppIcon } from './AppIcon';
+

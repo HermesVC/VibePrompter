@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { I, Kbd, Toggle, type IconName } from '@shared/ui';
+import { I, Kbd, Toggle, AppIcon, type IconName } from '@shared/ui';
 import {
   useTrayPrimaryQuery,
   useTraySecondaryQuery,
@@ -36,7 +36,7 @@ export function TrayMenu() {
           className="flex items-center gap-2.5 px-2.5 pt-2 pb-2.5 mb-1"
           style={{ borderBottom: '.5px solid var(--divider)' }}
         >
-          <span className="ph-mark lg" />
+          <AppIcon size="lg" />
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold text-fg-strong">PromptHelper</div>
             <div className="flex items-center gap-1.5 text-[11px] text-fg-mute mt-px">

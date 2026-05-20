@@ -1,4 +1,5 @@
 import { Group, PanelHead } from '@shared/ui';
+import { useTheme } from '@shared/lib/theme';
 import { useAppSettingsQuery, useSaveSettingsMutation } from '../../application/settings.query';
 
 const ACCENTS = [
@@ -15,11 +16,22 @@ const THEMES = ['dark', 'light', 'system'] as const;
 export function AppearancePanel() {
   const { data: settings } = useAppSettingsQuery();
   const saveSettings = useSaveSettingsMutation();
+  // ThemeProvider owns the live <html data-theme> / <html data-accent>
+  // attributes and the localStorage that survives a restart. Saving to
+  // backend settings alone wouldn't repaint anything — we have to push
+  // the change through both.
+  const { setTheme: applyTheme, setAccent: applyAccent } = useTheme();
   if (!settings) return null;
   const theme = settings.theme as (typeof THEMES)[number];
   const accent = settings.accent;
-  const setTheme = (t: (typeof THEMES)[number]) => saveSettings.mutate({ ...settings, theme: t });
-  const setAccent = (a: string) => saveSettings.mutate({ ...settings, accent: a });
+  const setTheme = (t: (typeof THEMES)[number]) => {
+    applyTheme(t);
+    saveSettings.mutate({ ...settings, theme: t });
+  };
+  const setAccent = (a: string) => {
+    applyAccent(a);
+    saveSettings.mutate({ ...settings, accent: a });
+  };
 
   return (
     <>

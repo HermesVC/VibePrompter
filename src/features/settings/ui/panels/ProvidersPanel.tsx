@@ -42,16 +42,17 @@ interface ConnectionDraft {
 }
 
 const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' | 'anthropic'; model: string }> = {
-  openai:     { label: 'OpenAI',       baseUrl: 'https://api.openai.com/v1',           kind: 'openai',    model: 'gpt-4o-mini' },
-  anthropic:  { label: 'Anthropic',    baseUrl: 'https://api.anthropic.com',           kind: 'anthropic', model: 'claude-sonnet-4-6' },
-  openrouter: { label: 'OpenRouter',   baseUrl: 'https://openrouter.ai/api/v1',        kind: 'openai',    model: 'openai/gpt-4o-mini' },
-  groq:       { label: 'Groq',         baseUrl: 'https://api.groq.com/openai/v1',      kind: 'openai',    model: 'llama-3.3-70b-versatile' },
-  mistral:    { label: 'Mistral',      baseUrl: 'https://api.mistral.ai/v1',           kind: 'openai',    model: 'mistral-small-latest' },
-  deepseek:   { label: 'DeepSeek',     baseUrl: 'https://api.deepseek.com/v1',         kind: 'openai',    model: 'deepseek-chat' },
-  together:   { label: 'Together',     baseUrl: 'https://api.together.xyz/v1',         kind: 'openai',    model: '' },
-  gemini:     { label: 'Gemini',       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai', model: 'gemini-2.0-flash' },
-  ollama:     { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1',         kind: 'openai',    model: 'llama3.2' },
-  lmstudio:   { label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',       kind: 'openai',    model: '' },
+  openai:     { label: 'OpenAI',       baseUrl: 'https://api.openai.com/v1',                              kind: 'openai',    model: 'gpt-5-mini' },
+  anthropic:  { label: 'Anthropic',    baseUrl: 'https://api.anthropic.com/v1',                           kind: 'anthropic', model: 'claude-sonnet-4-6' },
+  openrouter: { label: 'OpenRouter',   baseUrl: 'https://openrouter.ai/api/v1',                           kind: 'openai',    model: 'openai/gpt-5-mini' },
+  groq:       { label: 'Groq',         baseUrl: 'https://api.groq.com/openai/v1',                         kind: 'openai',    model: 'llama-3.3-70b-versatile' },
+  mistral:    { label: 'Mistral',      baseUrl: 'https://api.mistral.ai/v1',                              kind: 'openai',    model: 'mistral-large-latest' },
+  deepseek:   { label: 'DeepSeek',     baseUrl: 'https://api.deepseek.com/v1',                            kind: 'openai',    model: 'deepseek-chat' },
+  together:   { label: 'Together',     baseUrl: 'https://api.together.xyz/v1',                            kind: 'openai',    model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+  gemini:     { label: 'Gemini',       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    model: 'gemini-2.5-flash' },
+  xai:        { label: 'xAI (Grok)',   baseUrl: 'https://api.x.ai/v1',                                    kind: 'openai',    model: 'grok-4' },
+  ollama:     { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1',                            kind: 'openai',    model: 'llama3.3' },
+  lmstudio:   { label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',                          kind: 'openai',    model: '' },
 };
 
 const emptyDraft = (): ConnectionDraft => ({
@@ -497,41 +498,51 @@ export function ProvidersPanel() {
             />
           </Field>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Protocol">
-              <div className="flex gap-1.5">
-                {(['openai', 'anthropic'] as const).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setDraft({ ...draft, kind: k })}
-                    className="text-[12.5px] px-2.5 py-1.5 rounded transition-colors flex-1"
-                    style={{
-                      background: draft.kind === k ? 'var(--accent-tint)' : 'var(--surface-2)',
-                      color: draft.kind === k ? 'var(--accent)' : 'var(--fg)',
-                      border: `.5px solid ${draft.kind === k ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {k === 'openai' ? 'OpenAI-compatible' : 'Anthropic native'}
-                  </button>
-                ))}
-              </div>
-            </Field>
+          {(() => {
+            const matchedPreset = presetEntries.find(
+              ([, p]) => p.baseUrl === draft.baseUrl.trim()
+            );
+            const showProtocol = !matchedPreset;
+            return (
+              <div className={showProtocol ? 'grid grid-cols-2 gap-3' : ''}>
+                {showProtocol && (
+                  <Field label="Protocol">
+                    <div className="flex gap-1.5">
+                      {(['openai', 'anthropic'] as const).map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => setDraft({ ...draft, kind: k })}
+                          className="text-[12.5px] px-2.5 py-1.5 rounded transition-colors flex-1"
+                          style={{
+                            background: draft.kind === k ? 'var(--accent-tint)' : 'var(--surface-2)',
+                            color: draft.kind === k ? 'var(--accent)' : 'var(--fg)',
+                            border: `.5px solid ${draft.kind === k ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {k === 'openai' ? 'OpenAI-compatible' : 'Anthropic native'}
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                )}
 
-            <Field label="Base URL">
-              <PhInput
-                value={draft.baseUrl}
-                onChange={(v) => setDraft({ ...draft, baseUrl: v })}
-                placeholder="https://api.openai.com/v1"
-              />
-              {draft.baseUrl.trim() && !isValidBaseUrl(draft.baseUrl) && (
-                <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
-                  Must start with http:// or https://
-                </span>
-              )}
-            </Field>
-          </div>
+                <Field label="Base URL">
+                  <PhInput
+                    value={draft.baseUrl}
+                    onChange={(v) => setDraft({ ...draft, baseUrl: v })}
+                    placeholder="https://api.openai.com/v1"
+                  />
+                  {draft.baseUrl.trim() && !isValidBaseUrl(draft.baseUrl) && (
+                    <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
+                      Must start with http:// or https://
+                    </span>
+                  )}
+                </Field>
+              </div>
+            );
+          })()}
 
           <Field label="API key">
             <div className="flex gap-2 items-center">

@@ -23,8 +23,6 @@ pub struct Settings {
     pub stream_response: bool,
     #[serde(default = "default_timeout")]
     pub response_timeout: u32,
-    #[serde(default = "default_concurrent")]
-    pub concurrent_requests: u32,
     #[serde(default)]
     pub proxy_url: String,
 
@@ -50,7 +48,6 @@ pub struct Settings {
 fn yes() -> bool { true }
 fn no() -> bool { false }
 fn default_timeout() -> u32 { 30 }
-fn default_concurrent() -> u32 { 3 }
 fn default_theme() -> String { "dark".into() }
 fn default_accent() -> String { "violet".into() }
 fn default_density() -> String { "regular".into() }

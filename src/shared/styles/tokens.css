@@ -83,6 +83,28 @@
   --shadow-lg: 0 30px 60px rgba(20, 24, 36, 0.16), 0 6px 16px rgba(20, 24, 36, 0.08);
 }
 
+/* Accent overrides. Applied via `[data-accent="..."]` on <html>. Each rule
+   must shadow every accent-related token so it works against both the dark
+   default and the light-mode block above. `violet` is the default and lives
+   in :root — no explicit rule needed, but we include one so switching back
+   from another accent always resolves a real match. */
+[data-accent="violet"] {
+  --accent:       #a78bfa;
+  --accent-2:     #c4b5fd;
+  --accent-deep:  #7c5cf5;
+  --accent-tint:  rgba(167, 139, 250, 0.10);
+  --accent-tint-2:rgba(167, 139, 250, 0.22);
+  --accent-glow:  0 0 0 1px rgba(167, 139, 250, 0.30), 0 0 24px rgba(167, 139, 250, 0.18);
+}
+[data-theme="light"][data-accent="violet"] {
+  --accent:       #6b54d6;
+  --accent-2:     #8e78ec;
+  --accent-deep:  #543ec4;
+  --accent-tint:  rgba(107, 84, 214, 0.08);
+  --accent-tint-2:rgba(107, 84, 214, 0.18);
+  --accent-glow:  0 0 0 1px rgba(107, 84, 214, 0.25), 0 0 18px rgba(107, 84, 214, 0.14);
+}
+
 [data-accent="blue"] {
   --accent:       #6b8afd;
   --accent-2:     #93a8ff;
@@ -90,6 +112,82 @@
   --accent-tint:  rgba(107, 138, 253, 0.10);
   --accent-tint-2:rgba(107, 138, 253, 0.22);
   --accent-glow:  0 0 0 1px rgba(107, 138, 253, 0.30), 0 0 22px rgba(107, 138, 253, 0.18);
+}
+[data-theme="light"][data-accent="blue"] {
+  --accent:       #2f6cf0;
+  --accent-2:     #5b8df5;
+  --accent-deep:  #1e54cf;
+  --accent-tint:  rgba(47, 108, 240, 0.08);
+  --accent-tint-2:rgba(47, 108, 240, 0.18);
+  --accent-glow:  0 0 0 1px rgba(47, 108, 240, 0.25), 0 0 18px rgba(47, 108, 240, 0.14);
+}
+
+[data-accent="green"] {
+  --accent:       #34d399;
+  --accent-2:     #6ee7b7;
+  --accent-deep:  #10b981;
+  --accent-tint:  rgba(52, 211, 153, 0.10);
+  --accent-tint-2:rgba(52, 211, 153, 0.22);
+  --accent-glow:  0 0 0 1px rgba(52, 211, 153, 0.30), 0 0 22px rgba(52, 211, 153, 0.18);
+}
+[data-theme="light"][data-accent="green"] {
+  --accent:       #059669;
+  --accent-2:     #10b981;
+  --accent-deep:  #047857;
+  --accent-tint:  rgba(5, 150, 105, 0.08);
+  --accent-tint-2:rgba(5, 150, 105, 0.18);
+  --accent-glow:  0 0 0 1px rgba(5, 150, 105, 0.25), 0 0 18px rgba(5, 150, 105, 0.14);
+}
+
+[data-accent="amber"] {
+  --accent:       #fbbf24;
+  --accent-2:     #fcd34d;
+  --accent-deep:  #d97706;
+  --accent-tint:  rgba(251, 191, 36, 0.10);
+  --accent-tint-2:rgba(251, 191, 36, 0.22);
+  --accent-glow:  0 0 0 1px rgba(251, 191, 36, 0.30), 0 0 22px rgba(251, 191, 36, 0.18);
+}
+[data-theme="light"][data-accent="amber"] {
+  --accent:       #b45309;
+  --accent-2:     #d97706;
+  --accent-deep:  #92400e;
+  --accent-tint:  rgba(180, 83, 9, 0.08);
+  --accent-tint-2:rgba(180, 83, 9, 0.18);
+  --accent-glow:  0 0 0 1px rgba(180, 83, 9, 0.25), 0 0 18px rgba(180, 83, 9, 0.14);
+}
+
+[data-accent="rose"] {
+  --accent:       #fb7185;
+  --accent-2:     #fda4af;
+  --accent-deep:  #e11d48;
+  --accent-tint:  rgba(251, 113, 133, 0.10);
+  --accent-tint-2:rgba(251, 113, 133, 0.22);
+  --accent-glow:  0 0 0 1px rgba(251, 113, 133, 0.30), 0 0 22px rgba(251, 113, 133, 0.18);
+}
+[data-theme="light"][data-accent="rose"] {
+  --accent:       #be123c;
+  --accent-2:     #e11d48;
+  --accent-deep:  #9f1239;
+  --accent-tint:  rgba(190, 18, 60, 0.08);
+  --accent-tint-2:rgba(190, 18, 60, 0.18);
+  --accent-glow:  0 0 0 1px rgba(190, 18, 60, 0.25), 0 0 18px rgba(190, 18, 60, 0.14);
+}
+
+[data-accent="mono"] {
+  --accent:       #e5e7eb;
+  --accent-2:     #f3f4f6;
+  --accent-deep:  #9ca3af;
+  --accent-tint:  rgba(229, 231, 235, 0.08);
+  --accent-tint-2:rgba(229, 231, 235, 0.18);
+  --accent-glow:  0 0 0 1px rgba(229, 231, 235, 0.20), 0 0 22px rgba(229, 231, 235, 0.10);
+}
+[data-theme="light"][data-accent="mono"] {
+  --accent:       #1c1f28;
+  --accent-2:     #4b5563;
+  --accent-deep:  #0b0d12;
+  --accent-tint:  rgba(28, 31, 40, 0.06);
+  --accent-tint-2:rgba(28, 31, 40, 0.14);
+  --accent-glow:  0 0 0 1px rgba(28, 31, 40, 0.20), 0 0 18px rgba(28, 31, 40, 0.10);
 }
 
 .ph-mono { font-family: var(--mono); font-feature-settings: "calt"; font-variant-numeric: tabular-nums; }
@@ -236,6 +334,68 @@
 }
 .ph-slider:not(.ph-slider--disabled) .ph-slider__group:focus-within .ph-slider__thumb {
   box-shadow: 0 0 0 4px var(--accent-tint-2), 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* Hide the browser's built-in password-reveal button. Edge / WebView2
+   injects `::-ms-reveal` (and `::-ms-clear`) inside every `type="password"`
+   input, which duplicates our custom eye toggle. Chromium adds
+   `::-webkit-credentials-auto-fill-button` for autofilled credentials. */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+input::-webkit-credentials-auto-fill-button {
+  visibility: hidden;
+  display: none !important;
+  pointer-events: none;
+  height: 0;
+  width: 0;
+  margin: 0;
+}
+
+/* Suppress WebView2 / Chromium autofill background. The browser paints a
+   bright accent-colored fill over autofilled inputs (most visible on API
+   key / password fields), which bleeds through our transparent inner input
+   and reads as a purple band inside the field wrapper. We override it by
+   painting our own background via an inset box-shadow and forcing the text
+   color back to the token. The long transition delay is the standard trick
+   to keep the override from being reverted on focus/blur. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+textarea:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
+  box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
+  -webkit-text-fill-color: var(--fg) !important;
+  caret-color: var(--fg) !important;
+  transition: background-color 9999s ease-out 0s, color 9999s ease-out 0s;
+}
+
+/* Loading skeleton with a moving sheen. Wrap any block-level element in
+   `.ph-shimmer` and give it a `width` + `height` (or rely on its content
+   bounds). The gradient runs left-to-right; respect reduced-motion by
+   leaving the static surface tint when the user has asked for less motion. */
+@keyframes ph-shimmer-sweep {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.ph-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: ph-shimmer-sweep 1.6s ease-in-out infinite;
+  border-radius: 6px;
+  color: transparent !important;
+  user-select: none;
+  pointer-events: none;
 }
 
 /* Honor reduced-motion globally — all named animations become instant

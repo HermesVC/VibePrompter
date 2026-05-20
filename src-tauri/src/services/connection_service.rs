@@ -23,9 +23,10 @@ pub struct ConnectionService {
     repo: ConnectionRepo,
     secrets: Arc<dyn SecretStore>,
     settings: SettingsService,
-    /// Bounded concurrent outbound HTTP calls. Sized from
-    /// `Settings.concurrent_requests` at startup. Resizing requires a
-    /// restart — the underlying `Semaphore` permit count is fixed.
+    /// Bounded concurrent outbound HTTP calls. Capacity is set at startup
+    /// and is no longer user-tunable — a fixed cap is enough headroom for
+    /// the realistic UI flows (overlay stream + Settings Test + Fetch
+    /// models) and prevents accidental request floods.
     permits: Arc<Semaphore>,
     /// Mirror of the semaphore's original capacity so we can return it
     /// without touching tokio's internal accounting.
@@ -58,16 +59,15 @@ impl ConnectionService {
         let total = self.permits.available_permits();
         // We can't read the original capacity directly from `Semaphore` —
         // but we don't need to. The dashboard cares about the bar between
-        // 0 (nothing in flight) and "concurrent_requests" (saturated); we
+        // 0 (nothing in flight) and the configured cap (saturated); we
         // surface that via two numbers: a count of acquired permits, and
-        // a separate `concurrent_limit()` for the denominator.
+        // a separate `permits_capacity()` for the denominator.
         self.permits_capacity().saturating_sub(total as u32)
     }
 
     pub fn permits_capacity(&self) -> u32 {
-        // The `Semaphore` was sized from `Settings.concurrent_requests` at
-        // boot; we stash the same number alongside it to avoid the
-        // capacity-tracking dance.
+        // The `Semaphore` was sized at boot; we stash the same number
+        // alongside it to avoid the capacity-tracking dance.
         self.permits_cap
     }
 
@@ -336,8 +336,8 @@ impl ConnectionService {
     }
 
     /// Run a chat completion through a specific connection. Queues behind
-    /// `Settings.concurrent_requests` permits — a fifth concurrent call (with
-    /// the default of 3) blocks here until one of the in-flight ones returns.
+    /// the global permit pool — calls beyond the cap block here until one
+    /// of the in-flight ones returns.
     pub async fn complete(
         &self,
         id: &str,

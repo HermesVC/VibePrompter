@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { I, PhButton, PhInput, useToast } from '@shared/ui';
+import { I, PhButton, PhInput, useToast, AppIcon } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 /**
@@ -103,7 +103,7 @@ export function SetupScreen() {
     >
       <div className="max-w-[640px] mx-auto px-8 pt-10 pb-12 flex flex-col gap-6">
         <header className="flex items-center gap-3.5 mb-1">
-          <span className="ph-mark xl" />
+          <AppIcon size="xl" />
           <div className="flex-1">
             <h1 className="m-0 text-[26px] font-semibold text-fg-strong" style={{ letterSpacing: '-0.025em' }}>
               Welcome to VibePrompter

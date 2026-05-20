@@ -7,6 +7,13 @@
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }
+html, body {
+  /* Stop WebView2 from rubber-banding the entire window when the user
+     scrolls past the top or bottom of the dashboard. `none` also blocks
+     scroll-chaining to parent elements (relevant inside the embedded
+     webview). `contain` would also work but we don't want chained scroll. */
+  overscroll-behavior: none;
+}
 body {
   font-family: var(--sans);
   background: var(--bg);

@@ -1,4 +1,4 @@
-import { I, Group, PanelHead, PhInput, SettingRow, Slider, Toggle } from '@shared/ui';
+import { I, Group, PanelHead, PhInput, SettingRow, Toggle } from '@shared/ui';
 import { useAppSettingsQuery, useSaveSettingsMutation, type AppSettings } from '../../application/settings.query';
 
 export function GeneralPanel() {
@@ -61,25 +61,6 @@ export function GeneralPanel() {
                 onChange={(v) => set('response_timeout', Number(v))}
               />
               <span className="text-xs text-fg-mute">seconds</span>
-            </div>
-          }
-        />
-        <SettingRow
-          icon={<I.layers size={14} />}
-          label="Concurrent requests"
-          hint="Maximum in-flight transformations."
-          control={
-            <div className="flex items-center gap-2">
-              <div style={{ width: 140 }}>
-                <Slider
-                  value={settings.concurrent_requests}
-                  onChange={(v) => set('concurrent_requests', v)}
-                  min={1}
-                  max={8}
-                  step={1}
-                />
-              </div>
-              <span className="ph-mono text-xs text-fg min-w-[14px]">{settings.concurrent_requests}</span>
             </div>
           }
         />
