@@ -65,7 +65,7 @@ export function SetupScreen() {
     loader.show('Finishing setup...');
     try {
       await invokeCommand<void>('mark_first_run_done');
-    } catch {}
+    } catch { /* first-run flag is best-effort */ }
     setBusy(false);
     loader.hide();
     navigate('/');

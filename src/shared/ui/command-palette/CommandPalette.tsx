@@ -133,10 +133,9 @@ export function CommandPalette() {
     });
   }, [commands, query]);
 
-  // Clamp highlight when the filtered list shrinks.
-  useEffect(() => {
-    if (highlight >= filtered.length) setHighlight(Math.max(0, filtered.length - 1));
-  }, [filtered.length, highlight]);
+  // Clamp highlight to valid range — computed rather than via an effect
+  // to avoid a redundant render cycle when the list shrinks.
+  const activeHighlight = filtered.length === 0 ? 0 : Math.min(highlight, filtered.length - 1);
 
   const runCommand = async (cmd: Command) => {
     close();
@@ -159,7 +158,7 @@ export function CommandPalette() {
       setHighlight((h) => Math.max(0, h - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const cmd = filtered[highlight];
+      const cmd = filtered[activeHighlight];
       if (cmd) runCommand(cmd);
     }
   };
@@ -248,7 +247,7 @@ export function CommandPalette() {
           )}
           {filtered.map((c, i) => {
             const Icon = c.iconName ? I[c.iconName] : I.bolt;
-            const active = i === highlight;
+            const active = i === activeHighlight;
             return (
               <CommandRow
                 key={c.id}

@@ -7,6 +7,7 @@ interface GlobalLoaderApi {
 
 const GlobalLoaderContext = createContext<GlobalLoaderApi | null>(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useGlobalLoader(): GlobalLoaderApi {
   const ctx = useContext(GlobalLoaderContext);
   if (!ctx) {

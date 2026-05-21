@@ -27,6 +27,7 @@ const mk = (path: ReactNode, defaultSw = 1.5) =>
     );
   };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const I = {
   search: mk(<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>),
   close: mk(<path d="M18 6 6 18M6 6l12 12" />),
@@ -96,6 +97,7 @@ export function Spinner({ size = 14, color = 'currentColor' }: { size?: number; 
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ProviderGlyphs = {
   openai: (s = 22) => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" style={{ display: 'block' }}>

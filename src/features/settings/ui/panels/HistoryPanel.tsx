@@ -116,7 +116,7 @@ export function HistoryPanel() {
       if (match) {
         await invokeCommand<void>('set_active_mode', { id: match.id });
       }
-    } catch {}
+    } catch { /* mode switch is best-effort */ }
     toast.ok(
       `Original input copied. Paste anywhere and press Ctrl+Alt+F${
         item.mode ? ` (${item.mode} mode)` : ''

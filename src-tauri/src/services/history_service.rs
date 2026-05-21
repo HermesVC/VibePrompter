@@ -9,14 +9,21 @@ use crate::utils::AppResult;
 #[derive(Clone)]
 pub struct HistoryService {
     repo: HistoryRepo,
-    events: EventBus,
+    // None in unit tests where no AppHandle is available.
+    events: Option<EventBus>,
 }
 
 impl HistoryService {
     /// Wires the EventBus so every successful `record()` fires a
     /// `history_changed` event the frontend can invalidate caches on.
     pub fn with_events(repo: HistoryRepo, events: EventBus) -> Self {
-        Self { repo, events }
+        Self { repo, events: Some(events) }
+    }
+
+    fn emit(&self, event: AppEvent) {
+        if let Some(bus) = &self.events {
+            bus.emit(event);
+        }
     }
 
     /// List history newest-first.
@@ -28,7 +35,7 @@ impl HistoryService {
     /// `history_changed` so panels refresh immediately.
     pub async fn clear(&self) -> AppResult<u64> {
         let n = self.repo.clear().await?;
-        self.events.emit(AppEvent::HistoryChanged);
+        self.emit(AppEvent::HistoryChanged);
         Ok(n)
     }
 
@@ -65,15 +72,14 @@ impl HistoryService {
         self.repo.cost_by_connection(&since).await
     }
 
-    /// Record a completed transformation. Used by sub-project 2.
-    /// Fires `history_changed` on success so the History settings panel +
-    /// dashboard recent-activity strip refresh without polling. Emit
-    /// failures are swallowed by the EventBus itself; the insert result
-    /// propagates either way.
+    /// Record a completed transformation. Fires `history_changed` on success
+    /// so the History settings panel + dashboard recent-activity strip refresh
+    /// without polling. Emit failures are swallowed by the EventBus itself;
+    /// the insert result propagates either way.
     #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {
         let id = self.repo.insert(&item).await?;
-        self.events.emit(AppEvent::HistoryChanged);
+        self.emit(AppEvent::HistoryChanged);
         Ok(id)
     }
 
@@ -112,7 +118,7 @@ mod tests {
     use crate::storage::repositories::HistoryRepo;
 
     fn svc(repo: HistoryRepo) -> HistoryService {
-        HistoryService::new(repo)
+        HistoryService { repo, events: None }
     }
 
     #[tokio::test]
@@ -126,9 +132,9 @@ mod tests {
                 source_text: "hi".into(),
                 output_text: "Hello".into(),
                 latency_ms: 900,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_micros: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_micros: 0,
             })
             .await
             .unwrap();
@@ -160,7 +166,6 @@ mod tests {
         assert_eq!(service.list(HistoryQuery::default()).await.unwrap().len(), 1);
     }
 
-    // Helper used by the new retention tests.
     fn sample() -> NewHistoryItem {
         NewHistoryItem {
             mode_name: "Email".into(),
@@ -186,9 +191,9 @@ mod tests {
                 source_text: "hi".into(),
                 output_text: "Hello".into(),
                 latency_ms: 900,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_micros: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_micros: 0,
             })
             .await
             .unwrap();

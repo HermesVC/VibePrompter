@@ -15,8 +15,10 @@ describe('cn (classnames utility)', () => {
   });
 
   it('should handle conditional classes', () => {
-    expect(cn('foo', false && 'bar', 'baz')).toBe('foo baz');
-    expect(cn('foo', true && 'bar', 'baz')).toBe('foo bar baz');
+    const inactive = false;
+    const active = true;
+    expect(cn('foo', inactive && 'bar', 'baz')).toBe('foo baz');
+    expect(cn('foo', active && 'bar', 'baz')).toBe('foo bar baz');
   });
 
   it('should merge tailwind classes correctly', () => {

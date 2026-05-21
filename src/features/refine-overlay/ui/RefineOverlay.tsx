@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -192,7 +192,45 @@ export function RefineOverlay() {
   }, []);
 
   // Keyboard shortcuts inside the overlay: Esc rejects, Enter accepts when
-  // streaming has finished, Cmd/Ctrl+R retries.
+  const accept = useCallback(() => {
+    acceptingRef.current = true;
+    invoke<void>('refine_accept', { text }).catch(() => {
+      acceptingRef.current = false;
+    });
+  }, [text]);
+
+  const reject = useCallback(() => {
+    invoke<void>('refine_reject')
+      .catch(() => {})
+      .finally(() => {
+        getCurrentWindow().hide().catch(() => {});
+      });
+  }, []);
+
+  const retry = useCallback(() => {
+    invoke<void>('refine_retry').catch(() => {});
+  }, []);
+
+  const copyAndHide = useCallback(() => {
+    if (!text) return;
+    // Reuse the accept guard so the blur-to-reject listener doesn't fire as
+    // soon as the overlay loses focus during hide. Without this guard,
+    // `refine_reject` runs on blur, restores the user's prior clipboard,
+    // and wipes the summary we just placed there.
+    acceptingRef.current = true;
+    // Dedicated backend command: writes the text to the OS clipboard via the
+    // Tauri clipboard manager, hides the overlay, clears the session, and
+    // explicitly skips the prior-clipboard restore that `refine_reject` does.
+    invoke<void>('refine_copy_and_hide', { text }).catch(() => {
+      // Fallback: best-effort web clipboard + window hide if the Tauri call
+      // fails for any reason. Still skipping the reject path on purpose.
+      navigator.clipboard.writeText(text).catch(() => {});
+      getCurrentWindow().hide().catch(() => {});
+    });
+  }, [text]);
+
+  // Keyboard shortcuts: Escape rejects, Enter accepts/copies, Ctrl+R retries once
+  // streaming has finished.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -212,41 +250,7 @@ export function RefineOverlay() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [done, text, meta?.kind]);
-
-  function accept() {
-    acceptingRef.current = true;
-    invoke<void>('refine_accept', { text }).catch(() => {
-      acceptingRef.current = false;
-    });
-  }
-  function reject() {
-    invoke<void>('refine_reject')
-      .catch(() => {})
-      .finally(() => {
-        getCurrentWindow().hide().catch(() => {});
-      });
-  }
-  function retry() {
-    invoke<void>('refine_retry').catch(() => {});
-  }
-  function copyAndHide() {
-    if (!text) return;
-    // Reuse the accept guard so the blur-to-reject listener doesn't fire as
-    // soon as the overlay loses focus during hide. Without this guard,
-    // `refine_reject` runs on blur, restores the user's prior clipboard,
-    // and wipes the summary we just placed there.
-    acceptingRef.current = true;
-    // Dedicated backend command: writes the text to the OS clipboard via the
-    // Tauri clipboard manager, hides the overlay, clears the session, and
-    // explicitly skips the prior-clipboard restore that `refine_reject` does.
-    invoke<void>('refine_copy_and_hide', { text }).catch(() => {
-      // Fallback: best-effort web clipboard + window hide if the Tauri call
-      // fails for any reason. Still skipping the reject path on purpose.
-      navigator.clipboard.writeText(text).catch(() => {});
-      getCurrentWindow().hide().catch(() => {});
-    });
-  }
+  }, [done, meta?.kind, accept, copyAndHide, reject, retry]);
 
   const kind: RefineKind = meta?.kind ?? 'rewrite';
   const isSummarize = kind === 'summarize';
