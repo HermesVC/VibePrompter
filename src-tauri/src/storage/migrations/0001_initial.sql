@@ -1,10 +1,8 @@
--- VibePrompter foundation schema (consolidated).
+-- VibePrompter foundation schema — single consolidated migration.
 --
--- This file replaces the previous 13-migration chain (0001 initial + 0002
--- seed + 0003–0013 incremental schema/data changes) that was squashed
--- during the development phase. The final shape of every table — including
--- every column added by later ALTERs — lives here, and the seed data has
--- been pre-cleaned (no dead settings keys, no stale shortcut accelerators).
+-- Every table, index, and seed row lives here. This is the authoritative
+-- starting state for all fresh installs. There are no follow-on migration
+-- files; future schema changes will be added as new numbered files.
 
 -- ──────────────────────────────────────────────────────────────────── tables
 
@@ -98,6 +96,9 @@ CREATE TABLE provider_connections (
     last_used_at  TEXT NOT NULL DEFAULT '',
     notes         TEXT NOT NULL DEFAULT '',
     tags          TEXT NOT NULL DEFAULT '',  -- comma-separated, e.g. "work,gpt"
+    -- Pricing override in USD per million tokens. 0 = use embedded table.
+    price_input_per_m  REAL NOT NULL DEFAULT 0,
+    price_output_per_m REAL NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
