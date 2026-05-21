@@ -48,6 +48,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // Persist window size/position across launches so the user's layout
         // sticks. Skips the `mode-hud` window — that's transparent, sized
         // by config, and re-centered on every show.
@@ -101,6 +102,7 @@ pub fn run() {
             commands::get_history,
             commands::clear_history,
             commands::export_history,
+            commands::export_history_to_file,
             commands::count_history,
             commands::set_history_favorite,
             commands::get_cost_summary,

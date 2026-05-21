@@ -24,6 +24,9 @@ export function HistoryPanel() {
   const [sel, setSel] = useState(1);
   const [clearing, setClearing] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterMode, setFilterMode] = useState('');
+  const [filterProvider, setFilterProvider] = useState('');
   const [rerunBusy, setRerunBusy] = useState(false);
   const [rerunResult, setRerunResult] = useState<{
     text: string;
@@ -154,19 +157,11 @@ export function HistoryPanel() {
 
   const exportAll = async () => {
     try {
-      const payload = await invokeCommand<unknown>('export_history');
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `vibeprompter-history-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.ok('History exported.', 'Download started');
+      const dest = await invokeCommand<string | null>('export_history_to_file');
+      if (dest) toast.ok(`Saved to ${dest}`, 'History exported');
+      // dest === null means user cancelled — do nothing
     } catch (e) {
-      toast.err(String(e), 'Export failed');
+      toast.err(errorMessage(e), 'Export failed');
     }
   };
 
@@ -207,6 +202,8 @@ export function HistoryPanel() {
   const items = history.filter(
     (x) =>
       (!favoritesOnly || x.fav) &&
+      (!filterMode || x.mode === filterMode) &&
+      (!filterProvider || x.provider === filterProvider) &&
       (!q.trim() ||
         x.src.toLowerCase().includes(q.toLowerCase()) ||
         x.out.toLowerCase().includes(q.toLowerCase()))
@@ -225,7 +222,12 @@ export function HistoryPanel() {
       actions={
         history.length > 0 ? (
           <div className="flex gap-1.5">
-            <PhButton size="sm" variant="ghost" icon={<I.filter size={12} />}>
+            <PhButton
+              size="sm"
+              variant={filterOpen ? 'primary' : 'ghost'}
+              icon={<I.filter size={12} />}
+              onClick={() => setFilterOpen((v) => !v)}
+            >
               Filter
             </PhButton>
             <PhButton
@@ -294,6 +296,61 @@ export function HistoryPanel() {
             value={q}
             onChange={setQ}
           />
+          {filterOpen && (
+            <div
+              className="flex flex-col gap-2 rounded-lg px-3 py-2.5"
+              style={{ background: 'var(--surface-2)', border: '.5px solid var(--border)' }}
+            >
+              <div className="flex gap-2">
+                <div className="flex flex-col gap-1 flex-1">
+                  <span style={labelStyle}>Mode</span>
+                  <select
+                    value={filterMode}
+                    onChange={(e) => setFilterMode(e.target.value)}
+                    className="text-[11.5px] rounded px-2 py-1 outline-none w-full"
+                    style={{
+                      background: 'var(--surface)',
+                      border: '.5px solid var(--border)',
+                      color: 'var(--fg)',
+                    }}
+                  >
+                    <option value="">All modes</option>
+                    {[...new Set(history.map((x) => x.mode))].sort().map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1 flex-1">
+                  <span style={labelStyle}>Provider</span>
+                  <select
+                    value={filterProvider}
+                    onChange={(e) => setFilterProvider(e.target.value)}
+                    className="text-[11.5px] rounded px-2 py-1 outline-none w-full"
+                    style={{
+                      background: 'var(--surface)',
+                      border: '.5px solid var(--border)',
+                      color: 'var(--fg)',
+                    }}
+                  >
+                    <option value="">All providers</option>
+                    {[...new Set(history.map((x) => x.provider))].sort().map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {(filterMode || filterProvider) && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterMode(''); setFilterProvider(''); }}
+                  className="text-[11px] self-start"
+                  style={{ background: 'none', border: 'none', color: 'var(--fg-dim)', cursor: 'pointer', padding: 0 }}
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-1.5">
             <button
               type="button"

@@ -245,11 +245,11 @@ export function HomePage() {
         )}
 
         {bootLoaded && health && health.issues.length > 0 && (
-          <section className="flex flex-col gap-1.5">
+          <section className="flex flex-col gap-1.5 w-full min-w-0">
             {health.issues.map((issue) => (
               <div
                 key={issue.code}
-                className="rounded-lg px-3 py-2 flex items-start gap-2 text-[12.5px]"
+                className="rounded-lg px-3 py-2 flex items-start gap-2 text-[12.5px] w-full min-w-0"
                 style={{
                   background:
                     issue.severity === 'error'
@@ -261,10 +261,11 @@ export function HomePage() {
                       : '.5px solid rgba(251,191,36,0.30)',
                   color:
                     issue.severity === 'error' ? 'var(--danger)' : 'var(--warn)',
+                  boxSizing: 'border-box',
                 }}
               >
                 <I.info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
-                <span style={{ flex: 1 }}>{issue.message}</span>
+                <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>{issue.message}</span>
                 {(issue.code === 'no_connections' ||
                   issue.code === 'default_missing_key' ||
                   issue.code === 'no_default_connection') && (

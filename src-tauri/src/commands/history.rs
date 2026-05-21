@@ -128,8 +128,6 @@ pub async fn get_cost_summary(
 pub async fn export_history(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
-    // Pull everything — the panel's filter operates client-side, so an
-    // export of "all history" is what the user expects.
     let items = state
         .history
         .list(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
@@ -140,4 +138,56 @@ pub async fn export_history(
         "count": items.len(),
         "items": items,
     }))
+}
+
+/// Show a native save-file dialog, then write history JSON to the chosen path.
+/// Returns the path that was written, or null if the user cancelled.
+#[tauri::command]
+pub async fn export_history_to_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let default_name = format!(
+        "vibeprompter-history-{}.json",
+        chrono::Utc::now().format("%Y-%m-%d")
+    );
+
+    // Show the native save dialog synchronously via a oneshot channel so we
+    // can stay inside an async command without blocking the Tauri runtime.
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<FilePath>>();
+    app.dialog()
+        .file()
+        .set_title("Export history")
+        .set_file_name(&default_name)
+        .add_filter("JSON", &["json"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let path = rx.await.map_err(|_| AppError::Config("dialog closed".into()))?;
+    let Some(file_path) = path else {
+        return Ok(None); // user cancelled
+    };
+
+    let items = state
+        .history
+        .list(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
+        .await?;
+    let payload = serde_json::json!({
+        "schema": "vibeprompter-history-v1",
+        "exportedAt": chrono::Utc::now().to_rfc3339(),
+        "count": items.len(),
+        "items": items,
+    });
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|e| AppError::Config(format!("serialise: {e}")))?;
+
+    let dest = file_path.as_path()
+        .ok_or_else(|| AppError::Config("invalid path".into()))?;
+    std::fs::write(dest, json.as_bytes())
+        .map_err(|e| AppError::Config(format!("write {}: {e}", dest.display())))?;
+
+    Ok(Some(dest.display().to_string()))
 }
