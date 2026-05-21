@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AppProviders } from './providers';
 import { AppRouter } from './router';
@@ -30,6 +31,17 @@ const WINDOW_LABEL = readWindowLabel();
  *   - everything else → main app shell (providers + router)
  */
 export function App() {
+  useEffect(() => {
+    const preloader = document.getElementById('preloader');
+    if (preloader) {
+      preloader.classList.add('preloader-fade-out');
+      const timer = setTimeout(() => {
+        preloader.remove();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
   if (WINDOW_LABEL === 'mode-hud') {
     return <ModeHud />;
   }

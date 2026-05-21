@@ -1,79 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { I, PhButton, useToast, AppIcon, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
-
-interface ActiveMode {
-  id: string;
-  name: string;
-  iconName?: string | null;
-}
-
-interface ShortcutBinding {
-  id: string;
-  action: string;
-  accelerator: string;
-  hasBackend: boolean;
-}
-
-interface CatalogMode {
-  id: string;
-  name: string;
-  iconName: string;
-  desc: string;
-  sys: string;
-  temp: number;
-  maxTok: number;
-  provider?: string | null;
-  enabled: boolean;
-  isSystem: boolean;
-}
-
-interface Connection {
-  id: string;
-  label: string;
-  hasKey: boolean;
-  isDefault: boolean;
-  defaultModel: string;
-}
-
-interface HealthIssue {
-  severity: 'warn' | 'error';
-  code: string;
-  message: string;
-}
-
-interface HealthReport {
-  ok: boolean;
-  issues: HealthIssue[];
-}
-
-interface HistoryItem {
-  id: number;
-  mode: string;
-  iconName: string;
-  provider: string;
-  ms: number;
-  createdAt: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  costMicros?: number;
-}
-
-interface CostSummary {
-  monthMicros: number;
-  weekMicros: number;
-  totalMicros: number;
-  monthRunsPriced: number;
-  monthRunsUnpriced: number;
-}
-
-interface CostBreakdown {
-  byDay: Array<{ day: string; micros: number; runs: number }>;
-  byConnection: Array<{ label: string; micros: number; runs: number }>;
-  days: number;
-}
+import { relativeTimeAgo } from '@shared/lib/date';
+import { CostCard } from '../ui/CostCard';
+import { HotkeyTipCard } from '../ui/HotkeyTipCard';
+import { DashboardSkeleton } from '../ui/DashboardSkeleton';
+import { conflictsFor, formatCost, humanizeAction, nextMode } from '../ui/helpers';
+import type {
+  ActiveMode,
+  CatalogMode,
+  Connection,
+  CostBreakdown,
+  CostSummary,
+  HealthReport,
+  HistoryItem,
+  ShortcutBinding,
+} from '../ui/types';
 
 /**
  * The main window is a real app dashboard — not a tour of demo screens.
@@ -107,6 +51,7 @@ export function HomePage() {
   // empty-state placeholder. A subsequent reload (window focus, event push)
   // does NOT toggle this back — we only ever want the skeleton on first paint.
   const [bootLoaded, setBootLoaded] = useState(false);
+  const [inFlight, setInFlight] = useState<{ inFlight: number; capacity: number } | null>(null);
 
   const reloadAll = () => {
     invokeCommand<ActiveMode>('get_active_mode').then(setActive).catch(() => {});
@@ -188,8 +133,6 @@ export function HomePage() {
     };
   }, []);
 
-  const [inFlight, setInFlight] = useState<{ inFlight: number; capacity: number } | null>(null);
-
   // Show a one-time "Updated to vX" toast after an app version bump. We compare
   // the running version to the value we stashed last launch; if they differ,
   // toast and update the stash. First launch on a given install just stashes
@@ -219,7 +162,9 @@ export function HomePage() {
             value: JSON.stringify(diag.version),
           });
         }
-      } catch {}
+      } catch {
+        // Best-effort: the "what's new" toast is a nicety, never block boot on it.
+      }
     })();
     return () => {
       cancelled = true;
@@ -849,7 +794,7 @@ export function HomePage() {
                       </div>
                     </div>
                     <span className="text-[11px] text-fg-dim ph-mono">
-                      {relativeTime(h.createdAt)}
+                      {relativeTimeAgo(h.createdAt)}
                     </span>
                   </button>
                 );
@@ -923,446 +868,4 @@ export function HomePage() {
       </div>
     </div>
   );
-}
-
-/**
- * Cost card — surfaces the cost data we already record per run so the user
- * can see "how much have I spent this month" + which connection drives
- * the spend + a 30-day trend. Renders only when there's something to
- * show (skipping it on a fresh install keeps the dashboard clean).
- *
- * Visualization choices:
- *  - 30-day bar chart, inline SVG (no chart library): bars scale to the
- *    max-day in the window so the shape is readable regardless of total
- *    spend. Tooltip per bar via native `<title>`.
- *  - Per-connection breakdown as a sparkbar list, with each row scaled
- *    against the highest-spend connection so the user can spot the
- *    biggest contributor at a glance.
- */
-function CostCard({
-  cost,
-  breakdown,
-}: {
-  cost: CostSummary;
-  breakdown: CostBreakdown;
-}) {
-  const days = breakdown.days;
-  // Build a dense per-day array (zero-fill gaps) so the bars align with
-  // calendar days, not just days where the user ran prompts.
-  const denseByDay = useMemo(() => {
-    const map = new Map(breakdown.byDay.map((r) => [r.day, r]));
-    const arr: Array<{ day: string; micros: number; runs: number }> = [];
-    const today = new Date();
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(today);
-      d.setUTCDate(today.getUTCDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      arr.push(map.get(key) ?? { day: key, micros: 0, runs: 0 });
-    }
-    return arr;
-  }, [breakdown.byDay, days]);
-  const maxDayMicros = Math.max(1, ...denseByDay.map((d) => d.micros));
-  const maxConnMicros = Math.max(1, ...breakdown.byConnection.map((c) => c.micros));
-  const dailyAvg = cost.monthMicros / Math.max(1, days);
-
-  // SVG chart dims. Width scales to container via viewBox; we just need
-  // an aspect ratio that reads as "trend, not single value."
-  const chartW = 600;
-  const chartH = 80;
-  const gap = 2;
-  const barW = (chartW - gap * (denseByDay.length - 1)) / denseByDay.length;
-
-  return (
-    <section
-      className="rounded-xl p-5 flex flex-col gap-4"
-      style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
-    >
-      <div className="flex items-baseline justify-between gap-3 flex-wrap">
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <h2 className="m-0 text-[13px] font-semibold text-fg uppercase tracking-[0.10em]">
-            Spend · last {days} days
-          </h2>
-          <span className="text-[11.5px] text-fg-dim">
-            Estimated from your local token usage × per-model pricing. Authoritative invoice
-            is your vendor's.
-          </span>
-        </div>
-        <div className="flex items-baseline gap-3">
-          <span className="text-[24px] font-semibold text-fg-strong ph-mono">
-            {formatCost(cost.monthMicros)}
-          </span>
-          <span className="text-[11.5px] text-fg-mute">
-            ≈ {formatCost(dailyAvg)} / day
-          </span>
-        </div>
-      </div>
-
-      {/* Daily bar chart */}
-      <div style={{ width: '100%' }}>
-        <svg
-          viewBox={`0 0 ${chartW} ${chartH}`}
-          preserveAspectRatio="none"
-          style={{ width: '100%', height: 80, display: 'block' }}
-          role="img"
-          aria-label={`Daily cost trend over the last ${days} days`}
-        >
-          {denseByDay.map((d, i) => {
-            const h = d.micros === 0 ? 1 : Math.max(1, (d.micros / maxDayMicros) * (chartH - 4));
-            const x = i * (barW + gap);
-            const y = chartH - h;
-            return (
-              <rect
-                key={d.day}
-                x={x}
-                y={y}
-                width={barW}
-                height={h}
-                rx={1}
-                fill={d.micros === 0 ? 'var(--surface-3)' : 'var(--accent)'}
-                opacity={d.micros === 0 ? 0.4 : 0.9}
-              >
-                <title>
-                  {d.day} · {formatCost(d.micros)} · {d.runs} run{d.runs === 1 ? '' : 's'}
-                </title>
-              </rect>
-            );
-          })}
-        </svg>
-        <div
-          className="flex justify-between mt-1 text-[10.5px] ph-mono"
-          style={{ color: 'var(--fg-dim)' }}
-        >
-          <span>{denseByDay[0]?.day ?? ''}</span>
-          <span>{denseByDay[denseByDay.length - 1]?.day ?? 'today'}</span>
-        </div>
-      </div>
-
-      {/* Per-connection breakdown */}
-      {breakdown.byConnection.length > 0 && (
-        <div className="flex flex-col gap-2 pt-1" style={{ borderTop: '.5px solid var(--divider)' }}>
-          <div className="text-[10.5px] uppercase tracking-[0.10em] text-fg-dim font-semibold pt-2">
-            By connection
-          </div>
-          {breakdown.byConnection.slice(0, 6).map((c) => {
-            const pct = (c.micros / maxConnMicros) * 100;
-            return (
-              <div key={c.label} className="flex items-center gap-3">
-                <span className="text-[12.5px] text-fg-strong flex-shrink-0" style={{ minWidth: 140 }}>
-                  {c.label || '(unknown)'}
-                </span>
-                <div
-                  className="flex-1 relative rounded-full"
-                  style={{
-                    height: 6,
-                    background: 'var(--surface-2)',
-                    overflow: 'hidden',
-                  }}
-                  title={`${formatCost(c.micros)} across ${c.runs} run${c.runs === 1 ? '' : 's'}`}
-                >
-                  <div
-                    style={{
-                      width: `${pct}%`,
-                      height: '100%',
-                      background: c.micros > 0 ? 'var(--accent)' : 'var(--fg-dim)',
-                      borderRadius: 999,
-                      opacity: c.micros > 0 ? 0.85 : 0.3,
-                    }}
-                  />
-                </div>
-                <span
-                  className="text-[11.5px] text-fg-mute ph-mono flex-shrink-0 text-right"
-                  style={{ minWidth: 72 }}
-                >
-                  {formatCost(c.micros)}
-                </span>
-                <span
-                  className="text-[10.5px] text-fg-dim ph-mono flex-shrink-0 text-right"
-                  style={{ minWidth: 44 }}
-                >
-                  {c.runs}r
-                </span>
-              </div>
-            );
-          })}
-          {cost.monthRunsUnpriced > 0 && (
-            <span className="text-[11px] text-fg-dim mt-1">
-              {cost.monthRunsUnpriced} additional run{cost.monthRunsUnpriced === 1 ? '' : 's'}{' '}
-              not priced (local model, or model not in the pricing table). Set a per-connection
-              override in <strong>Settings → Providers → edit connection → Advanced</strong>.
-            </span>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * First-run "try the hotkey" tip. Shows once per install — dismissal is
- * persisted in the settings KV (`hotkey_tip_dismissed`). The card walks
- * the user through the actual core flow that's invisible from the UI:
- * select text anywhere → press the global hotkey → see the result in the
- * floating overlay. Without this, new users land on the dashboard and
- * don't realize the product's main feature isn't on this screen at all.
- */
-function HotkeyTipCard({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <section
-      className="rounded-xl p-5 flex flex-col gap-3"
-      style={{
-        background:
-          'linear-gradient(135deg, var(--accent-tint) 0%, var(--surface) 70%)',
-        border: '.5px solid var(--accent-tint-2)',
-        boxShadow: 'var(--accent-glow)',
-      }}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{
-            background: 'var(--accent-tint-2)',
-            color: 'var(--accent)',
-          }}
-        >
-          <I.bolt size={20} />
-        </span>
-        <div className="flex-1 min-w-0">
-          <h2 className="m-0 text-[15px] font-semibold text-fg-strong">
-            Try it now — VibePrompter works from any app
-          </h2>
-          <p className="m-0 text-[12.5px] text-fg-mute mt-1.5 leading-relaxed">
-            Select some text in any window (browser, email, IDE — anything),
-            then press a hotkey. A floating overlay near your cursor shows the
-            result. Hit <kbd className="ph-mono">Enter</kbd> to paste it back,{' '}
-            <kbd className="ph-mono">Esc</kbd> to dismiss.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label="Dismiss tip"
-          className="text-[11.5px] px-2 py-1 rounded transition-colors flex-shrink-0"
-          style={{
-            background: 'transparent',
-            border: '.5px solid var(--border)',
-            color: 'var(--fg-mute)',
-            cursor: 'pointer',
-          }}
-          title="Don't show this again"
-        >
-          Got it
-        </button>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
-        <TipHotkey
-          accel="Ctrl+Alt+F"
-          label="Rewrite"
-          hint="Polishes the selection using your active mode."
-        />
-        <TipHotkey
-          accel="Ctrl+Alt+G"
-          label="Fix grammar"
-          hint="Corrects typos and grammar without changing style."
-        />
-        <TipHotkey
-          accel="Ctrl+Alt+S"
-          label="Summarize"
-          hint="Bulleted summary of long text. Copies to clipboard."
-        />
-      </div>
-      <div
-        className="text-[11.5px] text-fg-mute mt-1 flex items-center gap-2"
-        style={{
-          paddingTop: 10,
-          borderTop: '.5px solid var(--accent-tint-2)',
-        }}
-      >
-        <I.info size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-        <span>
-          VibePrompter lives in your <strong className="text-fg-strong">system tray</strong>.
-          Closing this window keeps it running. On Windows: right-click the tray icon
-          (often hidden under the <kbd className="ph-mono text-[10px]">^</kbd> chevron) →
-          <strong className="text-fg-strong"> Taskbar settings</strong> → show the
-          VibePrompter icon for one-click access.
-        </span>
-      </div>
-    </section>
-  );
-}
-
-function TipHotkey({
-  accel,
-  label,
-  hint,
-}: {
-  accel: string;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <div
-      className="rounded-lg p-3 flex flex-col gap-1"
-      style={{
-        background: 'var(--surface)',
-        border: '.5px solid var(--border)',
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <kbd
-          className="ph-mono text-[11px] px-2 py-0.5 rounded"
-          style={{
-            background: 'var(--surface-2)',
-            color: 'var(--fg-strong)',
-            border: '.5px solid var(--border-strong)',
-          }}
-        >
-          {accel}
-        </kbd>
-        <span className="text-[12.5px] font-semibold text-fg-strong">{label}</span>
-      </div>
-      <span className="text-[11px] text-fg-dim leading-snug">{hint}</span>
-    </div>
-  );
-}
-
-/**
- * Loading-state skeleton for the dashboard. Mirrors the real layout's
- * rough shape — active mode card, run-prompt area, mode grid, shortcuts,
- * recent activity — so the page doesn't visibly jump when the data
- * arrives.
- */
-function DashboardSkeleton() {
-  return (
-    <div className="flex flex-col gap-8" aria-busy="true" aria-label="Loading dashboard">
-      <div
-        className="rounded-xl p-5 flex items-center gap-4"
-        style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
-      >
-        <div className="ph-shimmer" style={{ width: 48, height: 48, borderRadius: 12 }} />
-        <div className="flex-1 flex flex-col gap-2 min-w-0">
-          <div className="ph-shimmer" style={{ height: 11, width: 90 }} />
-          <div className="ph-shimmer" style={{ height: 22, width: '38%' }} />
-          <div className="ph-shimmer" style={{ height: 12, width: '60%' }} />
-        </div>
-        <div className="ph-shimmer" style={{ height: 32, width: 140, borderRadius: 8 }} />
-      </div>
-
-      <div
-        className="rounded-xl p-5 flex flex-col gap-3"
-        style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
-      >
-        <div className="ph-shimmer" style={{ height: 12, width: 110 }} />
-        <div className="ph-shimmer" style={{ height: 80, width: '100%', borderRadius: 8 }} />
-        <div className="flex justify-end gap-2">
-          <div className="ph-shimmer" style={{ height: 32, width: 80, borderRadius: 8 }} />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div
-            key={i}
-            className="ph-shimmer"
-            style={{ height: 46, borderRadius: 10 }}
-          />
-        ))}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div className="ph-shimmer" style={{ height: 12, width: 140 }} />
-        <div
-          className="rounded-lg overflow-hidden flex flex-col"
-          style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
-        >
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div
-              key={i}
-              className="px-4 py-3 flex items-center gap-3"
-              style={{ borderTop: i === 0 ? 'none' : '.5px solid var(--divider)' }}
-            >
-              <div className="flex-1 flex flex-col gap-1.5">
-                <div className="ph-shimmer" style={{ height: 12, width: '40%' }} />
-                <div className="ph-shimmer" style={{ height: 10, width: '25%' }} />
-              </div>
-              <div className="ph-shimmer" style={{ height: 22, width: 90, borderRadius: 4 }} />
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Return a comma-separated list of action labels that share `accel` with at
- * least one other binding, or null if the row's accelerator is unique. Used
- * to render the "Conflict" badge in the dashboard.
- */
-function conflictsFor(accel: string, all: ShortcutBinding[]): string | null {
-  const peers = all.filter((s) => s.accelerator === accel);
-  if (peers.length < 2) return null;
-  return peers.map((p) => humanizeAction(p.action)).join(', ');
-}
-
-/**
- * Compute the mode that the next "Cycle" press will land on. Mirrors the
- * backend's `TrayState::advance` wrap-around so the label stays truthful.
- */
-function nextMode(active: ActiveMode | null, modes: CatalogMode[]): CatalogMode | null {
-  if (modes.length === 0) return null;
-  if (!active) return modes[0];
-  const idx = modes.findIndex((m) => m.id === active.id);
-  if (idx < 0) return modes[0];
-  return modes[(idx + 1) % modes.length];
-}
-
-/**
- * Lossy "5m ago"-style formatter — good enough for the dashboard's at-a-glance
- * activity strip without pulling in date-fns at the top level.
- */
-/** Format micro-USD (1 USD = 1,000,000 micros) as a short dollar string.
- *  Sub-cent values become "<$0.01" so users don't see "$0.00" and assume
- *  the calculation is broken. Estimates only — see backend pricing.rs. */
-function formatCost(micros: number): string {
-  if (micros <= 0) return '$0';
-  const usd = micros / 1_000_000;
-  if (usd < 0.01) return '<$0.01';
-  if (usd < 1) return `$${usd.toFixed(2)}`;
-  if (usd < 100) return `$${usd.toFixed(2)}`;
-  return `$${Math.round(usd)}`;
-}
-
-function relativeTime(rfc3339: string): string {
-  const then = Date.parse(rfc3339);
-  if (Number.isNaN(then)) return '';
-  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
-/**
- * Translate the seeded `action` slugs into the labels we want to show next to
- * the kbd chip. Cheaper than threading display names through the DB while the
- * action vocabulary is this small.
- */
-function humanizeAction(action: string): string {
-  switch (action) {
-    case 'mode_switch':
-      return 'Cycle prompt mode';
-    case 'open_palette':
-      return 'Open command palette';
-    case 'rewrite_selection':
-      return 'Rewrite selection';
-    case 'fix_grammar':
-      return 'Fix grammar';
-    case 'summarize':
-      return 'Quick summarize';
-    default:
-      return action;
-  }
 }

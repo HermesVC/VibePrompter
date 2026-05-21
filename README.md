@@ -77,6 +77,16 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
 
 To report a bug, open an issue using the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md).
 
+By participating you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+To report a security vulnerability, please follow the [Security Policy](SECURITY.md) — **do not open a public issue**.
+
+## Privacy
+
+VibePrompter is fully local. No telemetry, no accounts, no data leaves your machine except prompts sent to whichever AI provider you configured. See [PRIVACY.md](PRIVACY.md) for full details.
+
 ## License
 
 GPL v3 — see [LICENSE](LICENSE) for details.

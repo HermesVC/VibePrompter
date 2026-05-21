@@ -34,7 +34,7 @@ export function WindowTitlebar({ title = 'VibePrompter', icon }: WindowTitlebarP
   return (
     <div
       data-tauri-drag-region
-      className="h-[34px] flex-shrink-0 pl-3.5 pr-0 flex items-center justify-between bg-bg-2 border-b-[0.5px] border-border text-xs text-fg select-none"
+      className="h-[34px] flex-shrink-0 pl-3.5 pr-0 flex items-center justify-between bg-bg-2 border-b-[0.5px] border-border-strong text-xs text-fg select-none"
       style={{ letterSpacing: '-0.005em' }}
     >
       <div data-tauri-drag-region className="flex items-center gap-2 pointer-events-none">

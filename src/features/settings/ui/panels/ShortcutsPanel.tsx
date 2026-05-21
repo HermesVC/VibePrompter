@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Hint, I, Kbd, PanelHead, PhButton, Pill, SettingRow, Toggle, useToast, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { errorMessage } from '@shared/lib/utils';
 
 /**
  * Real shortcuts editor. Backed by the `shortcuts` table — every change
@@ -111,7 +112,7 @@ export function ShortcutsPanel() {
       });
       reload();
     } catch (e) {
-      toast.err(typeof e === 'string' ? e : String(e), 'Could not save shortcut');
+      toast.err(errorMessage(e), 'Could not save shortcut');
     }
   };
 

@@ -155,6 +155,25 @@ export function formatRelativeTime(
 }
 
 /**
+ * Compact "time ago" for RFC 3339 timestamps, e.g. "5s ago", "3m ago",
+ * "2h ago", "4d ago". Returns '' for empty/invalid input. This is the terse
+ * style used across the app's lists and cards (distinct from
+ * `formatRelativeTime`, which uses date-fns' wordier "5 minutes ago").
+ */
+export function relativeTimeAgo(rfc3339?: string | null): string {
+  if (!rfc3339) return '';
+  const then = Date.parse(rfc3339);
+  if (Number.isNaN(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
+/**
  * Format a date relative to today (e.g., "yesterday at 5:00 PM")
  */
 export function formatRelativeDate(

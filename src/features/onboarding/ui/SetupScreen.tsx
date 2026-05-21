@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { I, PhButton, PhInput, useToast, AppIcon } from '@shared/ui';
+import { I, PhButton, PhInput, useToast, AppIcon, useGlobalLoader } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { errorMessage } from '@shared/lib/utils';
 
 /**
  * First-run onboarding. The job is one thing: get the user a working
@@ -42,6 +43,7 @@ const PRESETS: Preset[] = [
 export function SetupScreen() {
   const navigate = useNavigate();
   const toast = useToast();
+  const loader = useGlobalLoader();
   const [preset, setPreset] = useState<Preset>(PRESETS[0]);
   const [label, setLabel] = useState(PRESETS[0].label);
   const [apiKey, setApiKey] = useState('');
@@ -60,16 +62,19 @@ export function SetupScreen() {
 
   const finishWithoutTest = async () => {
     setBusy(true);
+    loader.show('Finishing setup...');
     try {
       await invokeCommand<void>('mark_first_run_done');
     } catch {}
     setBusy(false);
+    loader.hide();
     navigate('/');
   };
 
   const finish = async () => {
     setBusy(true);
     setLastError(null);
+    loader.show('Saving connection...');
     try {
       setStage('saving');
       const saved = await invokeCommand<{ id: string; label: string }>('save_connection', {
@@ -88,6 +93,7 @@ export function SetupScreen() {
       // typos or wrong vendor. Local presets (Ollama with no key) skip this.
       if (apiKey.trim()) {
         setStage('testing');
+        loader.show('Testing connection...');
         await invokeCommand<void>('test_connection', { id: saved.id });
       }
 
@@ -98,12 +104,13 @@ export function SetupScreen() {
       );
       navigate('/');
     } catch (e) {
-      const msg = typeof e === 'string' ? e : String(e);
+      const msg = errorMessage(e);
       setLastError(msg);
       toast.err(msg, 'Setup failed');
     } finally {
       setBusy(false);
       setStage('idle');
+      loader.hide();
     }
   };
 
@@ -141,24 +148,65 @@ export function SetupScreen() {
             </span>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            {presetEntries.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => pickPreset(p)}
-                className="text-[11.5px] px-2 py-1 rounded transition-colors"
-                style={{
-                  background: preset.id === p.id ? 'var(--accent-tint)' : 'var(--surface-2)',
-                  border: `.5px solid ${preset.id === p.id ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-                  color: preset.id === p.id ? 'var(--accent)' : 'var(--fg)',
-                  cursor: 'pointer',
-                }}
-                title={p.baseUrl}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="flex flex-col gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.08em] text-fg-dim font-semibold mb-1.5">Cloud Providers</div>
+              <div className="flex flex-wrap gap-1.5">
+                {presetEntries
+                  .filter((p) => p.id !== 'ollama' && p.id !== 'lmstudio')
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => pickPreset(p)}
+                      className="text-[11px] px-2.5 py-1 rounded transition-all duration-100 ease-out hover:scale-102"
+                      style={{
+                        background: preset.id === p.id ? 'var(--accent-tint)' : 'var(--surface-2)',
+                        border: `.5px solid ${preset.id === p.id ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                        color: preset.id === p.id ? 'var(--accent)' : 'var(--fg)',
+                        cursor: 'pointer',
+                      }}
+                      title={p.baseUrl}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.08em] text-fg-dim font-semibold mb-1.5 flex items-center gap-1.5">
+                Local Dev Servers
+                <span className="text-[9px] lowercase px-1.5 py-0.5 rounded bg-surface-3 text-fg-mute font-normal">no internet required</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {presetEntries
+                  .filter((p) => p.id === 'ollama' || p.id === 'lmstudio')
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => pickPreset(p)}
+                      className="text-[11px] px-2.5 py-1 rounded transition-all duration-100 ease-out hover:scale-102 flex items-center gap-1"
+                      style={{
+                        background: preset.id === p.id ? 'var(--accent-tint)' : 'var(--surface-2)',
+                        border: `.5px solid ${preset.id === p.id ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                        color: preset.id === p.id ? 'var(--accent)' : 'var(--fg)',
+                        cursor: 'pointer',
+                      }}
+                      title={p.baseUrl}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                        <line x1="6" y1="6" x2="6.01" y2="6" />
+                        <line x1="6" y1="18" x2="6.01" y2="18" />
+                      </svg>
+                      {p.label}
+                    </button>
+                  ))}
+              </div>
+            </div>
           </div>
 
           <Field label="Label">

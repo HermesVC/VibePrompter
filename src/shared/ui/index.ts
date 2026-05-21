@@ -28,4 +28,6 @@ export {
 } from './SettingsLayout';
 export { WindowTitlebar } from './WindowTitlebar';
 export { AppIcon } from './AppIcon';
+export { GlobalLoaderProvider, useGlobalLoader } from './GlobalLoader';
+
 

@@ -163,6 +163,19 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
     Ok(HealthReport { ok, issues })
 }
 
+/// Open a URL in the system default browser. Accepts only https:// URLs to
+/// prevent misuse as an arbitrary path opener.
+#[tauri::command]
+pub async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+    if !url.starts_with("https://") {
+        return Err(AppError::Validation("only https:// URLs are allowed".into()));
+    }
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| AppError::Config(format!("opener: {e}")))
+}
+
 /// Return the tail of the most recent log file (oldest line first). Capped
 /// to the requested line count so the UI doesn't accidentally pull megabytes.
 #[tauri::command]

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { I, PanelHead, PhButton, useToast } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { relativeTimeAgo } from '@shared/lib/date';
 
 /**
  * About / diagnostics panel. Real values pulled from the backend:
@@ -105,7 +106,7 @@ export function AboutPanel() {
             label="Last event"
             value={
               usage.lastEventType
-                ? `${usage.lastEventType}\n${relativeTime(usage.lastEventAt)}`
+                ? `${usage.lastEventType}\n${relativeTimeAgo(usage.lastEventAt)}`
                 : '—'
             }
           />
@@ -137,6 +138,20 @@ export function AboutPanel() {
           vendor you configured (using <em>your</em> API key, billed by them, not us).
           The counts above are computed from your local SQLite history. No telemetry
           server. No accounts. Open-source so you can verify.
+          <div className="mt-3">
+            <PhButton
+              size="sm"
+              variant="ghost"
+              icon={<I.upload size={11} />}
+              onClick={() =>
+                invokeCommand<void>('open_url', {
+                  url: 'https://github.com/SkyThonk/VibePrompter/blob/main/PRIVACY.md',
+                }).catch((e) => toast.err(String(e), 'Could not open link'))
+              }
+            >
+              Privacy Policy
+            </PhButton>
+          </div>
         </div>
       </section>
 
@@ -263,19 +278,6 @@ function InfoCard({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
-}
-
-function relativeTime(rfc3339?: string | null): string {
-  if (!rfc3339) return '';
-  const then = Date.parse(rfc3339);
-  if (Number.isNaN(then)) return '';
-  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
 }
 
 function Row({

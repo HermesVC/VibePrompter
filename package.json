@@ -1,7 +1,13 @@
 {
   "name": "vibeprompter",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
+  "description": "A desktop app for refining and rewriting prompts with AI providers.",
+  "license": "GPL-3.0-only",
+  "author": "Akash Jaiswal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SkyThonk/VibePrompter.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +20,6 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@reduxjs/toolkit": "^2.5.0",
     "@tanstack/react-query": "^5.64.0",
     "@tanstack/react-query-devtools": "^5.64.0",
     "@tauri-apps/api": "^2.11.0",
@@ -22,9 +27,7 @@
     "date-fns": "^4.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-redux": "^9.2.0",
     "react-router-dom": "^7.5.0",
-    "redux-persist": "^6.0.0",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {

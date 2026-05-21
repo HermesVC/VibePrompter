@@ -17,6 +17,20 @@ export function generateId(prefix = 'id'): string {
 }
 
 /**
+ * Coerce an unknown caught value into a human-readable message string.
+ * Tauri `invoke` rejections may be a plain string, an Error, or an object with
+ * a `message` field — this handles all three without ever producing the
+ * useless "[object Object]". Use this for any `catch (e)` shown to the user.
+ */
+export function errorMessage(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e && typeof e === 'object' && 'message' in e) {
+    return String((e as { message: unknown }).message);
+  }
+  return String(e);
+}
+
+/**
  * Sleep for a specified duration (useful for testing/debugging)
  */
 export function sleep(ms: number): Promise<void> {

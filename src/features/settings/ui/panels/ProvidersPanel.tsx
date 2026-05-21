@@ -1,83 +1,31 @@
-import { useEffect, useMemo, useState } from 'react';
-import { I, PanelHead, PhButton, PhInput, Pill, useToast } from '@shared/ui';
+import { useEffect, useState } from 'react';
+import { PanelHead, useToast, useGlobalLoader } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { errorMessage as errorMsg } from '@shared/lib/utils';
+import {
+  PRESETS,
+  emptyDraft,
+  type Connection,
+  type ConnectionDraft,
+} from './providers/connection';
+import { ConnectionList } from './providers/ConnectionList';
+import { ConnectionEditor } from './providers/ConnectionEditor';
 
 /**
- * The "Providers" panel is now a working connection manager. Each connection
+ * The "Providers" panel is a working connection manager. Each connection
  * stores enough to make real API calls: a label, the wire protocol
  * (`openai` covers OpenAI plus every compatible vendor — OpenRouter, Groq,
  * Mistral, DeepSeek, Together, Gemini-compat, Ollama, LM Studio, vLLM,
  * llama.cpp; `anthropic` is the native Messages API), a base URL, an API key,
  * and the default model identifier.
  *
- * We deliberately do NOT ship a hardcoded list of vendors or models. The user
- * types a model string (or fetches the live list from the vendor with the
- * "Fetch models" button) so adding a new vendor or model NEVER requires a
- * new app release.
+ * This component is the stateful container: it owns the connection list,
+ * the editor draft, and all backend calls. The list and editor views live in
+ * `./providers/ConnectionList` and `./providers/ConnectionEditor`.
  */
-interface Connection {
-  id: string;
-  label: string;
-  kind: string;
-  baseUrl: string;
-  apiKeyTail: string;
-  hasKey: boolean;
-  defaultModel: string;
-  isDefault: boolean;
-  extraHeaders: string;
-  lastUsedAt: string;
-  notes: string;
-  tags: string;
-  priceInputPerM: number;
-  priceOutputPerM: number;
-}
-
-interface ConnectionDraft {
-  id: string | null;
-  label: string;
-  kind: 'openai' | 'anthropic';
-  baseUrl: string;
-  apiKey: string;
-  defaultModel: string;
-  isDefault: boolean;
-  extraHeaders: string;
-  notes: string;
-  tags: string;
-  priceInputPerM: number;
-  priceOutputPerM: number;
-}
-
-const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' | 'anthropic'; model: string }> = {
-  openai:     { label: 'OpenAI',       baseUrl: 'https://api.openai.com/v1',                              kind: 'openai',    model: 'gpt-5-mini' },
-  anthropic:  { label: 'Anthropic',    baseUrl: 'https://api.anthropic.com/v1',                           kind: 'anthropic', model: 'claude-sonnet-4-6' },
-  openrouter: { label: 'OpenRouter',   baseUrl: 'https://openrouter.ai/api/v1',                           kind: 'openai',    model: 'openai/gpt-5-mini' },
-  groq:       { label: 'Groq',         baseUrl: 'https://api.groq.com/openai/v1',                         kind: 'openai',    model: 'llama-3.3-70b-versatile' },
-  mistral:    { label: 'Mistral',      baseUrl: 'https://api.mistral.ai/v1',                              kind: 'openai',    model: 'mistral-large-latest' },
-  deepseek:   { label: 'DeepSeek',     baseUrl: 'https://api.deepseek.com/v1',                            kind: 'openai',    model: 'deepseek-chat' },
-  together:   { label: 'Together',     baseUrl: 'https://api.together.xyz/v1',                            kind: 'openai',    model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
-  gemini:     { label: 'Gemini',       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    model: 'gemini-flash-lite-latest' },
-  xai:        { label: 'xAI (Grok)',   baseUrl: 'https://api.x.ai/v1',                                    kind: 'openai',    model: 'grok-4' },
-  ollama:     { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1',                            kind: 'openai',    model: 'llama3.3' },
-  lmstudio:   { label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',                          kind: 'openai',    model: '' },
-};
-
-const emptyDraft = (): ConnectionDraft => ({
-  id: null,
-  label: '',
-  kind: 'openai',
-  baseUrl: '',
-  apiKey: '',
-  defaultModel: '',
-  isDefault: false,
-  extraHeaders: '',
-  notes: '',
-  tags: '',
-  priceInputPerM: 0,
-  priceOutputPerM: 0,
-});
-
 export function ProvidersPanel() {
   const toast = useToast();
+  const loader = useGlobalLoader();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -123,6 +71,7 @@ export function ProvidersPanel() {
     if (!draft) return;
     setBusy('save');
     setFeedback(null);
+    loader.show('Saving connection...');
     try {
       await invokeCommand<Connection>('save_connection', { input: draft });
       await reload();
@@ -132,6 +81,7 @@ export function ProvidersPanel() {
       setFeedback({ kind: 'err', msg: errorMsg(e) });
     } finally {
       setBusy(null);
+      loader.hide();
     }
   };
 
@@ -189,6 +139,7 @@ export function ProvidersPanel() {
   const test = async (id: string) => {
     setBusy(`test:${id}`);
     const label = connections.find((c) => c.id === id)?.label ?? 'Connection';
+    loader.show(`Testing connection for ${label}...`);
     try {
       const r = await invokeCommand<{ model: string; latencyMs: number }>(
         'test_connection',
@@ -199,6 +150,7 @@ export function ProvidersPanel() {
       toast.err(errorMsg(e), `${label} failed`);
     } finally {
       setBusy(null);
+      loader.hide();
     }
   };
 
@@ -227,6 +179,7 @@ export function ProvidersPanel() {
     }
     setBusy('models');
     setFeedback(null);
+    loader.show('Fetching models from provider...');
     try {
       // Pass the current draft directly so the user doesn't have to save
       // before browsing models. Backend builds an ephemeral connection,
@@ -241,6 +194,7 @@ export function ProvidersPanel() {
       setFeedback({ kind: 'err', msg: errorMsg(e) });
     } finally {
       setBusy(null);
+      loader.hide();
     }
   };
 
@@ -322,7 +276,12 @@ export function ProvidersPanel() {
     );
   };
 
-  const presetEntries = useMemo(() => Object.entries(PRESETS), []);
+  const beginAdd = () => {
+    setDraft(emptyDraft());
+    setKeyVisible(false);
+    setFeedback(null);
+    setAdvancedOpen(false); // new connection — clean state
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -349,643 +308,41 @@ export function ProvidersPanel() {
         </div>
       )}
 
-      {/* List */}
       {!isEditing && (
-        <div className="flex flex-col gap-2">
-          {connections.length === 0 && (
-            <div
-              className="rounded-lg px-5 py-6 text-[12.5px] text-fg-dim text-center"
-              style={{ background: 'var(--surface)', border: '.5px dashed var(--border)' }}
-            >
-              No connections yet. Add one to start running real prompts.
-            </div>
-          )}
-          {connections.length > 0 && (
-            <div className="flex items-center gap-2 px-1 mb-1">
-              <input
-                type="checkbox"
-                checked={selected.size > 0 && selected.size === connections.length}
-                ref={(el) => {
-                  if (el) el.indeterminate = selected.size > 0 && selected.size < connections.length;
-                }}
-                onChange={toggleAll}
-                title="Select all"
-              />
-              <span className="text-[11.5px] text-fg-dim">
-                {selected.size > 0
-                  ? `${selected.size} selected`
-                  : `${connections.length} connection${connections.length === 1 ? '' : 's'}`}
-              </span>
-              {selected.size > 0 && (
-                <PhButton
-                  size="sm"
-                  variant="danger"
-                  icon={<I.trash size={12} />}
-                  onClick={removeSelected}
-                  disabled={busy === 'bulk:del'}
-                >
-                  {busy === 'bulk:del' ? 'Deleting…' : `Delete ${selected.size}`}
-                </PhButton>
-              )}
-            </div>
-          )}
-          {connections.length > 1 && (() => {
-            const allTags = Array.from(
-              new Set(
-                connections
-                  .flatMap((c) => (c.tags ?? '').split(',').map((t) => t.trim()))
-                  .filter((t) => t.length > 0)
-              )
-            ).sort();
-            if (allTags.length === 0) return null;
-            return (
-              <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                <span className="text-[11px] text-fg-dim mr-1">Filter:</span>
-                <button
-                  type="button"
-                  onClick={() => setTagFilter(null)}
-                  className="text-[11px] px-2 py-1 rounded transition-colors"
-                  style={{
-                    background: tagFilter === null ? 'var(--accent-tint)' : 'var(--surface-2)',
-                    color: tagFilter === null ? 'var(--accent)' : 'var(--fg-mute)',
-                    border: `.5px solid ${tagFilter === null ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-                    cursor: 'pointer',
-                  }}
-                >
-                  All ({connections.length})
-                </button>
-                {allTags.map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setTagFilter(t)}
-                    className="text-[11px] px-2 py-1 rounded transition-colors"
-                    style={{
-                      background: tagFilter === t ? 'var(--accent-tint)' : 'var(--surface-2)',
-                      color: tagFilter === t ? 'var(--accent)' : 'var(--fg)',
-                      border: `.5px solid ${tagFilter === t ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            );
-          })()}
-          {connections
-            .filter((c) => {
-              if (!tagFilter) return true;
-              return (c.tags ?? '')
-                .split(',')
-                .map((t) => t.trim())
-                .includes(tagFilter);
-            })
-            .map((c) => (
-            <div
-              key={c.id}
-              className="rounded-lg p-4 flex items-center gap-3"
-              style={{
-                background: selected.has(c.id) ? 'var(--accent-tint)' : 'var(--surface)',
-                border: `.5px solid ${selected.has(c.id) ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(c.id)}
-                onChange={() => toggleOne(c.id)}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[14px] font-semibold text-fg-strong truncate">
-                    {c.label}
-                  </span>
-                  <Pill>{c.kind}</Pill>
-                  {c.isDefault && <Pill tone="accent">default</Pill>}
-                  {!c.hasKey && <Pill tone="warn">no key</Pill>}
-                  {(c.tags ?? '')
-                    .split(',')
-                    .map((t) => t.trim())
-                    .filter(Boolean)
-                    .map((t) => (
-                      <Pill key={t}>{t}</Pill>
-                    ))}
-                </div>
-                <div className="text-[11.5px] text-fg-dim mt-1 ph-mono truncate">
-                  {c.baseUrl} · {c.defaultModel || '(no default model)'}{' '}
-                  {c.hasKey && `· key ${c.apiKeyTail}`}
-                  {c.lastUsedAt && ` · used ${relativeTime(c.lastUsedAt)}`}
-                </div>
-                {c.notes && (
-                  <div
-                    className="text-[11.5px] text-fg-mute mt-1"
-                    style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                  >
-                    {c.notes}
-                  </div>
-                )}
-              </div>
-              <PhButton
-                size="sm"
-                variant="ghost"
-                onClick={() => test(c.id)}
-                icon={<I.bolt size={12} />}
-                disabled={busy === `test:${c.id}`}
-              >
-                {busy === `test:${c.id}` ? 'Testing…' : 'Test'}
-              </PhButton>
-              {!c.isDefault && (
-                <PhButton
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setDefault(c.id)}
-                  disabled={busy === `def:${c.id}`}
-                >
-                  Set default
-                </PhButton>
-              )}
-              <PhButton size="sm" variant="ghost" onClick={() => beginEdit(c)}>
-                Edit
-              </PhButton>
-              <PhButton
-                size="sm"
-                variant="ghost"
-                onClick={() => remove(c.id)}
-                disabled={busy === `del:${c.id}`}
-                icon={<I.trash size={12} />}
-              >
-                {''}
-              </PhButton>
-            </div>
-          ))}
-          <div className="flex items-center gap-2">
-            <PhButton
-              variant="primary"
-              size="md"
-              icon={<I.plus size={14} />}
-              onClick={() => {
-                setDraft(emptyDraft());
-                setKeyVisible(false);
-                setFeedback(null);
-                setAdvancedOpen(false); // new connection — clean state
-              }}
-            >
-              Add connection
-            </PhButton>
-            <span className="flex-1" />
-            <PhButton
-              variant="ghost"
-              size="md"
-              icon={<I.upload size={14} />}
-              onClick={importConnections}
-              title="Import a connections JSON file (API keys not included)"
-            >
-              Import
-            </PhButton>
-            <PhButton
-              variant="ghost"
-              size="md"
-              icon={<I.download size={14} />}
-              onClick={exportConnections}
-              disabled={connections.length === 0}
-              title="Download a JSON file of all connections (API keys excluded)"
-            >
-              Export
-            </PhButton>
-          </div>
-        </div>
+        <ConnectionList
+          connections={connections}
+          selected={selected}
+          tagFilter={tagFilter}
+          busy={busy}
+          onToggleAll={toggleAll}
+          onToggleOne={toggleOne}
+          onRemoveSelected={removeSelected}
+          onSetTagFilter={setTagFilter}
+          onTest={test}
+          onSetDefault={setDefault}
+          onEdit={beginEdit}
+          onRemove={remove}
+          onAdd={beginAdd}
+          onImport={importConnections}
+          onExport={exportConnections}
+        />
       )}
 
-      {/* Editor */}
       {isEditing && draft && (
-        <div
-          className="rounded-lg p-5 flex flex-col gap-4"
-          style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <PhButton
-                size="sm"
-                variant="ghost"
-                icon={<I.chevL size={12} />}
-                onClick={() => setDraft(null)}
-                title="Discard unsaved changes and return to the connection list"
-              >
-                Back
-              </PhButton>
-              <h3 className="m-0 text-[14px] font-semibold text-fg-strong truncate">
-                {draft.id ? 'Edit connection' : 'New connection'}
-              </h3>
-            </div>
-            <span className="text-[11.5px] text-fg-dim">
-              Quick start with a preset, then customize as needed.
-            </span>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {presetEntries.map(([key, p]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => applyPreset(key)}
-                className="text-[11.5px] px-2 py-1 rounded transition-colors"
-                style={{
-                  background: 'var(--surface-2)',
-                  border: '.5px solid var(--border)',
-                  color: 'var(--fg)',
-                  cursor: 'pointer',
-                }}
-                title={p.baseUrl}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          <Field label="Label">
-            <PhInput
-              value={draft.label}
-              onChange={(v) => setDraft({ ...draft, label: v })}
-              placeholder="My OpenAI key"
-            />
-          </Field>
-
-          {(() => {
-            const matchedPreset = presetEntries.find(
-              ([, p]) => p.baseUrl === draft.baseUrl.trim()
-            );
-            const showProtocol = !matchedPreset;
-            return (
-              <div className={showProtocol ? 'grid grid-cols-2 gap-3' : ''}>
-                {showProtocol && (
-                  <Field label="Protocol">
-                    <div className="flex gap-1.5">
-                      {(['openai', 'anthropic'] as const).map((k) => (
-                        <button
-                          key={k}
-                          type="button"
-                          onClick={() => setDraft({ ...draft, kind: k })}
-                          className="text-[12.5px] px-2.5 py-1.5 rounded transition-colors flex-1"
-                          style={{
-                            background: draft.kind === k ? 'var(--accent-tint)' : 'var(--surface-2)',
-                            color: draft.kind === k ? 'var(--accent)' : 'var(--fg)',
-                            border: `.5px solid ${draft.kind === k ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {k === 'openai' ? 'OpenAI-compatible' : 'Anthropic native'}
-                        </button>
-                      ))}
-                    </div>
-                  </Field>
-                )}
-
-                <Field label="Base URL">
-                  <PhInput
-                    value={draft.baseUrl}
-                    onChange={(v) => setDraft({ ...draft, baseUrl: v })}
-                    placeholder="https://api.openai.com/v1"
-                  />
-                  {draft.baseUrl.trim() && !isValidBaseUrl(draft.baseUrl) && (
-                    <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
-                      Must start with http:// or https://
-                    </span>
-                  )}
-                </Field>
-              </div>
-            );
-          })()}
-
-          <Field label="API key">
-            <div className="flex gap-2 items-center">
-              <PhInput
-                value={draft.apiKey}
-                onChange={(v) => setDraft({ ...draft, apiKey: v })}
-                type={keyVisible ? 'text' : 'password'}
-                placeholder={
-                  draft.id ? '(leave blank to keep existing key)' : 'sk-…'
-                }
-              />
-              <button
-                type="button"
-                onClick={() => setKeyVisible((v) => !v)}
-                className="text-[11.5px] px-2 py-1 rounded"
-                style={{
-                  background: 'var(--surface-2)',
-                  border: '.5px solid var(--border)',
-                  color: 'var(--fg-mute)',
-                  cursor: 'pointer',
-                }}
-              >
-                {keyVisible ? <I.eyeOff size={14} /> : <I.eye size={14} />}
-              </button>
-            </div>
-            {(() => {
-              const warn = keyFormatHint(draft);
-              return warn ? (
-                <span className="text-[11px] mt-1" style={{ color: 'var(--warn)' }}>
-                  {warn}
-                </span>
-              ) : null;
-            })()}
-          </Field>
-
-          <Field label="Default model">
-            <div className="flex flex-col gap-2">
-              <div className="flex gap-2 items-center">
-                <PhInput
-                  value={draft.defaultModel}
-                  onChange={(v) => setDraft({ ...draft, defaultModel: v })}
-                  placeholder="gpt-4o-mini, claude-sonnet-4-6, llama3.2, anything…"
-                />
-                <PhButton
-                  size="sm"
-                  variant="ghost"
-                  onClick={fetchModels}
-                  disabled={busy === 'models'}
-                  title="Ask the vendor for its current model list — works before saving so you can pick a model from the live catalog."
-                >
-                  {busy === 'models' ? 'Fetching…' : 'Fetch models'}
-                </PhButton>
-              </div>
-              {models.length > 0 && (
-                <div
-                  className="rounded-md p-2 flex flex-wrap gap-1.5"
-                  style={{
-                    background: 'var(--surface-2)',
-                    border: '.5px solid var(--border)',
-                    maxHeight: 160,
-                    overflow: 'auto',
-                  }}
-                >
-                  {models.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setDraft({ ...draft, defaultModel: m })}
-                      className="text-[11.5px] px-2 py-0.5 rounded ph-mono transition-colors"
-                      style={{
-                        background:
-                          draft.defaultModel === m ? 'var(--accent-tint)' : 'var(--surface)',
-                        color:
-                          draft.defaultModel === m ? 'var(--accent)' : 'var(--fg)',
-                        border: `.5px solid ${
-                          draft.defaultModel === m ? 'var(--accent-tint-2)' : 'var(--border)'
-                        }`,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Field>
-
-          <Field label="Tags (optional)">
-            <PhInput
-              value={draft.tags}
-              onChange={(v) => setDraft({ ...draft, tags: v })}
-              placeholder="work, personal, gpt"
-            />
-            <span className="text-[11px] text-fg-dim mt-1">
-              Comma-separated. Helps filter the list when you have many connections.
-            </span>
-          </Field>
-
-          <div className="flex flex-col gap-3">
-            <button
-              type="button"
-              onClick={() => setAdvancedOpen((v) => !v)}
-              className="flex items-center gap-2 text-left"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: 0,
-                color: 'var(--fg-mute)',
-              }}
-              aria-expanded={advancedOpen}
-            >
-              <I.cog size={12} />
-              <span className="text-[11.5px] uppercase tracking-[0.10em] font-semibold">
-                Advanced
-              </span>
-              <span className="text-[11px] ph-mono">
-                {advancedOpen ? '− hide' : '+ show'}
-              </span>
-              <span className="text-[11px]" style={{ color: 'var(--fg-dim)' }}>
-                Custom headers · pricing · notes
-              </span>
-            </button>
-
-            {advancedOpen && (
-              <>
-                <Field label='Custom headers (JSON)'>
-                  <textarea
-                    value={draft.extraHeaders}
-                    onChange={(e) => setDraft({ ...draft, extraHeaders: e.target.value })}
-                    rows={3}
-                    placeholder='{ "HTTP-Referer": "https://vibeprompter.app", "X-Title": "VibePrompter" }'
-                    className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
-                    style={{
-                      background: 'var(--bg-2)',
-                      border: '.5px solid var(--border-strong)',
-                      color: 'var(--fg)',
-                      fontFamily: 'var(--mono)',
-                      minHeight: 64,
-                    }}
-                  />
-                  <span className="text-[11px] text-fg-dim mt-1">
-                    Sent with every request to this connection. Use for OpenRouter
-                    attribution, corporate gateway tokens, or vendor-specific opt-ins.
-                  </span>
-                  {draft.extraHeaders.trim() && !isValidJsonObject(draft.extraHeaders) && (
-                    <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
-                      Must be a JSON object with string values.
-                    </span>
-                  )}
-                </Field>
-
-                <Field label="Pricing override (USD per 1M tokens)">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11.5px] text-fg-dim w-12">Input</span>
-                      <PhInput
-                        mono
-                        type="number"
-                        value={String(draft.priceInputPerM)}
-                        onChange={(v) => {
-                          const n = Number(v);
-                          setDraft({
-                            ...draft,
-                            priceInputPerM: Number.isFinite(n) && n >= 0 ? n : 0,
-                          });
-                        }}
-                        placeholder="0.15"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11.5px] text-fg-dim w-12">Output</span>
-                      <PhInput
-                        mono
-                        type="number"
-                        value={String(draft.priceOutputPerM)}
-                        onChange={(v) => {
-                          const n = Number(v);
-                          setDraft({
-                            ...draft,
-                            priceOutputPerM: Number.isFinite(n) && n >= 0 ? n : 0,
-                          });
-                        }}
-                        placeholder="0.60"
-                      />
-                    </div>
-                  </div>
-                  <span className="text-[11px] text-fg-dim mt-1">
-                    Set non-zero values to override the embedded pricing table for this connection.
-                    Leave at 0 to use the app's best-known prices for the model the vendor reports.
-                    Useful for models the embedded table doesn't know yet, or for negotiated rates.
-                  </span>
-                </Field>
-
-                <Field label="Notes (optional)">
-                  <textarea
-                    value={draft.notes}
-                    onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                    rows={2}
-                    placeholder="Rate limit reminders, account ownership, anything you'd want to see again."
-                    className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
-                    style={{
-                      background: 'var(--bg-2)',
-                      border: '.5px solid var(--border-strong)',
-                      color: 'var(--fg)',
-                      fontFamily: 'var(--sans)',
-                      minHeight: 50,
-                    }}
-                  />
-                </Field>
-              </>
-            )}
-          </div>
-
-          <label className="flex items-center gap-2 text-[12.5px] text-fg cursor-pointer">
-            <input
-              type="checkbox"
-              checked={draft.isDefault}
-              onChange={(e) => setDraft({ ...draft, isDefault: e.target.checked })}
-            />
-            Use this as the default connection for new prompts
-          </label>
-
-          <div className="flex items-center gap-2 pt-2" style={{ borderTop: '.5px solid var(--divider)' }}>
-            <span className="flex-1" />
-            <PhButton variant="ghost" size="md" onClick={() => setDraft(null)}>
-              Cancel
-            </PhButton>
-            <PhButton
-              variant="primary"
-              size="md"
-              icon={<I.check size={14} />}
-              onClick={save}
-              disabled={
-                busy === 'save' ||
-                !draft.label.trim() ||
-                !isValidBaseUrl(draft.baseUrl) ||
-                (draft.extraHeaders.trim() !== '' && !isValidJsonObject(draft.extraHeaders))
-              }
-            >
-              {busy === 'save' ? 'Saving…' : draft.id ? 'Save' : 'Create connection'}
-            </PhButton>
-          </div>
-        </div>
+        <ConnectionEditor
+          draft={draft}
+          setDraft={setDraft}
+          models={models}
+          busy={busy}
+          keyVisible={keyVisible}
+          setKeyVisible={setKeyVisible}
+          advancedOpen={advancedOpen}
+          setAdvancedOpen={setAdvancedOpen}
+          onApplyPreset={applyPreset}
+          onFetchModels={fetchModels}
+          onSave={save}
+        />
       )}
     </div>
   );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span
-        className="text-[10.5px] uppercase tracking-[0.10em] text-fg-dim font-semibold"
-      >
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-/** Warn (but never block) on obvious key/vendor mismatches. Pattern checks
-    are heuristic — Ollama needs no key, OpenAI keys start with `sk-`,
-    Anthropic with `sk-ant-`, Groq with `gsk_`, OpenRouter with `sk-or-`,
-    Gemini AI Studio keys start with `AIza`. Heuristics are derived from
-    the URL since `kind` only tells us protocol. */
-function keyFormatHint(draft: { baseUrl: string; apiKey: string; kind: string }): string | null {
-  const k = draft.apiKey.trim();
-  if (!k) return null;
-  const url = draft.baseUrl.toLowerCase();
-
-  if (url.includes('api.openai.com') && !k.startsWith('sk-')) {
-    return 'OpenAI keys usually start with "sk-". Double-check you pasted the right one.';
-  }
-  if (url.includes('api.anthropic.com') && !k.startsWith('sk-ant-')) {
-    return 'Anthropic keys usually start with "sk-ant-".';
-  }
-  if (url.includes('groq.com') && !k.startsWith('gsk_')) {
-    return 'Groq keys usually start with "gsk_".';
-  }
-  if (url.includes('openrouter.ai') && !k.startsWith('sk-or-')) {
-    return 'OpenRouter keys usually start with "sk-or-".';
-  }
-  if (url.includes('generativelanguage.googleapis.com') && !k.startsWith('AIza')) {
-    return 'Gemini AI Studio keys usually start with "AIza".';
-  }
-  if (url.includes('localhost') && k.length > 0) {
-    return 'Local servers (Ollama / LM Studio) typically need no key.';
-  }
-  return null;
-}
-
-function relativeTime(rfc3339: string): string {
-  if (!rfc3339) return '';
-  const then = Date.parse(rfc3339);
-  if (Number.isNaN(then)) return '';
-  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
-}
-
-function isValidBaseUrl(s: string): boolean {
-  const trimmed = s.trim();
-  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return false;
-  if (/\s/.test(trimmed)) return false;
-  try {
-    new URL(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isValidJsonObject(s: string): boolean {
-  try {
-    const v = JSON.parse(s);
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-    return Object.values(v).every((x) => typeof x === 'string');
-  } catch {
-    return false;
-  }
-}
-
-function errorMsg(e: unknown): string {
-  if (typeof e === 'string') return e;
-  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message);
-  return String(e);
 }

@@ -134,6 +134,7 @@ pub fn run() {
             commands::run_health_check,
             commands::get_analytics_summary,
             commands::open_app_folder,
+            commands::open_url,
             commands::show_mode_hud,
             commands::cycle_mode_cmd,
             commands::set_active_mode,

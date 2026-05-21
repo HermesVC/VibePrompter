@@ -4,9 +4,83 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>VibePrompter</title>
   </head>
   <body>
+    <!-- Theme-aware Pre-loader -->
+    <div id="preloader" style="
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #0a0b0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      transition: opacity 300ms ease-out;
+    ">
+      <script>
+        try {
+          const theme = localStorage.getItem('app-theme') || 'system';
+          const isLight = theme === 'light' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+          if (isLight) {
+            const el = document.getElementById('preloader');
+            el.style.background = '#f6f6f8';
+            document.write('<style>#preloader-text { color: #5f6373 !important; }</style>');
+          }
+        } catch (e) {}
+      </script>
+      <div style="position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center;">
+        <div style="
+          position: absolute;
+          width: 100px;
+          height: 100px;
+          border-radius: 9999px;
+          border: 1px solid rgba(167, 139, 250, 0.4);
+          animation: pulse-ring 2s cubic-bezier(0.215, 0.610, 0.355, 1) infinite;
+        "></div>
+        <div style="
+          position: absolute;
+          width: 100px;
+          height: 100px;
+          border-radius: 9999px;
+          border: 1px solid rgba(107, 138, 253, 0.4);
+          animation: pulse-ring 2s cubic-bezier(0.215, 0.610, 0.355, 1) infinite;
+          animation-delay: 0.66s;
+        "></div>
+        <div style="
+          width: 60px;
+          height: 60px;
+          background: linear-gradient(135deg, #a78bfa 0%, #6b8afd 100%);
+          animation: morph-orb 6s linear infinite;
+          box-shadow: 0 0 20px rgba(167, 139, 250, 0.4);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        ">
+          <span style="
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: #ffffff;
+            letter-spacing: -0.05em;
+          ">VP</span>
+        </div>
+      </div>
+      <div id="preloader-text" style="
+        margin-top: 24px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 500;
+        font-size: 11px;
+        color: #8a8f9f;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      ">VibePrompter</div>
+    </div>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

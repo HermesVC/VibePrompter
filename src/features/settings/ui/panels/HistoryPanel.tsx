@@ -4,6 +4,8 @@ import { listen } from '@tauri-apps/api/event';
 import { EmptyState, I, Kbd, PanelHead, PhButton, PhInput, Pill, useToast, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { useHistoryQuery } from '../../application/settings.query';
+import { relativeTimeAgo } from '@shared/lib/date';
+import { errorMessage } from '@shared/lib/utils';
 
 const labelStyle: React.CSSProperties = {
   fontSize: 11,
@@ -89,7 +91,7 @@ export function HistoryPanel() {
       setRerunResult({ ...result, connId });
       queryClient.invalidateQueries({ queryKey: ['settings', 'history'] });
     } catch (e) {
-      setRerunError(typeof e === 'string' ? e : String(e));
+      setRerunError(errorMessage(e));
     } finally {
       setRerunBusy(false);
     }
@@ -337,7 +339,7 @@ export function HistoryPanel() {
                       <I.star size={11} fill="currentColor" style={{ color: 'var(--warn)' }} />
                     )}
                     <span className="text-[10.5px] text-fg-dim">
-                      {relativeTime(it.createdAt)}
+                      {relativeTimeAgo(it.createdAt)}
                     </span>
                   </div>
                   <div
@@ -587,7 +589,7 @@ export function HistoryPanel() {
           >
             <span>
               <span className="text-fg-dim">When </span>
-              <span className="ph-mono">{relativeTime(current.createdAt)}</span>
+              <span className="ph-mono">{relativeTimeAgo(current.createdAt)}</span>
             </span>
             <span>
               <span className="text-fg-dim">Latency </span>
@@ -619,17 +621,4 @@ export function HistoryPanel() {
       </div>
     </>
   );
-}
-
-/** "5m ago" formatter shared with the dashboard's activity strip. */
-function relativeTime(rfc3339: string): string {
-  const then = Date.parse(rfc3339);
-  if (Number.isNaN(then)) return '';
-  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
 }

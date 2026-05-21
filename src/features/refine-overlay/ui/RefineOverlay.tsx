@@ -991,9 +991,32 @@ function BulletBlock({ text, showCaret }: { text: string; showCaret: boolean }) 
       {blocks.map((b, bi) => {
         if (b.kind === 'bullet') {
           return (
-            <ul key={bi} style={{ margin: 0, paddingLeft: 18 }}>
+            <ul key={bi} style={{ margin: '0 0 12px 0', paddingLeft: 0, listStyle: 'none' }}>
               {b.items.map((it, i) => (
-                <li key={i} style={{ marginBottom: 4 }}>
+                <li
+                  key={i}
+                  style={{
+                    position: 'relative',
+                    paddingLeft: 18,
+                    marginBottom: 6,
+                    fontSize: 13,
+                    lineHeight: 1.55,
+                    color: 'var(--fg)',
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: 4,
+                      top: '7px',
+                      width: 5,
+                      height: 5,
+                      borderRadius: 1,
+                      background: 'var(--accent)',
+                      transform: 'rotate(45deg)',
+                      opacity: 0.85,
+                    }}
+                  />
                   {it}
                   {bi === lastIdx && i === b.items.length - 1 && caret}
                 </li>
@@ -1002,7 +1025,16 @@ function BulletBlock({ text, showCaret }: { text: string; showCaret: boolean }) 
           );
         }
         return (
-          <p key={bi} style={{ margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>
+          <p
+            key={bi}
+            style={{
+              margin: '0 0 10px 0',
+              whiteSpace: 'pre-wrap',
+              fontSize: 13,
+              lineHeight: 1.55,
+              color: 'var(--fg)',
+            }}
+          >
             {b.items.join(' ')}
             {bi === lastIdx && caret}
           </p>

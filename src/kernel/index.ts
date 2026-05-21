@@ -1,11 +1,4 @@
-// Kernel Layer - Shared business logic across all features
-// This is your "Shared Kernel" in DDD terms
+// Kernel Layer - Shared infrastructure across all features.
 
-// Domain - Core entities and business rules
-export * from './domain';
-
-// Application - Use cases and state management
-export * from './application';
-
-// Infrastructure - External service adapters
+// Infrastructure - Storage and Tauri command adapters.
 export * from './infrastructure';

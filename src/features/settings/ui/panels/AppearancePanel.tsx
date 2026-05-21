@@ -91,7 +91,9 @@ export function AppearancePanel() {
               key={a.id}
               type="button"
               onClick={() => setAccent(a.id)}
-              className="cursor-pointer p-0"
+              className="cursor-pointer p-0 transition-transform duration-100 ease-out hover:scale-110 active:scale-95 focus:outline-none"
+              title={a.id.charAt(0).toUpperCase() + a.id.slice(1)}
+              aria-label={`Select ${a.id} accent color`}
               style={{
                 width: 34,
                 height: 34,
