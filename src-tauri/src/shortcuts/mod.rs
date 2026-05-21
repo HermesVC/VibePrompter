@@ -112,10 +112,11 @@ fn dispatch(app: &AppHandle, action: &str) {
                         crate::tray::show_main_window(&app);
                         let _ = tauri::Emitter::emit(&app, "navigate", "/settings/providers");
                         show_error_hud(&app, &msg);
-                    } else if msg.contains("no selection captured") {
+                    } else if msg.contains("no selection captured") || msg.contains("overlay dismissed") {
                         // Friendly, action-oriented HUD instead of a scary
                         // error preview. Most common cause: user pressed
-                        // the hotkey before highlighting anything.
+                        // the hotkey before highlighting anything, or pressed
+                        // it again while the overlay was still open.
                         show_no_selection_hud(&app);
                     } else {
                         show_error_hud(&app, &msg);

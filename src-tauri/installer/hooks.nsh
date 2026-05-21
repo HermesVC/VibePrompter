@@ -1,43 +1,42 @@
 ; VibePrompter NSIS installer hooks.
 ;
 ; Wired in via `tauri.conf.json > bundle.windows.nsis.installerHooks`.
-; The macros below are invoked at well-known points in the install /
-; uninstall flow. We only add a post-uninstall prompt that offers to wipe
-; the user's data + keyring entries — the install path needs no custom
-; behaviour beyond what Tauri's NSIS template already does.
+;
+; The Tauri-generated uninstaller already handles the "Delete app data"
+; decision through the checkbox on the confirmation page. That checkbox sets
+; $DeleteAppDataCheckboxState and then conditionally removes:
+;
+;   $APPDATA\com.vibeprompter.app   (SQLite DB, logs, window state)
+;   $LOCALAPPDATA\com.vibeprompter.app   (WebView2 cache, localStorage)
+;
+; Adding a second MessageBox here with its own RMDir calls created a
+; dual-prompt conflict: the hook's "No" only suppressed the hook's own
+; deletions, but the checkbox-based path still ran afterward — so data was
+; removed even when the user explicitly declined in the secondary dialog.
+;
+; This hook is now limited to the one thing the built-in mechanism cannot
+; reach: Windows Credential Manager entries written by the keyring crate.
+; We mirror the checkbox decision so the keyring is wiped if and only if
+; the user opted in on the confirmation page.
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Also remove your VibePrompter data?$\r$\n$\r$\n\
-This deletes:$\r$\n\
-  - All saved provider connections, modes, settings, and history$\r$\n\
-  - Local logs and the WebView cache$\r$\n\
-  - API keys stored in Windows Credential Manager$\r$\n$\r$\n\
-Choose No to keep your data for a future reinstall." \
-    IDNO skip_user_data_wipe
+  ; $DeleteAppDataCheckboxState is set by the built-in un.ConfirmLeave
+  ; function before this macro is reached: 1 = user opted in, 0 = keep.
+  ; Skip keyring cleanup entirely when the user chose to keep their data.
+  StrCmp $DeleteAppDataCheckboxState 1 0 skip_keyring_cleanup
 
-  ; Roaming app data — SQLite DB, .bak, logs, window-state.json.
-  RMDir /r "$APPDATA\com.vibeprompter.app"
-
-  ; Local app data — WebView2 cache, localStorage, cookies.
-  RMDir /r "$LOCALAPPDATA\com.vibeprompter.app"
-
-  ; Credential Manager entries created by the keyring crate. The key name
-  ; matches the `service` used in `src-tauri/src/security/keyring.rs` —
-  ; cmdkey accepts wildcards on the target, but to stay defensive we
-  ; iterate the known prefix. Errors are swallowed (entries may not exist).
+  ; Remove Credential Manager entries written by the keyring crate.
+  ; The target name matches the SERVICE constant in security/mod.rs.
+  ; Exit codes are ignored — entries may not exist on every machine.
   nsExec::Exec 'cmdkey /delete:vibeprompter'
   Pop $0
-  ; nsExec returns the exit code in $0; ignore it — best-effort cleanup.
 
-  ; Some keyring backends namespace entries as `<service>:<account>`;
-  ; cmdkey doesn't support wildcards, so list + parse + delete by line.
-  ; Suppress all output so the uninstaller stays quiet.
+  ; Some keyring backends namespace entries as `<service>:<account>`.
+  ; cmdkey has no wildcard support, so enumerate the list and delete
+  ; each matching line individually. Output is suppressed.
   nsExec::ExecToStack 'cmd /c "for /f \"tokens=2 delims= \" %A in (^'cmdkey /list ^| findstr /i vibeprompter^') do cmdkey /delete:%A"'
   Pop $0
   Pop $1
 
-  MessageBox MB_OK|MB_ICONINFORMATION "VibePrompter data removed."
-
-  skip_user_data_wipe:
+  skip_keyring_cleanup:
 !macroend

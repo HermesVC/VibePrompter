@@ -410,14 +410,29 @@ export function RefineOverlay() {
           <div
             style={{
               flex: 1,
-              overflow: 'auto',
-              padding: '12px 14px',
-              fontSize: 13,
-              lineHeight: 1.5,
-              color: 'var(--danger)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              padding: '20px 18px',
+              textAlign: 'center',
             }}
           >
-            {error}
+            <I.info
+              size={20}
+              style={{ color: 'var(--danger)', opacity: 0.85, flexShrink: 0 }}
+            />
+            <span
+              style={{
+                fontSize: 12.5,
+                color: 'var(--fg)',
+                lineHeight: 1.55,
+                maxWidth: 320,
+              }}
+            >
+              {error}
+            </span>
           </div>
         ) : isSummarize ? (
           <div
@@ -542,7 +557,23 @@ export function RefineOverlay() {
             Cancel
           </button>
           <span style={{ flex: 1 }} />
-          {isSummarize ? (
+          {error ? (
+            // Error state: always show Retry regardless of kind so every
+            // overlay (Rewrite, Grammar, Summarize) can recover without
+            // dismissing and re-triggering the hotkey.
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                retry();
+              }}
+              title="Try again (Ctrl+R)"
+              style={btnStyle('primary')}
+            >
+              <I.refresh size={12} />
+              Try again
+            </button>
+          ) : isSummarize ? (
             <button
               type="button"
               onPointerDown={(e) => {

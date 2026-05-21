@@ -41,7 +41,9 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("provider error: {0}")]
     Provider(String),
-    #[allow(dead_code)]
+    /// Connectivity failure (DNS, connection refused, timeout). The inner
+    /// string is an internal detail logged by tracing; `safe_message()` returns
+    /// a user-facing string that never leaks URLs or driver output.
     #[error("network error: {0}")]
     Network(String),
     #[allow(dead_code)]
@@ -91,7 +93,9 @@ impl AppError {
             AppError::NotFound { entity, .. } => format!("The requested {entity} was not found."),
             AppError::Validation(msg) => msg.clone(),
             AppError::Provider(_) => "The AI provider returned an error.".into(),
-            AppError::Network(_) => "A network request failed.".into(),
+            AppError::Network(_) => {
+                "Can't reach the AI provider. Check your internet connection and try again.".into()
+            }
             AppError::Clipboard(_) => "A clipboard operation failed.".into(),
             AppError::Shortcut(_) => "A shortcut operation failed.".into(),
             AppError::Permission(_) => "Permission was denied.".into(),

@@ -123,12 +123,12 @@ fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<Strin
     // can restore it after Accept/Reject.
     let _ = app.clipboard().write_text(String::new());
 
-    // Short settle so enigo's input arrives after the OS finishes processing
-    // the hotkey press. The bigger problem — modifiers still physically held
-    // — is handled by the modifier-release calls inside `synth_copy` plus the
-    // 250ms back-off + retry path below, so this initial pause stays small to
-    // keep the common-case latency snappy.
-    std::thread::sleep(Duration::from_millis(40));
+    // Wait long enough for the user to have physically released the hotkey
+    // keys (Ctrl+Alt+F → Ctrl and Alt may still be physically held at 40ms).
+    // Users typically hold hotkeys for 100–300ms; 150ms covers the common
+    // case without adding noticeable latency. The retry path below handles
+    // the rare case where a slow machine or long physical hold outlasts this.
+    std::thread::sleep(Duration::from_millis(150));
 
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| AppError::Config(format!("enigo init: {e}")))?;
@@ -142,7 +142,10 @@ fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<Strin
         let _ = e.key(Key::Shift, Direction::Release);
         let _ = e.key(Key::Meta, Direction::Release);
         let _ = e.key(Key::Control, Direction::Release);
-        std::thread::sleep(Duration::from_millis(40));
+        // Give the source app's message pump time to process the injected
+        // key-up events before we synthesize Ctrl+C. 40ms was too short on
+        // loaded systems; 100ms keeps the sequence reliable.
+        std::thread::sleep(Duration::from_millis(100));
         e.key(Key::Control, Direction::Press)
             .map_err(|err| AppError::Config(format!("ctrl press: {err}")))?;
         e.key(Key::Unicode('c'), Direction::Click)
@@ -255,9 +258,31 @@ fn position_near_cursor(app: &AppHandle) -> AppResult<()> {
 }
 
 pub async fn begin(app: AppHandle, kind: RefineKind) -> AppResult<()> {
+    // If the overlay is currently visible it has OS focus, which means the
+    // source app does not. Synthesizing Ctrl+C in that state sends the copy
+    // command to the overlay's own webview (no useful selection there) rather
+    // than the user's intended text. Hide the overlay first and let the user
+    // re-trigger once their source app regains focus.
+    if let Some(win) = app.get_webview_window("refine-overlay") {
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+            return Err(AppError::Validation(
+                "overlay dismissed — re-select text in your source app and press the hotkey again".into(),
+            ));
+        }
+    }
+
     let prior = app.clipboard().read_text().ok();
 
-    let selection = match capture_selection(&app, &prior) {
+    // Run the blocking capture (multiple thread::sleep calls + enigo I/O) on
+    // a dedicated blocking thread so the async runtime isn't starved.
+    let app2 = app.clone();
+    let prior2 = prior.clone();
+    let capture_result = tokio::task::spawn_blocking(move || capture_selection(&app2, &prior2))
+        .await
+        .map_err(|e| AppError::Config(format!("capture task panicked: {e}")))?;
+
+    let selection = match capture_result {
         Ok(s) => s,
         Err(e) => {
             if let Some(p) = prior {
@@ -321,7 +346,7 @@ pub async fn begin(app: AppHandle, kind: RefineKind) -> AppResult<()> {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_stream(app_for_stream.clone(), kind, mode_id, sel, seq).await {
             if is_current_stream(&app_for_stream, seq) {
-                let _ = app_for_stream.emit("refine:error", e.to_string());
+                let _ = app_for_stream.emit("refine:error", e.safe_message());
             }
         }
     });
@@ -578,7 +603,7 @@ pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
                 .await
         {
             if is_current_stream(&app_for_task, seq) {
-                let _ = app_for_task.emit("refine:error", e.to_string());
+                let _ = app_for_task.emit("refine:error", e.safe_message());
             }
         }
     });
@@ -785,7 +810,7 @@ pub async fn retry(app: AppHandle) -> AppResult<()> {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_stream(app2.clone(), kind, mode_id, selection, seq).await {
             if is_current_stream(&app2, seq) {
-                let _ = app2.emit("refine:error", e.to_string());
+                let _ = app2.emit("refine:error", e.safe_message());
             }
         }
     });

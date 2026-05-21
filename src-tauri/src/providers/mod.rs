@@ -318,15 +318,33 @@ where
     Err(last_err.unwrap_or_else(|| AppError::Validation("retry loop exhausted".into())))
 }
 
+/// Map a reqwest send-failure to the right `AppError` variant.
+///
+/// Connection-level failures (DNS, TCP refused, TLS handshake, read/write
+/// timeout) surface as `AppError::Network` so callers get a user-friendly
+/// "check your internet" message and `is_transient` can classify them with
+/// a variant check instead of string-matching. Everything else (proxy
+/// config, invalid URL, etc.) stays as `AppError::Config`.
+fn classify_send_error(url: &str, e: reqwest::Error) -> AppError {
+    let detail = format!("request to {url}: {e}");
+    if e.is_connect() || e.is_timeout() {
+        AppError::Network(detail)
+    } else {
+        AppError::Config(detail)
+    }
+}
+
 fn is_transient(e: &AppError) -> bool {
+    // Network-class errors (DNS, connect refused, timeout) are always retriable.
+    if matches!(e, AppError::Network(_)) {
+        return true;
+    }
     let msg = e.to_string();
     let lower = msg.to_ascii_lowercase();
-    // Network-class errors are always retriable.
-    if lower.contains("request to ")
-        || lower.contains("timed out")
+    // Catch any remaining string-level network signals not covered by the
+    // AppError::Network variant check above (edge cases from other callers).
+    if lower.contains("timed out")
         || lower.contains("timeout")
-        || lower.contains("connection")
-        || lower.contains("dns")
         || lower.contains("reset by peer")
         || lower.contains("broken pipe")
     {
@@ -483,7 +501,7 @@ where
             let resp = req
                 .send()
                 .await
-                .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
+                .map_err(|e| classify_send_error(&url, e))?;
             if !resp.status().is_success() {
                 let status = resp.status();
                 let raw = resp.text().await.unwrap_or_default();
@@ -680,7 +698,7 @@ async fn openai_chat(
     let resp = apply_extra_headers(req, conn)
         .send()
         .await
-        .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
+        .map_err(|e| classify_send_error(&url, e))?;
 
     let status = resp.status();
     let raw = resp
@@ -730,7 +748,7 @@ async fn openai_list_models(conn: &ConnectionRow, cfg: &HttpConfig) -> AppResult
     let resp = apply_extra_headers(req, conn)
         .send()
         .await
-        .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
+        .map_err(|e| classify_send_error(&url, e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -815,7 +833,7 @@ async fn anthropic_chat(
     let resp = apply_extra_headers(req, conn)
         .send()
         .await
-        .map_err(|e| AppError::Config(format!("request to {url}: {e}")))?;
+        .map_err(|e| classify_send_error(&url, e))?;
 
     let status = resp.status();
     let raw = resp
