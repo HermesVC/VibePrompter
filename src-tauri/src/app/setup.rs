@@ -43,6 +43,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     let history = HistoryService::with_events(HistoryRepo::new(pool.clone()), events.clone());
     let shortcuts = ShortcutService::new(ShortcutRepo::new(pool.clone()), events.clone());
     let catalog = CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
+    let keyring_available = crate::security::KeyringStore::new().is_available();
     let secrets: std::sync::Arc<dyn crate::security::SecretStore> =
         crate::security::init().into();
     // Concurrent outbound-LLM-call cap. Used to be user-tunable but the
@@ -139,6 +140,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         connections,
         prompts,
         analytics: analytics.clone(),
+        keyring_available,
     });
     // Audit-trail event: app finished initializing. Single event_type per
     // session-start lets us compute uptime/restart cadence from the table.

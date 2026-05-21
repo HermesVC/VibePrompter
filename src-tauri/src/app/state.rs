@@ -18,4 +18,7 @@ pub struct AppState {
     pub connections: ConnectionService,
     pub prompts: PromptService,
     pub analytics: AnalyticsService,
+    /// Captured once at startup — avoids re-probing Credential Manager on
+    /// every health check, which is slow and produces spurious failures.
+    pub keyring_available: bool,
 }

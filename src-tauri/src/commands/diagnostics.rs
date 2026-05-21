@@ -35,7 +35,7 @@ pub async fn get_diagnostics(
         log_dir: state.config.log_dir.clone(),
         // Probe the keyring fresh on every call — backend may recover
         // between launches (e.g. Linux D-Bus session came back).
-        secret_backend: if crate::security::KeyringStore::new().is_available() {
+        secret_backend: if state.keyring_available {
             "OS keyring"
         } else {
             "volatile in-memory (keyring unavailable)"
@@ -105,7 +105,7 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
     }
 
     // 2) Keyring backend available? (Critical for any saved key.)
-    if !crate::security::KeyringStore::new().is_available() {
+    if !state.keyring_available {
         issues.push(HealthIssue {
             severity: "warn",
             code: "keyring_unavailable",

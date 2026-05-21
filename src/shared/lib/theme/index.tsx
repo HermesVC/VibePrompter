@@ -55,9 +55,19 @@ export function ThemeProvider({
     return localStorage.getItem(accentStorageKey) || defaultAccent;
   });
 
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
-    theme === 'system' ? getSystemTheme() : theme,
-  );
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() => {
+    const resolved = theme === 'system' ? getSystemTheme() : theme;
+    // Apply synchronously so the very first paint uses the correct theme —
+    // avoids the flash of dark/wrong-theme before the useEffect fires.
+    if (typeof window !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', resolved);
+      document.documentElement.setAttribute(
+        'data-accent',
+        localStorage.getItem(accentStorageKey) || defaultAccent,
+      );
+    }
+    return resolved;
+  });
 
   // Sync `data-theme` attribute and resolved theme with current selection / system.
   useEffect(() => {

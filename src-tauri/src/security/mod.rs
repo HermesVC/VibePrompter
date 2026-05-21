@@ -34,9 +34,13 @@ impl KeyringStore {
     pub fn is_available(&self) -> bool {
         let entry = match keyring::Entry::new(SERVICE, "__healthcheck") {
             Ok(e) => e,
-            Err(_) => return false,
+            Err(e) => {
+                tracing::warn!("keyring probe: Entry::new failed: {e}");
+                return false;
+            }
         };
-        if entry.set_password("ok").is_err() {
+        if let Err(e) = entry.set_password("ok") {
+            tracing::warn!("keyring probe: set_password failed: {e}");
             return false;
         }
         let ok = entry.get_password().ok().as_deref() == Some("ok");
