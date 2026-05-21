@@ -1,10 +1,10 @@
 [package]
-name = "VibePromter"
+name = "vibeprompter"
 version = "0.1.1"
-description = "A Tauri App"
+description = "VibePrompter — a desktop app for refining and rewriting prompts with AI providers."
 authors = ["Akash Jaiswal"]
-license = ""
-repository = ""
+license = "GPL-3.0-only"
+repository = "https://github.com/SkyThonk/VibePrompter"
 edition = "2021"
 rust-version = "1.77.2"
 

@@ -183,9 +183,10 @@ impl ConnectionService {
             price_output_per_m: input.price_output_per_m,
         };
 
-        self.repo.upsert(&row).await?;
         if row.is_default {
-            self.repo.clear_other_defaults(&row.id).await?;
+            self.repo.upsert_as_default(&row).await?;
+        } else {
+            self.repo.upsert(&row).await?;
         }
 
         // Build the response: redacted, with `hasKey` reflecting keyring state.
@@ -335,8 +336,7 @@ impl ConnectionService {
         // Confirm the row exists before flipping any flags.
         let mut row = self.repo.get(id).await?;
         row.is_default = true;
-        self.repo.upsert(&row).await?;
-        self.repo.clear_other_defaults(id).await?;
+        self.repo.upsert_as_default(&row).await?;
         Ok(())
     }
 

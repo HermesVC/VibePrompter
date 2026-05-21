@@ -3,4 +3,3 @@
 
 // Home feature
 export { HomePage } from './home';
-export type { HomeStats, ActivityItem } from './home';

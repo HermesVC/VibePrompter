@@ -500,7 +500,7 @@ async fn run_stream(
         RefineKind::Rewrite => (mode.name.clone(), mode.icon_name.clone()),
         other => (other.label().to_string(), other.icon().to_string()),
     };
-    let _ = state
+    if let Err(e) = state
         .history
         .record(crate::models::NewHistoryItem {
             mode_name: history_mode_name,
@@ -513,7 +513,10 @@ async fn run_stream(
             output_tokens: result.usage.output_tokens as i64,
             cost_micros,
         })
-        .await;
+        .await
+    {
+        tracing::warn!("failed to record refine history: {e}");
+    }
 
     if is_current_stream(&app, seq) {
         // Cache the latest result on the session so `followup` can build a

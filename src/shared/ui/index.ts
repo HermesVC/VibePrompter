@@ -4,7 +4,7 @@ export { Input, type InputProps } from './Input';
 export { Card, CardHeader, CardTitle, CardContent, CardFooter } from './Card';
 export { LoadingSpinner } from './LoadingSpinner';
 
-// PromptHelper design system primitives
+// VibePrompter design system primitives
 export { I, Spinner, ProviderGlyphs, type IconName } from './Icon';
 export { Kbd } from './Kbd';
 export { Pill } from './Pill';

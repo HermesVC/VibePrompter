@@ -203,7 +203,7 @@ pub async fn run_with_row(
         row.price_input_per_m,
         row.price_output_per_m,
     );
-    let _ = history
+    if let Err(e) = history
         .record(NewHistoryItem {
             mode_name: mode.name,
             icon_name: mode.icon_name,
@@ -215,6 +215,9 @@ pub async fn run_with_row(
             output_tokens: result.usage.output_tokens as i64,
             cost_micros,
         })
-        .await;
+        .await
+    {
+        tracing::warn!("failed to record prompt history: {e}");
+    }
     Ok(result)
 }

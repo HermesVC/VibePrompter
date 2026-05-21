@@ -1,9 +1,10 @@
 //! Persistence for user-owned provider connections.
 //!
-//! Keys are stored in plaintext — same security model as Cursor, Raycast, and
-//! every other local AI desktop app. A future iteration could move them to
-//! the OS keyring (Windows Credential Manager) without changing this layer's
-//! shape.
+//! API keys are NOT stored here. They live in the OS keyring (see
+//! `crate::security` / `services::connection_service`); the `api_key` column on
+//! these rows is legacy and kept blank — it exists only so the one-shot startup
+//! migration (`migrate_keys_to_keyring`) can read and clear any pre-keyring
+//! plaintext values. This layer persists connection metadata only.
 
 use sqlx::SqlitePool;
 
@@ -107,38 +108,22 @@ impl ConnectionRepo {
     }
 
     pub async fn upsert(&self, row: &ConnectionRow) -> AppResult<()> {
-        // Upsert intentionally does NOT touch `last_used_at` — that's the
-        // job of `touch_last_used()` after a successful completion. Editing
-        // a connection's label shouldn't reset its recency.
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO provider_connections
-               (id, label, kind, base_url, api_key, default_model, is_default,
-                extra_headers, notes, tags, price_input_per_m, price_output_per_m,
-                created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
-             ON CONFLICT(id) DO UPDATE SET
-               label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
-               default_model = ?6, is_default = ?7, extra_headers = ?8,
-               notes = ?9, tags = ?10,
-               price_input_per_m = ?11, price_output_per_m = ?12,
-               updated_at = ?13",
-        )
-        .bind(&row.id)
-        .bind(&row.label)
-        .bind(&row.kind)
-        .bind(&row.base_url)
-        .bind(&row.api_key)
-        .bind(&row.default_model)
-        .bind(row.is_default)
-        .bind(&row.extra_headers)
-        .bind(&row.notes)
-        .bind(&row.tags)
-        .bind(row.price_input_per_m)
-        .bind(row.price_output_per_m)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
+        upsert_row(&self.pool, row).await
+    }
+
+    /// Upsert a row AND clear `is_default` on every other row in a single
+    /// transaction, preserving the single-default invariant even if the
+    /// process crashes mid-flip (which would otherwise leave zero or two
+    /// defaults). Use this instead of a bare `upsert` whenever
+    /// `row.is_default` is true.
+    pub async fn upsert_as_default(&self, row: &ConnectionRow) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
+        upsert_row(&mut *tx, row).await?;
+        sqlx::query("UPDATE provider_connections SET is_default = 0 WHERE id != ?1")
+            .bind(&row.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -157,17 +142,6 @@ impl ConnectionRepo {
     pub async fn delete(&self, id: &str) -> AppResult<()> {
         sqlx::query("DELETE FROM provider_connections WHERE id = ?1")
             .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    /// Atomically clear `is_default` on every row except `winner_id`. Called
-    /// after an upsert that sets `is_default = true` so we maintain the
-    /// single-default invariant.
-    pub async fn clear_other_defaults(&self, winner_id: &str) -> AppResult<()> {
-        sqlx::query("UPDATE provider_connections SET is_default = 0 WHERE id != ?1")
-            .bind(winner_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -199,4 +173,46 @@ impl ConnectionRepo {
             }
         }))
     }
+}
+
+/// Shared upsert body, generic over a pool or transaction executor so the
+/// same SQL backs both `upsert` and the transactional `upsert_as_default`.
+///
+/// Intentionally does NOT touch `last_used_at` — that's the job of
+/// `touch_last_used()` after a successful completion. Editing a connection's
+/// label shouldn't reset its recency.
+async fn upsert_row<'e, E>(executor: E, row: &ConnectionRow) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO provider_connections
+           (id, label, kind, base_url, api_key, default_model, is_default,
+            extra_headers, notes, tags, price_input_per_m, price_output_per_m,
+            created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+         ON CONFLICT(id) DO UPDATE SET
+           label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
+           default_model = ?6, is_default = ?7, extra_headers = ?8,
+           notes = ?9, tags = ?10,
+           price_input_per_m = ?11, price_output_per_m = ?12,
+           updated_at = ?13",
+    )
+    .bind(&row.id)
+    .bind(&row.label)
+    .bind(&row.kind)
+    .bind(&row.base_url)
+    .bind(&row.api_key)
+    .bind(&row.default_model)
+    .bind(row.is_default)
+    .bind(&row.extra_headers)
+    .bind(&row.notes)
+    .bind(&row.tags)
+    .bind(row.price_input_per_m)
+    .bind(row.price_output_per_m)
+    .bind(now)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
