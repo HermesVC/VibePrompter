@@ -78,3 +78,6 @@ Desktop.ini
 TAURI_SIGNING_PRIVATE_KEY*
 .tauri-signing/
 .claude/settings.local.json
+
+# Windows SDK packages and generated files
+.winapp
