@@ -41,7 +41,22 @@ pub fn show_mode_hud_internal(app: AppHandle, args: ModeHudArgs) -> AppResult<()
             .try_state::<crate::app::state::AppState>()
             .and_then(|state| {
                 let svc = state.settings.clone();
-                tauri::async_runtime::block_on(svc.get()).ok()
+                // tauri::async_runtime::block_on panics when called from within
+                // a tokio async task ("Cannot start a runtime from within a
+                // runtime"). This function is called from both sync contexts
+                // (tray menu handler on the main thread) and async ones
+                // (the WH_KEYBOARD_LL hook receiver task). Use block_in_place
+                // when we're inside the runtime so the current thread parks
+                // safely while the settings future runs; fall back to direct
+                // block_on when on a plain OS thread (no runtime context).
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(svc.get())
+                    })
+                    .ok()
+                } else {
+                    tauri::async_runtime::block_on(svc.get()).ok()
+                }
             })
             .map(|s| s.notifications)
             .unwrap_or(true);

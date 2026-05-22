@@ -9,9 +9,20 @@
 //! Injected keystrokes from enigo (Ctrl+C / Ctrl+V synthesis) are skipped via
 //! the LLKHF_INJECTED flag so we never swallow our own synthetic events.
 //!
-//! The hook is installed exactly once on the Tauri main thread (which owns the
-//! Windows message pump). Subsequent calls to `install` only update the combo
-//! list — they do not re-register the hook.
+//! The hook runs on a DEDICATED background thread ("vp-hook") that owns its
+//! own Windows message loop. This is important for two reasons:
+//!   1. SetWindowsHookExW must be called from a thread that has a message pump
+//!      — the hook proc is invoked by posting to that thread's queue. The Tauri
+//!      main thread works but is too busy (WebView repaints, SQLite, async work)
+//!      and risks hitting LowLevelHooksTimeout (300 ms) under load, causing
+//!      Windows to silently skip hook events.
+//!   2. A dedicated thread whose only job is `GetMessage → dispatch` keeps
+//!      latency well below the timeout regardless of what the rest of the app
+//!      is doing.
+//!
+//! Subsequent calls to `install` (e.g. after the user edits a shortcut in
+//! Settings) only update the combo list — the hook thread and message loop stay
+//! mounted for the lifetime of the process.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -22,8 +33,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExW, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WH_KEYBOARD_LL,
-    WM_KEYDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
+    WM_SYSKEYDOWN,
 };
 
 struct HookEntry {
@@ -54,27 +66,66 @@ pub fn install(app: &tauri::AppHandle, shortcut_list: Vec<(String, String)>) {
         return;
     }
 
-    // Channel receiver runs on the async runtime; the hook proc sends and
-    // immediately returns, keeping the message pump unblocked.
+    // Channel: the hook proc sends actions here; the async receiver dispatches
+    // them on the tokio runtime without blocking the hook thread.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let _ = ACTION_TX.set(tx);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
+        tracing::info!("priority_hook: action receiver started");
         while let Some(action) = rx.recv().await {
+            tracing::debug!("priority_hook: dispatching '{action}'");
             crate::shortcuts::dispatch_action(&app_clone, &action);
         }
+        // The channel sender lives in ACTION_TX (never dropped) so this line
+        // is unreachable in normal operation. If it fires, all WH_KEYBOARD_LL
+        // shortcuts are silently dead — log it loudly so it's obvious in triage.
+        tracing::error!(
+            "priority_hook: action receiver exited — WH_KEYBOARD_LL shortcuts broken until restart"
+        );
     });
 
-    // SetWindowsHookExW must be called from a thread that has a message pump.
-    // Tauri's main thread runs the wry/tao event loop — perfect.
-    let _ = app.run_on_main_thread(|| unsafe {
-        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
-        if hook.is_null() {
-            tracing::warn!("priority_hook: SetWindowsHookExW failed — hotkey priority not active");
-        } else {
-            tracing::info!("priority_hook: WH_KEYBOARD_LL installed, VibePrompter hotkeys take priority");
-        }
-    });
+    // Spawn a dedicated thread that owns the WH_KEYBOARD_LL hook and its
+    // message loop. Using run_on_main_thread here would race with block_on
+    // (setup blocks the main thread), and even when it succeeds the busy Tauri
+    // event loop risks hitting LowLevelHooksTimeout (300 ms) under load.
+    // A lean dedicated thread eliminates both failure modes.
+    std::thread::Builder::new()
+        .name("vp-hook".into())
+        .spawn(|| unsafe {
+            let hook =
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
+            if hook.is_null() {
+                tracing::warn!(
+                    "priority_hook: SetWindowsHookExW failed — hotkey priority not active"
+                );
+                return;
+            }
+            tracing::info!(
+                "priority_hook: WH_KEYBOARD_LL installed on dedicated hook thread, \
+                 VibePrompter hotkeys take priority"
+            );
+
+            // Lean message loop — just enough to receive hook callbacks and
+            // keep the queue drained. Never blocks long enough to hit the
+            // LowLevelHooksTimeout. Exits only when the process terminates.
+            let mut msg: MSG = std::mem::zeroed();
+            loop {
+                let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+                if r == 0 {
+                    break; // WM_QUIT
+                }
+                if r == -1 {
+                    tracing::warn!("priority_hook: GetMessage returned -1, hook thread exiting");
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            UnhookWindowsHookEx(hook);
+        })
+        .expect("hook thread spawn failed");
 }
 
 fn set_entries(shortcut_list: Vec<(String, String)>) {
@@ -89,6 +140,7 @@ fn set_entries(shortcut_list: Vec<(String, String)>) {
             None => tracing::warn!("priority_hook: cannot parse accelerator '{accel}'"),
         }
     }
+    tracing::debug!("priority_hook: {} combo(s) loaded into hook table", entries.len());
 }
 
 unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {

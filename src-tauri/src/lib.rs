@@ -28,10 +28,15 @@ use config::Config;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Logging is initialized as early as possible. The bootstrap config is
-    // resolved from a temp dir only to obtain a log directory before Tauri's
-    // path API is available; `app::setup` later resolves the real app-data
-    // config used by the rest of the backend.
+    // Logging is initialized as early as possible, before Tauri's path API is
+    // available. On Windows we can derive the real app-data dir from %APPDATA%
+    // + the bundle identifier, so logs end up where users and `get_recent_logs`
+    // expect them. On other platforms we fall back to a known temp location.
+    #[cfg(target_os = "windows")]
+    let bootstrap_dir = std::env::var_os("APPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("com.vibeprompter.app"))
+        .unwrap_or_else(|| std::env::temp_dir().join("vibeprompter-bootstrap"));
+    #[cfg(not(target_os = "windows"))]
     let bootstrap_dir = std::env::temp_dir().join("vibeprompter-bootstrap");
     let _log_guard = Config::from_app_data_dir(&bootstrap_dir)
         .map(|cfg| app::logging::init(&cfg))

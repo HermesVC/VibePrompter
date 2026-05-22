@@ -89,10 +89,13 @@ pub async fn init(app: &AppHandle) -> AppResult<()> {
 /// Unknown actions are logged at debug level and do nothing — they exist as
 /// seeded rows for sub-project 2 to implement.
 pub(crate) fn dispatch_action(app: &AppHandle, action: &str) {
+    tracing::debug!("shortcut: dispatch '{action}'");
     match action {
         "mode_switch" => {
             if let Err(e) = crate::tray::cycle_mode(app) {
                 tracing::warn!("mode_switch dispatch failed: {e}");
+            } else {
+                tracing::debug!("mode_switch: cycle ok");
             }
         }
         "open_palette" => crate::tray::toggle_main_window(app),
