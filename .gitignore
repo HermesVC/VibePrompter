@@ -81,3 +81,8 @@ TAURI_SIGNING_PRIVATE_KEY*
 
 # Windows SDK packages and generated files
 .winapp
+/msix-output
+/msix-staging
+build-msix.ps1
+/.claude
+VibePrompter-sign.pfx
