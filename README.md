@@ -11,10 +11,12 @@ VibePrompter sits in your system tray and watches for global hotkeys. When you t
 ## Download
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows_Store-Upcoming-blue?logo=windows&logoColor=white&style=for-the-badge" alt="Windows Store - Upcoming" />
+  <a href="https://apps.microsoft.com/detail/9NHQ0BSD5730?hl=en-us&gl=US&ocid=pdpshare">
+    <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from Microsoft" height="52" />
+  </a>
 </p>
 
-> Microsoft Store release coming soon. In the meantime, you can [build from source](#building-from-source).
+> Available now on the Microsoft Store. You can also [build from source](#building-from-source).
 
 ---
 
