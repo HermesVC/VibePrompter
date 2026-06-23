@@ -23,7 +23,7 @@ import {
   MAX_CHAT_IMAGES,
   type ChatImageAttachment,
 } from '@shared/lib/chatAttachments';
-import { writeClipboardText, isApplyableScopedEdit } from '@shared/lib/clipboard';
+import { writeClipboardText, isApplyableScopedEdit, extractScopedCodeForApply } from '@shared/lib/clipboard';
 import { errorMessage } from '@shared/lib/utils';
 import {
   buildChatContextPayload,
@@ -276,7 +276,7 @@ export function ChatWindow() {
 
   const promptApplyScoped = useCallback(async (assistantText: string, scopedText?: string) => {
     const scope = chatContextRef.current.scope;
-    const content = (scopedText ?? assistantText).trim();
+    const content = extractScopedCodeForApply((scopedText ?? assistantText).trim());
     if (!content) return;
 
     if (scope.kind === 'snippet') {
@@ -1111,7 +1111,7 @@ function MessageBubble({
   onApply?: () => void;
 }) {
   const isUser = m.role === 'user';
-  const applyCandidate = (m.scopedText ?? m.content).trim();
+  const applyCandidate = extractScopedCodeForApply((m.scopedText ?? m.content).trim());
   const showApply =
     onApply &&
     (scopeKind === 'snippet' || scopeKind === 'file') &&

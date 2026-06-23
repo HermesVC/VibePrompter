@@ -176,11 +176,8 @@ pub async fn chat_complete_stream(
                     .map(|m| crate::workspace::user_requests_code_edit(&m.content))
                     .unwrap_or(false);
                 r.scoped_text = match &ctx.scope {
-                    ChatScope::Snippet { .. } if user_edit_intent => {
+                    ChatScope::Snippet { .. } | ChatScope::File { .. } if user_edit_intent => {
                         Some(state.workspace.extract_snippet(&r.text))
-                    }
-                    ChatScope::File { .. } if user_edit_intent => {
-                        Some(r.text.trim().to_string())
                     }
                     _ => None,
                 };

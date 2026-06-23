@@ -36,6 +36,19 @@ export async function captureEditorSelection(): Promise<string> {
 const CODE_SIGNAL =
   /[{}();=<>[\]]|function\s|class\s|def\s|public\s|private\s|const\s|let\s|var\s|import\s|#include|->|::/;
 
+/** Strip model prose; keep fenced code for Apply (mirrors backend extract_scoped_code_output). */
+export function extractScopedCodeForApply(text: string): string {
+  const tag = text.match(/<(?:snippet|file)>([\s\S]*?)<\/(?:snippet|file)>/i);
+  if (tag?.[1]) return tag[1].trim();
+
+  const fences = [...text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)];
+  if (fences.length > 0) {
+    const best = fences.reduce((a, b) => (a[1].length >= b[1].length ? a : b));
+    return best[1].trimEnd();
+  }
+  return text.trim();
+}
+
 /** Whether an assistant reply is worth offering as a snippet/file apply target. */
 export function isApplyableScopedEdit(working: string, candidate: string): boolean {
   const before = working.trim();

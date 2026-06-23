@@ -228,24 +228,52 @@ fn scope_language(scope: &ChatScope) -> Option<String> {
     }
 }
 
-/// Strip model output to snippet body when in snippet scope.
-pub fn extract_snippet_output(text: &str) -> String {
+/// Strip model chatter and return applyable code (snippet or file region).
+pub fn extract_scoped_code_output(text: &str) -> String {
     if let Some(inner) = extract_tag(text, "snippet") {
         return inner;
     }
-    let trimmed = text.trim();
-    if trimmed.starts_with("```") {
-        if let Some(_end) = trimmed.rfind("```") {
-            let inner = trimmed
-                .trim_start_matches('`')
-                .trim_start_matches(|c: char| c.is_alphanumeric() || c == '\n')
-                .trim();
-            if let Some(stripped) = inner.strip_suffix("```") {
-                return stripped.trim().to_string();
-            }
-        }
+    if let Some(inner) = extract_tag(text, "file") {
+        return inner;
     }
-    trimmed.to_string()
+    if let Some(block) = extract_fenced_code_block(text) {
+        return block;
+    }
+    text.trim().to_string()
+}
+
+/// Strip model output to snippet body when in snippet scope.
+pub fn extract_snippet_output(text: &str) -> String {
+    extract_scoped_code_output(text)
+}
+
+/// Longest ``` fenced block in the text (models often prepend prose).
+fn extract_fenced_code_block(text: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    let mut pos = 0;
+    while let Some(rel) = text[pos..].find("```") {
+        let open = pos + rel + 3;
+        let rest = &text[open..];
+        let body_start = match rest.find('\n') {
+            Some(nl) => open + nl + 1,
+            None => {
+                pos = open;
+                continue;
+            }
+        };
+        let tail = &text[body_start..];
+        let Some(close_rel) = tail.find("```") else {
+            break;
+        };
+        let body = tail[..close_rel].trim_end();
+        if !body.is_empty()
+            && body.len() > best.as_ref().map(|s| s.len()).unwrap_or(0)
+        {
+            best = Some(body.to_string());
+        }
+        pos = body_start + close_rel + 3;
+    }
+    best
 }
 
 fn extract_tag(text: &str, tag: &str) -> Option<String> {
@@ -265,6 +293,13 @@ mod tests {
     fn extracts_snippet_tag() {
         let out = extract_snippet_output("hello <snippet>code();\n</snippet> bye");
         assert_eq!(out, "code();");
+    }
+
+    #[test]
+    fn strips_prose_before_fenced_code() {
+        let input = "Для рефакторирования можно улучшить структуру:\n\n```php\n<?php\necho 1;\n```\n";
+        let out = extract_scoped_code_output(input);
+        assert_eq!(out, "<?php\necho 1;");
     }
 
     #[test]
