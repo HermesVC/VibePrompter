@@ -214,6 +214,8 @@ pub async fn chat_complete_stream(
             system_prompt.as_deref(),
             &memory,
         );
+        let effective_max_tokens =
+            effective_chat_max_tokens(max_tokens, input_estimate, context_limit);
 
         let mut request_system = system_prompt.clone();
         if let Some(sys) = request_system.as_mut() {
@@ -227,7 +229,7 @@ pub async fn chat_complete_stream(
         let params = CompletionParams {
             model: None,
             temperature: Some(temperature),
-            max_tokens: Some(max_tokens as u32),
+            max_tokens: Some(effective_max_tokens),
             system: request_system.filter(|s| !s.trim().is_empty()),
         };
 
@@ -235,7 +237,8 @@ pub async fn chat_complete_stream(
         let tokens_for_stream = token_event.clone();
         let cancel_for_stream = cancel_check.clone();
         let gen_for_stream = stream_generation;
-        let stream_out = crate::providers::complete_stream(
+        let max_out_for_post = effective_max_tokens;
+        let mut stream_out = crate::providers::complete_stream(
             &row,
             api_messages,
             params,
@@ -252,6 +255,10 @@ pub async fn chat_complete_stream(
             move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
         )
         .await;
+
+        if let Ok(ref mut r) = stream_out {
+            apply_output_truncation(r, max_out_for_post);
+        }
 
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
             result = Err(AppError::Validation("cancelled".into()));
@@ -589,4 +596,35 @@ fn estimate_chat_input_tokens(
         sys_chars += s.chars().count();
     }
     msg_tokens + ((sys_chars + 3) / 4) as u32
+}
+
+/// Scale output budget from mode floor, input size, and remaining context window.
+fn effective_chat_max_tokens(mode_floor: i64, input_estimate: u32, context_limit: i64) -> u32 {
+    let ctx = context_limit.max(8192);
+    let input = i64::from(input_estimate);
+    let margin = 192;
+    let remaining = (ctx - input - margin).max(512);
+    let scaled = ((f64::from(input_estimate)) * 1.25).ceil() as i64;
+    let floor = mode_floor.max(512);
+    floor
+        .max(scaled)
+        .min(remaining)
+        .min(16_000)
+        .max(256) as u32
+}
+
+fn apply_output_truncation(result: &mut CompletionResult, max_output: u32) {
+    if result.output_truncated {
+        return;
+    }
+    if result.finish_reason.as_deref() == Some("length") {
+        result.output_truncated = true;
+        return;
+    }
+    if max_output == 0 || result.usage.output_tokens == 0 {
+        return;
+    }
+    if result.usage.output_tokens >= max_output.saturating_sub(64) {
+        result.output_truncated = true;
+    }
 }

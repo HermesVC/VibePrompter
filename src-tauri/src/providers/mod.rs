@@ -334,6 +334,8 @@ pub async fn complete(
         evicted_turns: None,
         context_recovered: false,
         stream_incomplete: false,
+        finish_reason: None,
+        output_truncated: false,
     })
 }
 
@@ -604,6 +606,7 @@ where
     let mut usage = TokenUsage::default();
     let mut saw_done = false;
     let mut stream_broken = false;
+    let mut finish_reason: Option<String> = None;
     let mut stream = resp.bytes_stream().eventsource();
     while let Some(event) = stream.next().await {
         if should_cancel() {
@@ -619,6 +622,8 @@ where
                 evicted_turns: None,
                 context_recovered: false,
                 stream_incomplete: false,
+                finish_reason: None,
+                output_truncated: false,
             });
         }
         let event = match event {
@@ -657,7 +662,8 @@ where
             .and_then(|c| c.get("finish_reason"))
             .and_then(|f| f.as_str())
         {
-            if fr == "stop" {
+            finish_reason = Some(fr.to_string());
+            if fr == "stop" || fr == "length" {
                 saw_done = true;
             }
         }
@@ -720,6 +726,7 @@ where
     log_raw_resp(cfg, 200, &text);
 
     let stream_incomplete = !stream_looks_complete(saw_done, stream_broken, &text, &usage);
+    let output_truncated = finish_reason.as_deref() == Some("length");
 
     Ok(CompletionResult {
         text,
@@ -733,6 +740,8 @@ where
         evicted_turns: None,
         context_recovered: false,
         stream_incomplete,
+        finish_reason,
+        output_truncated,
     })
 }
 

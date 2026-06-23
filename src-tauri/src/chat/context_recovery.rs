@@ -52,6 +52,9 @@ pub fn looks_like_context_failure(
     input_estimate: u32,
     context_limit: i64,
 ) -> bool {
+    if result.output_truncated {
+        return false;
+    }
     let limit = context_limit.max(8192) as f64;
     let estimate = input_estimate as f64;
 
@@ -112,6 +115,8 @@ mod tests {
             evicted_turns: None,
             context_recovered: false,
             stream_incomplete: incomplete,
+            finish_reason: None,
+            output_truncated: false,
         }
     }
 

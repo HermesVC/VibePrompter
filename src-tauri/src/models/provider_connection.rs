@@ -184,4 +184,10 @@ pub struct CompletionResult {
     /// Stream ended without a clean `[DONE]` / terminal chunk (used for recovery heuristics).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stream_incomplete: bool,
+    /// Vendor finish reason when reported (`stop`, `length`, …).
+    #[serde(rename = "finishReason", default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    /// Output hit `max_tokens` / `finish_reason: length` — not the same as context overflow.
+    #[serde(rename = "outputTruncated", default, skip_serializing_if = "std::ops::Not::not")]
+    pub output_truncated: bool,
 }

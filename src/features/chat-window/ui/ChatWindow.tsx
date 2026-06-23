@@ -78,6 +78,8 @@ interface DonePayload {
   memoryCompressed?: boolean;
   evictedTurns?: number;
   contextRecovered?: boolean;
+  outputTruncated?: boolean;
+  finishReason?: string;
 }
 
 interface StatusPayload {
@@ -359,9 +361,20 @@ export function ChatWindow() {
   );
 
   const applyContextNotice = useCallback(
-    (payload: Pick<DonePayload, 'memoryCompressed' | 'evictedTurns' | 'contextRecovered'>, contextLimit: number) => {
+    (
+      payload: Pick<
+        DonePayload,
+        'memoryCompressed' | 'evictedTurns' | 'contextRecovered' | 'outputTruncated'
+      >,
+      contextLimit: number
+    ) => {
       setIsRecoveringContext(false);
       const parts: string[] = [];
+      if (payload.outputTruncated) {
+        parts.push(
+          'Ответ обрезан лимитом вывода (max_tokens) — в окне контекста место ещё есть, но модель упёрлась в cap ответа'
+        );
+      }
       if (payload.contextRecovered) {
         parts.push('Контекст автоматически подстроен под лимит модели');
       }
@@ -373,11 +386,13 @@ export function ChatWindow() {
         return;
       }
       const limitHint =
-        contextLimit > 0 && !payload.contextRecovered
+        contextLimit > 0 && !payload.contextRecovered && !payload.outputTruncated
           ? ` (лимит ${formatContextLimit(contextLimit)})`
           : '';
       setContextTrimNotice(`${parts.join('. ')}${limitHint}. В чате история целиком.`);
-      setContextNoticeKind(payload.contextRecovered ? 'info' : 'warn');
+      setContextNoticeKind(
+        payload.outputTruncated ? 'warn' : payload.contextRecovered ? 'info' : 'warn'
+      );
     },
     []
   );
