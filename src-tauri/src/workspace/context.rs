@@ -1,7 +1,68 @@
 //! Compose layered system prompts from primary mode + scope + modifiers.
 
+use super::fs::content_hash;
 use super::language::{detect_language, hints_for};
 use super::types::{ChatContextPayload, ChatModifierInfo, ChatScope};
+
+/// Fill in derived fields when the frontend omits them.
+pub fn normalize_chat_context(ctx: &mut ChatContextPayload) {
+    if let ChatScope::File {
+        content,
+        content_hash: hash,
+        line_start,
+        line_end,
+        ..
+    } = &mut ctx.scope
+    {
+        if hash.is_empty() {
+            *hash = content_hash(content);
+        }
+        let lines = content.lines().count().max(1) as u32;
+        if *line_start == 0 {
+            *line_start = 1;
+        }
+        if *line_end == 0 {
+            *line_end = lines;
+        }
+        if *line_end < *line_start {
+            *line_end = (*line_start).max(lines);
+        }
+    }
+}
+
+/// Whether the user's message asks to change code (vs explain / discuss).
+pub fn user_requests_code_edit(user_text: &str) -> bool {
+    let t = user_text.to_lowercase();
+    const EDIT_MARKERS: &[&str] = &[
+        "fix ",
+        "fix\n",
+        "rewrite",
+        "refactor",
+        "improve ",
+        "optimiz",
+        "change ",
+        "update ",
+        "edit ",
+        "replace ",
+        "correct ",
+        "rename ",
+        "add ",
+        "remove ",
+        "implement ",
+        "patch ",
+        "исправ",
+        "перепиш",
+        "рефактор",
+        "измени",
+        "замени",
+        "добав",
+        "удали",
+        "оптимиз",
+        "поправ",
+        "отредактир",
+    ];
+    EDIT_MARKERS.iter().any(|m| t.contains(m))
+}
 
 pub fn list_modifiers() -> Vec<ChatModifierInfo> {
     vec![
@@ -84,12 +145,13 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
                 _ => String::new(),
             };
             parts.push(format!(
-                "You are editing a CODE SNIPPET scoped session.{loc} lang=\"{lang}\"\n\
+                "You have a CODE SNIPPET attached for reference in this session.{loc} lang=\"{lang}\"\n\
                  Rules:\n\
-                 - Change ONLY the snippet content. Do not add imports, new files, or unrelated code.\n\
-                 - Do not wrap the answer in markdown fences unless the snippet itself is markdown.\n\
-                 - Output ONLY the revised snippet text — no preamble or explanation.\n\
-                 - Stay within the same language and APIs present in the snippet.\n\n\
+                 - Questions (explain, what does this do, review, debug): answer in plain language. \
+                 Short code quotes are fine; do NOT dump a full rewritten snippet unless the user asked to change code.\n\
+                 - Code change requests (fix, rewrite, refactor, improve, add, remove): output ONLY the revised snippet — \
+                 no preamble, no markdown fences, no text outside the snippet.\n\
+                 - When editing, change only the snippet. No new files, imports, or unrelated code.\n\n\
                  <snippet>\n{working}\n</snippet>\n\n\
                  Original reference (do not expand beyond this scope):\n\
                  <snippet-original>\n{original}\n</snippet-original>"
@@ -109,10 +171,10 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| detect_language(Some(path), Some(content)));
             parts.push(format!(
-                "You are editing a single FILE scoped session.\n\
+                "You have a FILE attached for reference in this session.\n\
                  Rules:\n\
-                 - Work only on the provided file region unless the user explicitly asks for a full-file rewrite.\n\
-                 - When returning an updated file region, output ONLY the file body (no markdown fences).\n\
+                 - Questions about the file (what is it, explain, review): answer in plain language.\n\
+                 - Rewrite requests: output ONLY the updated file body for the scoped region unless a full-file rewrite is explicit.\n\
                  - Do not invent paths or modules not present in the workspace context.\n\n\
                  <file path=\"{path}\" lines=\"{line_start}-{line_end}\" lang=\"{lang}\">\n\
                  {content}\n\
@@ -196,11 +258,50 @@ fn extract_tag(text: &str, tag: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::workspace::types::{ChatContextPayload, ChatScope};
     use super::*;
 
     #[test]
     fn extracts_snippet_tag() {
         let out = extract_snippet_output("hello <snippet>code();\n</snippet> bye");
         assert_eq!(out, "code();");
+    }
+
+    #[test]
+    fn detects_edit_vs_explain_intent() {
+        assert!(!user_requests_code_edit("что за файл?"));
+        assert!(!user_requests_code_edit("объясни этот код"));
+        assert!(user_requests_code_edit("исправь ошибку в сниппете"));
+        assert!(user_requests_code_edit("please refactor this function"));
+    }
+
+    #[test]
+    fn normalizes_file_scope_missing_hash_and_lines() {
+        let mut ctx = ChatContextPayload {
+            scope: ChatScope::File {
+                path: "a.txt".into(),
+                content: "line1\nline2\n".into(),
+                content_hash: String::new(),
+                line_start: 0,
+                line_end: 0,
+                language_id: None,
+            },
+            modifiers: vec![],
+            language_id: None,
+        };
+        normalize_chat_context(&mut ctx);
+        if let ChatScope::File {
+            content_hash,
+            line_start,
+            line_end,
+            ..
+        } = ctx.scope
+        {
+            assert!(!content_hash.is_empty());
+            assert_eq!(line_start, 1);
+            assert_eq!(line_end, 2);
+        } else {
+            panic!("expected file scope");
+        }
     }
 }

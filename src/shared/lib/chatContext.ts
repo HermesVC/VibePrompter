@@ -65,8 +65,18 @@ export function buildChatContextPayload(ctx: ChatContextState): {
   modifiers: string[];
   languageId?: string;
 } {
+  let scope = ctx.scope;
+  if (scope.kind === 'file') {
+    const lines = Math.max(1, scope.content.split('\n').length);
+    scope = {
+      ...scope,
+      contentHash: scope.contentHash || '',
+      lineStart: scope.lineStart ?? 1,
+      lineEnd: scope.lineEnd ?? lines,
+    };
+  }
   return {
-    scope: ctx.scope,
+    scope,
     modifiers: ctx.modifiers,
     languageId: ctx.languageId,
   };
@@ -76,7 +86,7 @@ export function buildChatContextPayload(ctx: ChatContextState): {
 export function formatScopeUserContext(scope: ChatScope): string {
   switch (scope.kind) {
     case 'snippet':
-      return `[Attached snippet — edit only this code]\n\`\`\`\n${scope.working}\n\`\`\``;
+      return `[Attached snippet for reference]\n\`\`\`\n${scope.working}\n\`\`\``;
     case 'file':
       return `[Attached file: ${scope.path} (lines ${scope.lineStart}-${scope.lineEnd})]\n\`\`\`\n${scope.content}\n\`\`\``;
     case 'workspace':

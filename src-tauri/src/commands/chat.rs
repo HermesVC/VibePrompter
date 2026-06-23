@@ -32,6 +32,11 @@ pub async fn chat_complete_stream(
     connection_id: Option<String>,
     chat_context: Option<crate::workspace::ChatContextPayload>,
 ) -> Result<CompletionResult, AppError> {
+    let mut chat_context = chat_context;
+    if let Some(ctx) = chat_context.as_mut() {
+        crate::workspace::normalize_chat_context(ctx);
+    }
+
     if messages.is_empty() {
         return Err(AppError::Validation("messages is empty".into()));
     }
@@ -165,11 +170,18 @@ pub async fn chat_complete_stream(
             state.connections.enrich_completion_context(&row, &mut r).await;
             if let Some(ctx) = chat_context.as_ref() {
                 use crate::workspace::ChatScope;
+                let user_edit_intent = messages
+                    .last()
+                    .filter(|m| m.role == "user")
+                    .map(|m| crate::workspace::user_requests_code_edit(&m.content))
+                    .unwrap_or(false);
                 r.scoped_text = match &ctx.scope {
-                    ChatScope::Snippet { .. } => {
+                    ChatScope::Snippet { .. } if user_edit_intent => {
                         Some(state.workspace.extract_snippet(&r.text))
                     }
-                    ChatScope::File { .. } => Some(r.text.trim().to_string()),
+                    ChatScope::File { .. } if user_edit_intent => {
+                        Some(r.text.trim().to_string())
+                    }
                     _ => None,
                 };
             }
@@ -342,6 +354,12 @@ fn augment_messages_with_scope(messages: &mut Vec<ChatMessage>, ctx: &crate::wor
     if last.role != "user" {
         return;
     }
+    if last.content.contains("[Attached snippet")
+        || last.content.contains("[Attached file")
+        || last.content.contains("[Workspace tree]")
+    {
+        return;
+    }
     last.content = if last.content.trim().is_empty() {
         block
     } else {
@@ -354,7 +372,7 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
     match scope {
         ChatScope::None => String::new(),
         ChatScope::Snippet { working, .. } => {
-            format!("[Attached snippet — edit only this code]\n```\n{working}\n```")
+            format!("[Attached snippet for reference]\n```\n{working}\n```")
         }
         ChatScope::File {
             path,

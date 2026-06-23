@@ -76,9 +76,11 @@ pub enum ChatScope {
     File {
         path: String,
         content: String,
+        #[serde(default)]
         content_hash: String,
         #[serde(default = "one")]
         line_start: u32,
+        #[serde(default = "one")]
         line_end: u32,
         #[serde(default)]
         language_id: Option<String>,

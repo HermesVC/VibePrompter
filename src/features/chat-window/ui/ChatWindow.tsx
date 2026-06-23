@@ -114,14 +114,8 @@ export function ChatWindow() {
   const chatContextRef = useRef(chatContext);
   chatContextRef.current = chatContext;
 
-  useEffect(() => {
-    const kind = chatContext.scope.kind;
-    if (kind === 'snippet' && modes.some((m) => m.id === 'snippet-editor')) {
-      setModeId('snippet-editor');
-    } else if (kind === 'file' && modes.some((m) => m.id === 'file-assistant')) {
-      setModeId('file-assistant');
-    }
-  }, [chatContext.scope.kind, modes]);
+  // Scope tabs only attach context — they do not override the user's chosen chat mode.
+  // (snippet-editor / file-assistant modes force code-only output and break Q&A.)
 
   const voice = useVoiceInput({
     value: draft,
