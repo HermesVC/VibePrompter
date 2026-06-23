@@ -9,6 +9,12 @@ use crate::utils::AppError;
 
 const MAX_AUTO_CONTINUES: usize = 3;
 const CONTINUATION_TAIL_CHARS: usize = 6_000;
+const STITCH_OVERLAP_CHARS: usize = 2_000;
+
+struct AutoContinueOutput {
+    result: CompletionResult,
+    continuations: usize,
+}
 
 #[tauri::command]
 pub async fn chat_toggle(app: AppHandle) -> Result<(), AppError> {
@@ -136,6 +142,7 @@ pub async fn chat_complete_stream(
     let mut memory_compressed = false;
     let mut evicted_count = 0u32;
     let mut stream_generation = 0u32;
+    let mut auto_continuations_used = 0usize;
     let session_id = session_id.unwrap_or_default();
     let mut retrieved_preview: Option<String> = None;
     let mut vector_chunks_used: Option<u32> = None;
@@ -332,7 +339,7 @@ pub async fn chat_complete_stream(
 
         let retry = attempt < MAX_CONTEXT_RETRIES
             && crate::chat::should_retry_for_context(
-                stream_out.as_ref().map_err(|e| e),
+                stream_out.as_ref().map(|o| &o.result).map_err(|e| e),
                 input_estimate,
                 context_limit,
             );
@@ -341,7 +348,13 @@ pub async fn chat_complete_stream(
             continue;
         }
 
-        result = stream_out;
+        result = stream_out.map(|o| {
+            auto_continuations_used = o.continuations;
+            if o.continuations > 0 {
+                tracing::info!("auto-continued chat completion {} time(s)", o.continuations);
+            }
+            o.result
+        });
         successful_attempt = attempt;
         break;
     }
@@ -457,11 +470,12 @@ async fn complete_stream_with_auto_continue(
     stream_generation: u32,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     max_output: u32,
-) -> Result<CompletionResult, AppError> {
+) -> Result<AutoContinueOutput, AppError> {
     let base_messages = api_messages;
     let mut current_messages = base_messages.clone();
     let mut accumulated = String::new();
     let mut combined: Option<CompletionResult> = None;
+    let mut continuations = 0usize;
 
     for continue_idx in 0..=MAX_AUTO_CONTINUES {
         if continue_idx > 0 {
@@ -498,8 +512,9 @@ async fn complete_stream_with_auto_continue(
         apply_output_truncation(&mut part, max_output);
 
         let part_text = std::mem::take(&mut part.text);
-        let visible_progress = !part_text.is_empty();
-        accumulated.push_str(&part_text);
+        let before_len = accumulated.len();
+        accumulated = stitch_continuation(&accumulated, &part_text);
+        let visible_progress = accumulated.len() > before_len;
         merge_completion_result(&mut combined, part, &accumulated);
 
         let should_continue = combined.as_ref().is_some_and(|r| r.output_truncated);
@@ -513,10 +528,15 @@ async fn complete_stream_with_auto_continue(
             break;
         }
 
+        continuations += 1;
         current_messages = continuation_messages(&base_messages, &accumulated);
     }
 
-    combined.ok_or_else(|| AppError::Validation("chat stream did not run".into()))
+    let result = combined.ok_or_else(|| AppError::Validation("chat stream did not run".into()))?;
+    Ok(AutoContinueOutput {
+        result,
+        continuations,
+    })
 }
 
 fn merge_completion_result(
@@ -546,6 +566,7 @@ fn merge_completion_result(
 
 fn continuation_messages(base: &[ChatMessage], accumulated: &str) -> Vec<ChatMessage> {
     let mut messages = base.to_vec();
+    let context = continuation_context(accumulated);
     messages.push(ChatMessage {
         role: "assistant".into(),
         content: tail_chars(accumulated, CONTINUATION_TAIL_CHARS),
@@ -553,10 +574,82 @@ fn continuation_messages(base: &[ChatMessage], accumulated: &str) -> Vec<ChatMes
     });
     messages.push(ChatMessage {
         role: "user".into(),
-        content: "/no_think\nYour previous assistant message above was cut off. Continue exactly from the next character where it stopped. Output only the continuation. Do not restart, summarize, explain, add a heading, wrap in a new code fence, or repeat completed text.".into(),
+        content: continuation_prompt(&context),
         images: Vec::new(),
     });
     messages
+}
+
+fn stitch_continuation(accumulated: &str, next: &str) -> String {
+    if accumulated.is_empty() || next.is_empty() {
+        return format!("{accumulated}{next}");
+    }
+    let suffix = tail_chars(accumulated, STITCH_OVERLAP_CHARS);
+    let prefix: String = next.chars().take(STITCH_OVERLAP_CHARS).collect();
+    let max = suffix.chars().count().min(prefix.chars().count());
+    for len in (8..=max).rev() {
+        let suffix_tail = tail_chars(&suffix, len);
+        let prefix_head: String = prefix.chars().take(len).collect();
+        if suffix_tail == prefix_head {
+            let rest: String = next.chars().skip(len).collect();
+            return format!("{accumulated}{rest}");
+        }
+    }
+    format!("{accumulated}{next}")
+}
+
+struct ContinuationContext {
+    inside_fence: bool,
+    fence_language: Option<String>,
+    last_line: String,
+}
+
+fn continuation_context(text: &str) -> ContinuationContext {
+    let mut inside_fence = false;
+    let mut fence_language: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            inside_fence = !inside_fence;
+            if inside_fence {
+                let lang = rest.trim();
+                fence_language = if lang.is_empty() {
+                    None
+                } else {
+                    Some(lang.to_string())
+                };
+            }
+        }
+    }
+    ContinuationContext {
+        inside_fence,
+        fence_language,
+        last_line: text.lines().last().unwrap_or("").to_string(),
+    }
+}
+
+fn continuation_prompt(ctx: &ContinuationContext) -> String {
+    let cursor = if ctx.last_line.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nThe cut happened after this exact line fragment:\n{}\n",
+            ctx.last_line
+        )
+    };
+    if ctx.inside_fence {
+        let lang = ctx
+            .fence_language
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("code");
+        return format!(
+            "/no_think\nYour previous assistant message was cut off inside a `{lang}` code block.{cursor}Continue from the very next character of the code. Output raw code continuation only. Do not repeat the fragment, do not open or close a markdown fence unless the code itself requires those characters, do not explain, do not summarize."
+        );
+    }
+    format!(
+        "/no_think\nYour previous assistant message above was cut off.{cursor}Continue exactly from the next character where it stopped. Output only the continuation. Do not restart, summarize, explain, add a heading, wrap in a new code fence, or repeat completed text."
+    )
 }
 
 fn tail_chars(s: &str, max_chars: usize) -> String {
@@ -831,5 +924,26 @@ fn apply_output_truncation(result: &mut CompletionResult, max_output: u32) {
     }
     if result.usage.output_tokens >= max_output.saturating_sub(64) {
         result.output_truncated = true;
+    }
+}
+
+#[cfg(test)]
+mod chat_command_tests {
+    use super::*;
+
+    #[test]
+    fn stitches_repeated_continuation_overlap() {
+        let a = "function demo() {\n    return 1;\n";
+        let b = "    return 1;\n}\n";
+        assert_eq!(stitch_continuation(a, b), "function demo() {\n    return 1;\n}\n");
+    }
+
+    #[test]
+    fn code_fence_continuation_prompt_stays_inside_code() {
+        let ctx = continuation_context("```php\n<?php\nfunction demo() {\n");
+        let prompt = continuation_prompt(&ctx);
+        assert!(prompt.contains("inside a `php` code block"));
+        assert!(prompt.contains("raw code continuation only"));
+        assert!(prompt.contains("/no_think"));
     }
 }

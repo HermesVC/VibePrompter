@@ -109,6 +109,26 @@ npm run tauri dev
 npm run tauri build
 ```
 
+### RAG / embeddings preflight
+
+Before testing long chat memory, run the repo preflight script. It verifies an
+OpenAI-compatible embeddings endpoint (`/v1/models` + `/v1/embeddings`) and
+then runs the frontend build plus Rust library check:
+
+```powershell
+npm run preflight:rag
+```
+
+The script is idempotent: if LM Studio/Ollama or Docker-backed services are
+already running, it only validates them. To let it start Docker Compose services
+when they are not running, pass the compose file explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/preflight-rag-build.ps1 `
+  -StartContainers `
+  -DockerComposeFile docker-compose.yml
+```
+
 ---
 
 ## Contributing

@@ -92,7 +92,7 @@ Sliding window **учитывает summary** при выборе active turns. 
 
 LM Studio в интерфейсе обычно держит **одну активную chat-модель**. Отдельно «запустить вторую модель для embed» в UI нельзя.
 
-VibePrompter для памяти вызывает **`POST {base_url}/embeddings`** с моделью `nomic-embed-text` (fallback в коде), пока chat идёт через тот же `base_url`.
+VibePrompter для памяти вызывает **`POST {base_url}/embeddings`**. Если embed model не задан явно, код сначала пробует найти embedding-модель через `GET {base_url}/models`, затем fallback-и для LM Studio/Ollama.
 
 **Практика:** LM Studio — только для Qwen → vector layer **не заводится** без отдельного embed-сервера. Нужен **Ollama для nomic** или доработка «Embedding connection» в VibePrompter (пока не реализовано).
 
@@ -166,9 +166,10 @@ Ollama **подгружает модель по запросу**: Qwen для ch
 Для embeddings код вызывает `resolve_embed_model()`:
 
 - если в default model есть `embed`, `nomic` или `bge` — использует его;
-- иначе fallback: `nomic-embed-text`.
+- иначе пробует embedding-модели из `GET /models`;
+- затем fallback-и: `text-embedding-nomic-embed-text-v1.5`, `nomic-embed-text`, `nomic-embed-text:latest`.
 
-> **Имя модели:** Ollama использует `nomic-embed-text`, и это же имя сейчас fallback в коде. Если embed падает с `model not found`, задай в default model connection строку из `ollama list` / `GET /v1/models`, либо дождись настройки embed model в Settings (TODO).
+> **Имя модели:** LM Studio часто показывает nomic как `text-embedding-nomic-embed-text-v1.5`, Ollama — как `nomic-embed-text` / `nomic-embed-text:latest`. Код пробует оба семейства имён, но если embed всё равно падает с `model not found`, задай в default model connection строку из `ollama list` / `GET /v1/models`, либо дождись настройки embed model в Settings (TODO).
 
 ---
 
@@ -253,7 +254,38 @@ Ollama **подгружает модель по запросу**: Qwen для ch
 | `POST /v1/chat/completions` | Ответ модели |
 | `POST /v1/embeddings` | Векторизация для index/retrieve |
 
-Default embed model в коде: `nomic-embed-text` (`src-tauri/src/providers/embeddings.rs`).
+Default/fallback embed models в коде: `text-embedding-nomic-embed-text-v1.5`, `nomic-embed-text`, `nomic-embed-text:latest` (`src-tauri/src/providers/embeddings.rs`).
+
+---
+
+## Repo preflight script
+
+Для проверки RAG/embeddings и сборки используем единый скрипт:
+
+```powershell
+npm run preflight:rag
+```
+
+Он делает:
+
+1. `GET {base_url}/models`
+2. подбор embed-модели (`text-embedding-nomic-embed-text-v1.5`, `nomic-embed-text`, `nomic-embed-text:latest` + autodiscovery)
+3. реальный `POST {base_url}/embeddings`
+4. `npm run build`
+5. `cargo check --lib`
+
+По умолчанию проверяются:
+
+- `http://127.0.0.1:1234/v1` (LM Studio)
+- `http://127.0.0.1:11434/v1` (Ollama)
+
+Если сервисы подняты контейнерами, скрипт можно запускать идемпотентно: уже запущенные контейнеры не ломаются, а `docker compose up -d` просто убеждается, что они есть.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/preflight-rag-build.ps1 `
+  -StartContainers `
+  -DockerComposeFile docker-compose.yml
+```
 
 ---
 

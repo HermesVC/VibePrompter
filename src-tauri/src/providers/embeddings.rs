@@ -6,7 +6,14 @@ use super::{apply_extra_headers, http, normalize_base, HttpConfig};
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
-const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
+const FALLBACK_EMBED_MODELS: &[&str] = &[
+    // LM Studio exposes nomic with the OpenAI-ish id.
+    "text-embedding-nomic-embed-text-v1.5",
+    // Ollama accepts both the tagless and tagged names.
+    "nomic-embed-text",
+    "nomic-embed-text:latest",
+];
+const DEFAULT_EMBED_MODEL: &str = FALLBACK_EMBED_MODELS[0];
 
 /// Best-effort embedding model: connection default if it looks like an embed model, else fallback.
 pub fn resolve_embed_model(connection_default: &str) -> &str {
@@ -31,10 +38,109 @@ pub async fn embed_texts(
         return Ok(Vec::new());
     }
 
-    let model = model
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| resolve_embed_model(&conn.default_model));
+    let candidates = embed_model_candidates(conn, cfg, model).await;
+    let mut last_err: Option<AppError> = None;
+    for candidate in candidates {
+        match embed_texts_once(conn, cfg, texts, &candidate).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                tracing::debug!("embeddings candidate '{candidate}' failed: {e}");
+                last_err = Some(e);
+            }
+        }
+    }
 
+    Err(last_err.unwrap_or_else(|| {
+        AppError::Validation("no embedding model candidates available".into())
+    }))
+}
+
+async fn embed_model_candidates(
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    model: Option<&str>,
+) -> Vec<String> {
+    if let Some(explicit) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        return vec![explicit.to_string()];
+    }
+
+    let mut out = Vec::new();
+    push_candidate(&mut out, resolve_embed_model(&conn.default_model));
+
+    for discovered in discover_embedding_models(conn, cfg).await {
+        push_candidate(&mut out, &discovered);
+    }
+
+    for fallback in FALLBACK_EMBED_MODELS {
+        push_candidate(&mut out, fallback);
+    }
+
+    out
+}
+
+async fn discover_embedding_models(conn: &ConnectionRow, cfg: &HttpConfig) -> Vec<String> {
+    let base = normalize_base(&conn.base_url);
+    let url = format!("{base}/models");
+    let client = match http(cfg) {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::debug!("embedding model discovery skipped: {e}");
+            return Vec::new();
+        }
+    };
+    let resp = match apply_extra_headers(client.get(&url).bearer_auth(&conn.api_key), conn)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp,
+        Ok(resp) => {
+            tracing::debug!("embedding model discovery skipped: /models {}", resp.status());
+            return Vec::new();
+        }
+        Err(e) => {
+            tracing::debug!("embedding model discovery skipped: {e}");
+            return Vec::new();
+        }
+    };
+
+    let parsed: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!("embedding model discovery parse skipped: {e}");
+            return Vec::new();
+        }
+    };
+
+    parsed
+        .get("data")
+        .and_then(|d| d.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .filter(|id| looks_like_embedding_model(id))
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn push_candidate(out: &mut Vec<String>, candidate: &str) {
+    let candidate = candidate.trim();
+    if candidate.is_empty() || out.iter().any(|m| m == candidate) {
+        return;
+    }
+    out.push(candidate.to_string());
+}
+
+fn looks_like_embedding_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.contains("embed") || lower.contains("nomic") || lower.contains("bge")
+}
+
+async fn embed_texts_once(
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    texts: &[String],
+    model: &str,
+) -> AppResult<Vec<Vec<f32>>> {
     let base = normalize_base(&conn.base_url);
     let url = format!("{base}/embeddings");
 
@@ -134,8 +240,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embed_model_uses_ollama_nomic_fallback() {
-        assert_eq!(resolve_embed_model("qwen2.5"), "nomic-embed-text");
+    fn embed_model_uses_lmstudio_nomic_fallback() {
+        assert_eq!(
+            resolve_embed_model("qwen2.5"),
+            "text-embedding-nomic-embed-text-v1.5"
+        );
     }
 
     #[test]

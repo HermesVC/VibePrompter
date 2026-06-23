@@ -267,13 +267,17 @@ fn extract_fenced_code_block(text: &str) -> Option<String> {
             }
         };
         let tail = &text[body_start..];
-        let Some(close_rel) = tail.find("```") else {
-            break;
+        let body = if let Some(close_rel) = tail.find("```") {
+            tail[..close_rel].trim_end()
+        } else {
+            tail.trim_end()
         };
-        let body = tail[..close_rel].trim_end();
         if !body.is_empty() && body.len() > best.as_ref().map(|s| s.len()).unwrap_or(0) {
             best = Some(body.to_string());
         }
+        let Some(close_rel) = tail.find("```") else {
+            break;
+        };
         pos = body_start + close_rel + 3;
     }
     best
@@ -302,6 +306,13 @@ mod tests {
     fn strips_prose_before_fenced_code() {
         let input =
             "Для рефакторирования можно улучшить структуру:\n\n```php\n<?php\necho 1;\n```\n";
+        let out = extract_scoped_code_output(input);
+        assert_eq!(out, "<?php\necho 1;");
+    }
+
+    #[test]
+    fn extracts_unclosed_fenced_code_block() {
+        let input = "Updated file:\n\n```php\n<?php\necho 1;\n";
         let out = extract_scoped_code_output(input);
         assert_eq!(out, "<?php\necho 1;");
     }
