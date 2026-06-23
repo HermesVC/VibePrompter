@@ -180,6 +180,9 @@ pub fn run() {
             commands::apply_workspace_write,
             commands::resolve_workspace_file_path,
             commands::compose_chat_context_prompt,
+            commands::list_prompt_formats,
+            commands::render_prompt_format,
+            commands::parse_prompt_tool_calls,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

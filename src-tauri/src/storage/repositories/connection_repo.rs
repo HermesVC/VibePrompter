@@ -41,6 +41,8 @@ pub struct ConnectionRow {
     pub price_output_per_m: f64,
     /// Model context window in tokens. `0` = unset (hide usage ring).
     pub context_window_size: i64,
+    /// Chat template id — `openai_messages`, `gemma4`, …
+    pub prompt_format: String,
 }
 
 type RowTuple = (
@@ -58,9 +60,10 @@ type RowTuple = (
     f64,
     f64,
     i64,
+    String,
 );
 
-const SELECT_COLS: &str = "id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m, context_window_size";
+const SELECT_COLS: &str = "id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m, context_window_size, prompt_format";
 
 fn row_from_tuple(
     (
@@ -78,6 +81,7 @@ fn row_from_tuple(
         price_input_per_m,
         price_output_per_m,
         context_window_size,
+        prompt_format,
     ): RowTuple,
 ) -> ConnectionRow {
     ConnectionRow {
@@ -95,6 +99,7 @@ fn row_from_tuple(
         price_input_per_m,
         price_output_per_m,
         context_window_size,
+        prompt_format,
     }
 }
 
@@ -219,15 +224,15 @@ where
         "INSERT INTO provider_connections
            (id, label, kind, base_url, api_key, default_model, is_default,
             extra_headers, notes, tags, price_input_per_m, price_output_per_m,
-            context_window_size, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)
+            context_window_size, prompt_format, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
          ON CONFLICT(id) DO UPDATE SET
            label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
            default_model = ?6, is_default = ?7, extra_headers = ?8,
            notes = ?9, tags = ?10,
            price_input_per_m = ?11, price_output_per_m = ?12,
-           context_window_size = ?13,
-           updated_at = ?14",
+           context_window_size = ?13, prompt_format = ?14,
+           updated_at = ?15",
     )
     .bind(&row.id)
     .bind(&row.label)
@@ -242,6 +247,7 @@ where
     .bind(row.price_input_per_m)
     .bind(row.price_output_per_m)
     .bind(row.context_window_size)
+    .bind(&row.prompt_format)
     .bind(now)
     .execute(executor)
     .await?;

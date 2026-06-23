@@ -72,6 +72,22 @@ export function buildChatContextPayload(ctx: ChatContextState): {
   };
 }
 
+/** Duplicate scoped content into the user turn — local models often ignore system. */
+export function formatScopeUserContext(scope: ChatScope): string {
+  switch (scope.kind) {
+    case 'snippet':
+      return `[Attached snippet — edit only this code]\n\`\`\`\n${scope.working}\n\`\`\``;
+    case 'file':
+      return `[Attached file: ${scope.path} (lines ${scope.lineStart}-${scope.lineEnd})]\n\`\`\`\n${scope.content}\n\`\`\``;
+    case 'workspace':
+      return scope.treeSummary
+        ? `[Workspace tree]\n${scope.treeSummary}`
+        : '';
+    default:
+      return '';
+  }
+}
+
 export function toggleModifier(modifiers: string[], id: string): string[] {
   return modifiers.includes(id)
     ? modifiers.filter((m) => m !== id)

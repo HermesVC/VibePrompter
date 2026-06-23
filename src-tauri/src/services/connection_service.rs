@@ -182,6 +182,7 @@ impl ConnectionService {
             price_input_per_m: input.price_input_per_m,
             price_output_per_m: input.price_output_per_m,
             context_window_size: input.context_window_size,
+            prompt_format: normalize_prompt_format(&input.prompt_format),
         };
 
         if row.is_default {
@@ -218,6 +219,7 @@ impl ConnectionService {
                     "priceInputPerM": r.price_input_per_m,
                     "priceOutputPerM": r.price_output_per_m,
                     "contextWindowSize": r.context_window_size,
+                    "promptFormat": r.prompt_format,
                 })
             })
             .collect();
@@ -316,6 +318,11 @@ impl ConnectionService {
                     .get("contextWindowSize")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0),
+                prompt_format: item
+                    .get("promptFormat")
+                    .and_then(|v| v.as_str())
+                    .map(|s| normalize_prompt_format(s))
+                    .unwrap_or_else(|| crate::providers::prompt_format::default_format_id().to_string()),
             };
 
             if ConnectionKind::from_db(&row.kind).is_none() || row.base_url.is_empty() {
@@ -402,6 +409,7 @@ impl ConnectionService {
             price_input_per_m: 0.0,
             price_output_per_m: 0.0,
             context_window_size: input.context_window_size,
+            prompt_format: normalize_prompt_format(&input.prompt_format),
         };
         let cfg = self.http_config().await;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
@@ -576,7 +584,16 @@ fn redact(row: ConnectionRow) -> ConnectionInfo {
         price_input_per_m: row.price_input_per_m,
         price_output_per_m: row.price_output_per_m,
         context_window_size: row.context_window_size,
+        prompt_format: row.prompt_format,
     }
+}
+
+fn normalize_prompt_format(raw: &str) -> String {
+    let id = raw.trim();
+    if id.is_empty() {
+        return crate::providers::prompt_format::default_format_id().to_string();
+    }
+    crate::providers::prompt_format::resolve(id).id().to_string()
 }
 
 fn new_id() -> String {

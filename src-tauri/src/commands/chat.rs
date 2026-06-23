@@ -35,14 +35,21 @@ pub async fn chat_complete_stream(
     if messages.is_empty() {
         return Err(AppError::Validation("messages is empty".into()));
     }
-    let last = messages
-        .last()
-        .ok_or_else(|| AppError::Validation("messages is empty".into()))?;
-    if last.role != "user" {
-        return Err(AppError::Validation("last message must be from the user".into()));
+    {
+        let last = messages
+            .last()
+            .ok_or_else(|| AppError::Validation("messages is empty".into()))?;
+        if last.role != "user" {
+            return Err(AppError::Validation("last message must be from the user".into()));
+        }
+        if last.content.trim().is_empty() && last.images.is_empty() {
+            return Err(AppError::Validation("last user message is empty".into()));
+        }
     }
-    if last.content.trim().is_empty() && last.images.is_empty() {
-        return Err(AppError::Validation("last user message is empty".into()));
+
+    let mut messages = messages;
+    if let Some(ctx) = chat_context.as_ref() {
+        augment_messages_with_scope(&mut messages, ctx);
     }
 
     let (mut system_prompt, mode_name, mode_icon, temperature, max_tokens) =
@@ -143,6 +150,7 @@ pub async fn chat_complete_stream(
     let was_cancelled = cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
 
     let source_label = {
+        let last = messages.last().expect("validated non-empty messages");
         let mut label = last.content.trim().to_string();
         if label.is_empty() {
             label = format!("[{} image(s)]", last.images.len());
@@ -321,4 +329,46 @@ fn image_mime(ext: &str) -> String {
         _ => "image/png",
     }
     .into()
+}
+
+fn augment_messages_with_scope(messages: &mut Vec<ChatMessage>, ctx: &crate::workspace::ChatContextPayload) {
+    let block = scope_user_context_block(&ctx.scope);
+    if block.is_empty() {
+        return;
+    }
+    let Some(last) = messages.last_mut() else {
+        return;
+    };
+    if last.role != "user" {
+        return;
+    }
+    last.content = if last.content.trim().is_empty() {
+        block
+    } else {
+        format!("{}\n\n{}", last.content.trim(), block)
+    };
+}
+
+fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
+    use crate::workspace::ChatScope;
+    match scope {
+        ChatScope::None => String::new(),
+        ChatScope::Snippet { working, .. } => {
+            format!("[Attached snippet — edit only this code]\n```\n{working}\n```")
+        }
+        ChatScope::File {
+            path,
+            content,
+            line_start,
+            line_end,
+            ..
+        } => format!(
+            "[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```"
+        ),
+        ChatScope::Workspace { tree_summary } => tree_summary
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|tree| format!("[Workspace tree]\n{tree}"))
+            .unwrap_or_default(),
+    }
 }

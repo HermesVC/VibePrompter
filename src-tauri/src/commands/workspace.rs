@@ -132,14 +132,12 @@ pub async fn resolve_workspace_file_path(
     state: State<'_, AppState>,
     absolute_path: String,
 ) -> Result<FileContentDto, AppError> {
+    let abs = PathBuf::from(absolute_path.trim());
     let settings = state.workspace.get_settings().await?;
     let root = PathBuf::from(settings.workspace_root.trim());
     if root.as_os_str().is_empty() {
-        return Err(AppError::Validation(
-            "configure workspace root in Settings → Workspace".into(),
-        ));
+        return crate::workspace::read_absolute_file_for_context(&abs);
     }
-    let abs = PathBuf::from(absolute_path.trim());
     let rel = crate::workspace::rel_display_path(&root, &abs);
     state.workspace.read_file(&rel, None, None).await
 }

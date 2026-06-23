@@ -17,6 +17,7 @@ export interface Connection {
   priceInputPerM: number;
   priceOutputPerM: number;
   contextWindowSize: number;
+  promptFormat: string;
 }
 
 export interface ConnectionDraft {
@@ -33,6 +34,7 @@ export interface ConnectionDraft {
   priceInputPerM: number;
   priceOutputPerM: number;
   contextWindowSize: number;
+  promptFormat: string;
 }
 
 export interface Preset {
@@ -61,6 +63,9 @@ export const PRESETS: Record<string, Preset> = {
   lmstudio:   { label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',                          kind: 'openai',    model: '', contextWindow: 8192 },
 };
 
+export const DEFAULT_PROMPT_FORMAT = 'openai_messages';
+export const GEMMA4_PROMPT_FORMAT = 'gemma4';
+
 export const emptyDraft = (): ConnectionDraft => ({
   id: null,
   label: '',
@@ -75,4 +80,5 @@ export const emptyDraft = (): ConnectionDraft => ({
   priceInputPerM: 0,
   priceOutputPerM: 0,
   contextWindowSize: 0,
+  promptFormat: DEFAULT_PROMPT_FORMAT,
 });

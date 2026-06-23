@@ -173,7 +173,7 @@ pub fn extract_snippet_output(text: &str) -> String {
     }
     let trimmed = text.trim();
     if trimmed.starts_with("```") {
-        if let Some(end) = trimmed.rfind("```") {
+        if let Some(_end) = trimmed.rfind("```") {
             let inner = trimmed
                 .trim_start_matches('`')
                 .trim_start_matches(|c: char| c.is_alphanumeric() || c == '\n')

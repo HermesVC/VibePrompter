@@ -6,9 +6,8 @@ pub mod types;
 
 pub use context::{compose_system_prompt, extract_snippet_output, list_modifiers};
 pub use fs::{
-    content_hash, list_dir_recursive, read_file_range, rel_display_path, resolve_under_root,
-    write_file_checked,
+    content_hash, list_dir_recursive, read_absolute_file_for_context, read_file_range,
+    rel_display_path, write_file_checked,
 };
-pub use language::{detect_language, hints_for};
 pub use policy::{PolicyDecision, PolicyEngine};
 pub use types::*;

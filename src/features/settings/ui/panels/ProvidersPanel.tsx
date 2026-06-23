@@ -5,6 +5,7 @@ import { errorMessage as errorMsg } from '@shared/lib/utils';
 import {
   PRESETS,
   emptyDraft,
+  DEFAULT_PROMPT_FORMAT,
   type Connection,
   type ConnectionDraft,
 } from './providers/connection';
@@ -261,6 +262,7 @@ export function ProvidersPanel() {
       priceInputPerM: c.priceInputPerM ?? 0,
       priceOutputPerM: c.priceOutputPerM ?? 0,
       contextWindowSize: c.contextWindowSize ?? 0,
+      promptFormat: c.promptFormat || DEFAULT_PROMPT_FORMAT,
     });
     setModels([]);
     setKeyVisible(false);

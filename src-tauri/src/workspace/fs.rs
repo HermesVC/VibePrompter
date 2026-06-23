@@ -83,6 +83,38 @@ pub fn rel_display_path(workspace_root: &Path, abs: &Path) -> String {
     abs.to_string_lossy().replace('\\', "/")
 }
 
+/// Read a file by absolute path for chat attach when workspace root is not configured.
+pub fn read_absolute_file_for_context(abs: &Path) -> AppResult<FileContentDto> {
+    if abs.as_os_str().is_empty() {
+        return Err(AppError::Validation("empty file path".into()));
+    }
+    if abs.is_dir() {
+        return Err(AppError::Validation("expected a file, got a directory".into()));
+    }
+    let bytes = fs::read(abs).map_err(|e| AppError::Validation(format!("read failed: {e}")))?;
+    if bytes.len() > MAX_READ_BYTES {
+        return Err(AppError::Validation(format!(
+            "file exceeds {} KB — attach a smaller file",
+            MAX_READ_BYTES / 1024
+        )));
+    }
+    let full = String::from_utf8(bytes)
+        .map_err(|_| AppError::Validation("file is not valid UTF-8 text".into()))?;
+    let lines: Vec<&str> = full.lines().collect();
+    let total = lines.len().max(1) as u32;
+    let display = abs.to_string_lossy().replace('\\', "/");
+    let lang = detect_language(Some(&display), Some(&full));
+    Ok(FileContentDto {
+        path: display,
+        content_hash: content_hash(&full),
+        content: full,
+        line_count: total,
+        language_id: lang,
+        line_start: 1,
+        line_end: total,
+    })
+}
+
 pub fn read_file_range(
     workspace_root: &Path,
     rel: &str,

@@ -17,17 +17,20 @@ export async function readClipboardText(): Promise<string> {
   return navigator.clipboard.readText();
 }
 
-/** Grab the current editor selection (UIA / Ctrl+C), then fall back to clipboard. */
+/** Grab selection — clipboard first (user copies before switching to chat), then UIA/Ctrl+C. */
 export async function captureEditorSelection(): Promise<string> {
+  const fromClipboard = (await readClipboardText()).trim();
+  if (fromClipboard) return fromClipboard;
+
   if (isTauri()) {
     try {
       const captured = await invoke<string>('capture_editor_selection');
       if (captured.trim()) return captured;
     } catch {
-      // Fall through to clipboard when nothing is selected.
+      // ignore — surfaced by empty result below
     }
   }
-  return readClipboardText();
+  return '';
 }
 
 const CODE_SIGNAL =

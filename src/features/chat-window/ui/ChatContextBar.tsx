@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   type ChatContextState,
   type ChatModifier,
@@ -10,7 +9,6 @@ import {
 import { captureEditorSelection, languageIdForSnippet } from '@shared/lib/clipboard';
 import { errorMessage } from '@shared/lib/utils';
 import {
-  getWorkspaceSettings,
   listChatModifiers,
   pickWorkspaceFile,
   readWorkspaceFile,
@@ -21,7 +19,7 @@ import {
 interface ChatContextBarProps {
   ctx: ChatContextState;
   disabled?: boolean;
-  onChange: (next: ChatContextState) => void;
+  onChange: Dispatch<SetStateAction<ChatContextState>>;
   onError: (msg: string | null) => void;
 }
 
@@ -35,9 +33,9 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
 
   const setScope = useCallback(
     (scope: ChatScope) => {
-      onChange({ ...ctx, scope });
+      onChange((prev) => ({ ...prev, scope }));
     },
-    [ctx, onChange]
+    [onChange]
   );
 
   const attachSnippetFromSelection = useCallback(async () => {
@@ -48,9 +46,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
       const trimmed = text.trim();
       if (!trimmed) {
         onError(
-          isTauri()
-            ? 'No selection — highlight code in your editor, then click Snippet again'
-            : 'Clipboard is empty — copy your code first (Ctrl+C), then click Snippet'
+          'Сначала выделите код в редакторе и нажмите Ctrl+C, затем снова Snippet'
         );
         return;
       }
@@ -70,11 +66,6 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
   const attachFile = useCallback(async () => {
     onError(null);
     try {
-      const settings = await getWorkspaceSettings();
-      if (!settings.workspaceRoot?.trim()) {
-        onError('Set workspace root in Settings → Workspace before attaching files');
-        return;
-      }
       const picked = await pickWorkspaceFile();
       if (!picked) return;
       const file = await resolveWorkspaceFilePath(picked);
@@ -95,11 +86,6 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
   const attachWorkspace = useCallback(async () => {
     onError(null);
     try {
-      const settings = await getWorkspaceSettings();
-      if (!settings.workspaceRoot?.trim()) {
-        onError('Set workspace root in Settings → Workspace first');
-        return;
-      }
       const tree = await workspaceTreeSummary();
       setScope({ kind: 'workspace', treeSummary: tree });
     } catch (e) {
@@ -108,9 +94,9 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
   }, [onError, setScope]);
 
   const clearScope = useCallback(() => {
-    onChange({ ...ctx, scope: { kind: 'none' } });
+    onChange((prev) => ({ ...prev, scope: { kind: 'none' } }));
     onError(null);
-  }, [ctx, onChange, onError]);
+  }, [onChange, onError]);
 
   const label = scopeLabel(ctx.scope);
 
@@ -142,7 +128,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           active={ctx.scope.kind === 'snippet'}
           disabled={disabled || capturing}
           onClick={attachSnippetFromSelection}
-          title="Capture highlighted code from the editor (or clipboard)"
+          title="Attach code from clipboard (Ctrl+C) or editor selection"
         >
           {capturing ? 'Snippet…' : 'Snippet'}
         </ScopeBtn>
@@ -150,7 +136,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           active={ctx.scope.kind === 'file'}
           disabled={disabled}
           onClick={attachFile}
-          title="Attach a file from workspace root"
+          title="Pick a file — contents go into the prompt"
         >
           File
         </ScopeBtn>
@@ -158,7 +144,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           active={ctx.scope.kind === 'workspace'}
           disabled={disabled}
           onClick={attachWorkspace}
-          title="Load workspace file tree"
+          title="Load workspace file tree (needs workspace root in Settings)"
         >
           Workspace
         </ScopeBtn>
@@ -170,7 +156,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
               background: 'var(--accent-tint)',
               padding: '2px 8px',
               borderRadius: 999,
-              maxWidth: 220,
+              maxWidth: 280,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -200,14 +186,30 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
       </div>
       {ctx.scope.kind === 'none' && (
         <div style={{ fontSize: 10, color: 'var(--fg-dim)', lineHeight: 1.35 }}>
-          Free = no editor context. For code edits: highlight in your editor → click{' '}
-          <strong style={{ fontWeight: 600 }}>Snippet</strong>.
+          <strong style={{ color: 'var(--fg)' }}>Free</strong> — модель не видит редактор. Для кода:{' '}
+          <strong>Ctrl+C</strong> → <strong>Snippet</strong>. Для файла: <strong>File</strong> → выбрать
+          файл.
         </div>
       )}
       {ctx.scope.kind === 'snippet' && (
-        <div style={{ fontSize: 10, color: 'var(--fg-dim)', lineHeight: 1.35 }}>
-          Snippet attached — the model sees your selection. Ask for changes, then Apply to copy back.
-        </div>
+        <ScopePreview
+          title="Snippet прикреплён"
+          preview={
+            ctx.scope.kind === 'snippet'
+              ? ctx.scope.working.split('\n').slice(0, 4).join('\n')
+              : ''
+          }
+        />
+      )}
+      {ctx.scope.kind === 'file' && (
+        <ScopePreview
+          title={`Файл в контексте: ${ctx.scope.kind === 'file' ? ctx.scope.path : ''}`}
+          preview={
+            ctx.scope.kind === 'file'
+              ? ctx.scope.content.split('\n').slice(0, 4).join('\n')
+              : ''
+          }
+        />
       )}
       {modifiers.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
@@ -221,10 +223,10 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
                 disabled={disabled}
                 title={m.description}
                 onClick={() =>
-                  onChange({
-                    ...ctx,
-                    modifiers: toggleModifier(ctx.modifiers, m.id),
-                  })
+                  onChange((prev) => ({
+                    ...prev,
+                    modifiers: toggleModifier(prev.modifiers, m.id),
+                  }))
                 }
                 style={{
                   fontSize: 10,
@@ -242,6 +244,38 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function ScopePreview({ title, preview }: { title: string; preview: string }) {
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        color: 'var(--accent)',
+        lineHeight: 1.35,
+        padding: '4px 8px',
+        borderRadius: 6,
+        background: 'var(--accent-tint)',
+        border: '.5px solid var(--accent-tint-2)',
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 2 }}>{title}</div>
+      <pre
+        style={{
+          margin: 0,
+          fontSize: 9.5,
+          color: 'var(--fg-mute)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          maxHeight: 56,
+          overflow: 'hidden',
+        }}
+      >
+        {preview}
+        {preview.includes('\n') ? '\n…' : ''}
+      </pre>
     </div>
   );
 }

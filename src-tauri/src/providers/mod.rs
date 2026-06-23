@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 pub mod lmstudio;
+pub mod prompt_format;
 
 use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,

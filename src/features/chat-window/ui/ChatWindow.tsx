@@ -28,6 +28,7 @@ import { errorMessage } from '@shared/lib/utils';
 import {
   buildChatContextPayload,
   DEFAULT_CHAT_CONTEXT,
+  formatScopeUserContext,
   type ChatContextState,
 } from '@shared/lib/chatContext';
 import {
@@ -112,6 +113,15 @@ export function ChatWindow() {
   } | null>(null);
   const chatContextRef = useRef(chatContext);
   chatContextRef.current = chatContext;
+
+  useEffect(() => {
+    const kind = chatContext.scope.kind;
+    if (kind === 'snippet' && modes.some((m) => m.id === 'snippet-editor')) {
+      setModeId('snippet-editor');
+    } else if (kind === 'file' && modes.some((m) => m.id === 'file-assistant')) {
+      setModeId('file-assistant');
+    }
+  }, [chatContext.scope.kind, modes]);
 
   const voice = useVoiceInput({
     value: draft,
@@ -330,14 +340,25 @@ export function ChatWindow() {
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if ((!text && pendingImages.length === 0) || streaming) return;
+    const scopeOnly =
+      !text &&
+      pendingImages.length === 0 &&
+      formatScopeUserContext(chatContextRef.current.scope);
+    if ((!text && !scopeOnly && pendingImages.length === 0) || streaming) return;
 
     if (voice.isListening) voice.stop();
+
+    const scopeBlock = formatScopeUserContext(chatContextRef.current.scope);
+    const userText = text
+      ? scopeBlock
+        ? `${text}\n\n${scopeBlock}`
+        : text
+      : scopeBlock;
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
-      content: text,
+      content: userText,
       images: pendingImages.length ? [...pendingImages] : undefined,
     };
     const assistantId = crypto.randomUUID();

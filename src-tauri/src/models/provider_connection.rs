@@ -62,6 +62,9 @@ pub struct ConnectionInfo {
     /// Model context window in tokens. 0 = unknown (hide usage ring).
     #[serde(rename = "contextWindowSize")]
     pub context_window_size: i64,
+    /// Chat template id (`openai_messages`, `gemma4`, …). See `list_prompt_formats`.
+    #[serde(rename = "promptFormat")]
+    pub prompt_format: String,
 }
 
 /// Write DTO from the frontend. `apiKey` is optional on update — when absent
@@ -94,6 +97,13 @@ pub struct ConnectionInput {
     pub price_output_per_m: f64,
     #[serde(default)]
     pub context_window_size: i64,
+    /// `openai_messages` (default) or `gemma4` — see `list_prompt_formats`.
+    #[serde(default = "default_prompt_format")]
+    pub prompt_format: String,
+}
+
+fn default_prompt_format() -> String {
+    "openai_messages".to_string()
 }
 
 /// Base64 image attached to a user turn (vision / multimodal follow-ups).
