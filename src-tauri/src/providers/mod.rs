@@ -162,6 +162,24 @@ pub(crate) fn http(cfg: &HttpConfig) -> AppResult<reqwest::Client> {
         .map_err(|e| AppError::Config(format!("http client: {e}")))
 }
 
+pub(crate) fn http_stream(cfg: &HttpConfig) -> AppResult<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent("VibePrompter/0.1")
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(cfg.timeout);
+    if let Some(p) = cfg.proxy.as_ref() {
+        match reqwest::Proxy::all(p) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(e) => {
+                tracing::warn!("ignoring invalid proxy_url '{p}': {e}");
+            }
+        }
+    }
+    builder
+        .build()
+        .map_err(|e| AppError::Config(format!("stream http client: {e}")))
+}
+
 fn normalize_base(url: &str) -> String {
     url.trim_end_matches('/').to_string()
 }
@@ -582,11 +600,14 @@ where
         async move {
             let req = match kind {
                 ConnectionKind::Openai => apply_extra_headers(
-                    http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body),
+                    http_stream(cfg)?
+                        .post(&url)
+                        .bearer_auth(&conn.api_key)
+                        .json(&body),
                     conn,
                 ),
                 ConnectionKind::Anthropic => apply_extra_headers(
-                    http(cfg)?
+                    http_stream(cfg)?
                         .post(&url)
                         .header("x-api-key", &conn.api_key)
                         .header("anthropic-version", "2023-06-01")
@@ -612,6 +633,7 @@ where
     let mut usage = TokenUsage::default();
     let mut saw_done = false;
     let mut stream_broken = false;
+    let mut stream_error: Option<String> = None;
     let mut finish_reason: Option<String> = None;
     let mut stream = resp.bytes_stream().eventsource();
     while let Some(event) = stream.next().await {
@@ -639,6 +661,7 @@ where
             Err(e) => {
                 tracing::warn!("stream parse: {e}");
                 stream_broken = true;
+                stream_error = Some(e.to_string());
                 break;
             }
         };
@@ -740,6 +763,13 @@ where
     log_raw_resp(cfg, 200, &text);
 
     let stream_incomplete = !stream_looks_complete(saw_done, stream_broken, &text, &usage);
+    if stream_incomplete && stream_broken {
+        let detail = stream_error.unwrap_or_else(|| "stream ended before terminal chunk".into());
+        let partial_chars = text.chars().count();
+        return Err(AppError::Network(format!(
+            "stream interrupted after {partial_chars} chars: {detail}"
+        )));
+    }
     let output_truncated = finish_reason.as_deref() == Some("length");
 
     Ok(CompletionResult {

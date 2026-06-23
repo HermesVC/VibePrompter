@@ -7,6 +7,9 @@ use crate::app::AppState;
 use crate::models::{ChatMessage, CompletionParams, CompletionResult, NewHistoryItem};
 use crate::utils::AppError;
 
+const MAX_AUTO_CONTINUES: usize = 3;
+const CONTINUATION_TAIL_CHARS: usize = 6_000;
+
 #[tauri::command]
 pub async fn chat_toggle(app: AppHandle) -> Result<(), AppError> {
     crate::chat::toggle_chat_window(&app);
@@ -307,32 +310,20 @@ pub async fn chat_complete_stream(
             system: request_system.filter(|s| !s.trim().is_empty()),
         };
 
-        let app_for_tokens = app.clone();
-        let tokens_for_stream = token_event.clone();
-        let cancel_for_stream = cancel_check.clone();
-        let gen_for_stream = stream_generation;
         let max_out_for_post = effective_max_tokens;
-        let mut stream_out = crate::providers::complete_stream(
+        let stream_out = complete_stream_with_auto_continue(
+            &app,
+            &status_event,
+            &token_event,
             &row,
             api_messages,
             params,
             &cfg,
-            move |delta| {
-                let _ = app_for_tokens.emit(
-                    &tokens_for_stream,
-                    serde_json::json!({
-                        "generation": gen_for_stream,
-                        "delta": delta,
-                    }),
-                );
-            },
-            move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
+            stream_generation,
+            cancel_check.clone(),
+            max_out_for_post,
         )
         .await;
-
-        if let Ok(ref mut r) = stream_out {
-            apply_output_truncation(r, max_out_for_post);
-        }
 
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
             result = Err(AppError::Validation("cancelled".into()));
@@ -453,6 +444,127 @@ pub async fn chat_complete_stream(
 
 fn is_cancelled_err(e: &AppError) -> bool {
     matches!(e, AppError::Validation(msg) if msg == "cancelled")
+}
+
+async fn complete_stream_with_auto_continue(
+    app: &AppHandle,
+    status_event: &str,
+    token_event: &str,
+    row: &crate::storage::repositories::ConnectionRow,
+    api_messages: Vec<ChatMessage>,
+    params: CompletionParams,
+    cfg: &crate::providers::HttpConfig,
+    stream_generation: u32,
+    cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    max_output: u32,
+) -> Result<CompletionResult, AppError> {
+    let base_messages = api_messages;
+    let mut current_messages = base_messages.clone();
+    let mut accumulated = String::new();
+    let mut combined: Option<CompletionResult> = None;
+
+    for continue_idx in 0..=MAX_AUTO_CONTINUES {
+        if continue_idx > 0 {
+            let _ = app.emit(
+                status_event,
+                serde_json::json!({
+                    "phase": "continuing",
+                    "generation": stream_generation,
+                    "attempt": continue_idx,
+                }),
+            );
+        }
+
+        let app_for_tokens = app.clone();
+        let tokens_for_stream = token_event.to_string();
+        let cancel_for_stream = cancel_flag.clone();
+        let mut part = crate::providers::complete_stream(
+            row,
+            current_messages.clone(),
+            params.clone(),
+            cfg,
+            move |delta| {
+                let _ = app_for_tokens.emit(
+                    &tokens_for_stream,
+                    serde_json::json!({
+                        "generation": stream_generation,
+                        "delta": delta,
+                    }),
+                );
+            },
+            move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
+        )
+        .await?;
+        apply_output_truncation(&mut part, max_output);
+
+        let part_text = std::mem::take(&mut part.text);
+        let visible_progress = !part_text.is_empty();
+        accumulated.push_str(&part_text);
+        merge_completion_result(&mut combined, part, &accumulated);
+
+        let should_continue = combined.as_ref().is_some_and(|r| r.output_truncated);
+        if !should_continue
+            || !visible_progress
+            || cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            break;
+        }
+        if continue_idx == MAX_AUTO_CONTINUES {
+            break;
+        }
+
+        current_messages = continuation_messages(&base_messages, &accumulated);
+    }
+
+    combined.ok_or_else(|| AppError::Validation("chat stream did not run".into()))
+}
+
+fn merge_completion_result(
+    combined: &mut Option<CompletionResult>,
+    mut part: CompletionResult,
+    accumulated_text: &str,
+) {
+    if let Some(out) = combined.as_mut() {
+        out.text = accumulated_text.to_string();
+        out.latency_ms = out.latency_ms.saturating_add(part.latency_ms);
+        out.usage.input_tokens = out
+            .usage
+            .input_tokens
+            .saturating_add(part.usage.input_tokens);
+        out.usage.output_tokens = out
+            .usage
+            .output_tokens
+            .saturating_add(part.usage.output_tokens);
+        out.stream_incomplete |= part.stream_incomplete;
+        out.finish_reason = part.finish_reason.take();
+        out.output_truncated = part.output_truncated;
+    } else {
+        part.text = accumulated_text.to_string();
+        *combined = Some(part);
+    }
+}
+
+fn continuation_messages(base: &[ChatMessage], accumulated: &str) -> Vec<ChatMessage> {
+    let mut messages = base.to_vec();
+    messages.push(ChatMessage {
+        role: "assistant".into(),
+        content: tail_chars(accumulated, CONTINUATION_TAIL_CHARS),
+        images: Vec::new(),
+    });
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: "/no_think\nYour previous assistant message above was cut off. Continue exactly from the next character where it stopped. Output only the continuation. Do not restart, summarize, explain, add a heading, wrap in a new code fence, or repeat completed text.".into(),
+        images: Vec::new(),
+    });
+    messages
+}
+
+fn tail_chars(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        return s.to_string();
+    }
+    chars[chars.len() - max_chars..].iter().collect()
 }
 
 fn message_memory_key(message: &ChatMessage) -> String {

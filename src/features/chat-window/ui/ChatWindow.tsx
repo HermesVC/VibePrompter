@@ -86,8 +86,9 @@ interface DonePayload {
 }
 
 interface StatusPayload {
-  phase: 'recovering';
+  phase: 'recovering' | 'continuing';
   generation?: number;
+  attempt?: number;
 }
 
 interface TokenPayload {
@@ -160,6 +161,7 @@ export function ChatWindow() {
   const [contextTrimNotice, setContextTrimNotice] = useState<string | null>(null);
   const [contextNoticeKind, setContextNoticeKind] = useState<'info' | 'warn'>('info');
   const [isRecoveringContext, setIsRecoveringContext] = useState(false);
+  const [isContinuingOutput, setIsContinuingOutput] = useState(false);
   const [sessionSummary, setSessionSummary] = useState(
     () => initialSession?.sessionSummary ?? ''
   );
@@ -407,6 +409,7 @@ export function ChatWindow() {
       }
       if (!parts.length) {
         setContextTrimNotice(null);
+        setIsContinuingOutput(false);
         return;
       }
       const limitHint =
@@ -529,6 +532,7 @@ export function ChatWindow() {
     const contextLimit = effectiveContextLimit(connForSend);
     setContextTrimNotice(null);
     setIsRecoveringContext(false);
+    setIsContinuingOutput(false);
 
     setMessages((prev) => [
       ...prev,
@@ -558,15 +562,23 @@ export function ChatWindow() {
         }),
         listen<StatusPayload>(statusEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
-          if (e.payload.phase !== 'recovering') return;
           if (typeof e.payload.generation === 'number') {
             streamGenerationRef.current = e.payload.generation;
-          } else {
+          }
+          if (e.payload.phase === 'continuing') {
+            setIsContinuingOutput(true);
+            return;
+          }
+          if (e.payload.phase !== 'recovering') return;
+          if (typeof e.payload.generation !== 'number') {
             streamGenerationRef.current += 1;
+          } else {
+            streamGenerationRef.current = e.payload.generation;
           }
           bufRef.current = '';
           flushPendingRef.current = false;
           setIsRecoveringContext(true);
+          setIsContinuingOutput(false);
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, content: '', streaming: true } : m
@@ -627,6 +639,7 @@ export function ChatWindow() {
         listen<string>(errEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
           setIsRecoveringContext(false);
+          setIsContinuingOutput(false);
           const cancelled = e.payload === 'cancelled';
           if (cancelled) cancelledRef.current = true;
           setMessages((prev) =>
@@ -694,6 +707,7 @@ export function ChatWindow() {
       processScopedCompletion(result);
     } catch (e) {
       setIsRecoveringContext(false);
+      setIsContinuingOutput(false);
       if (cancelledRef.current) return;
       const msg = errorMessage(e);
       if (msg.toLowerCase().includes('cancelled')) {
@@ -709,6 +723,7 @@ export function ChatWindow() {
       unlistens.forEach((u) => u());
       setStreaming(false);
       setIsRecoveringContext(false);
+      setIsContinuingOutput(false);
       setStreamId(null);
       assistantIdRef.current = null;
     }
@@ -824,6 +839,7 @@ export function ChatWindow() {
     setAttachError(null);
     setTokenUsage(null);
     setContextTrimNotice(null);
+    setIsContinuingOutput(false);
     setSessionSummary('');
     setRetrievedMemory(null);
     setChatContext(DEFAULT_CHAT_CONTEXT);
@@ -977,7 +993,9 @@ export function ChatWindow() {
             <div style={{ fontSize: 10.5, color: 'var(--fg-dim)', pointerEvents: 'none' }}>
               {isRecoveringContext
                 ? 'Подстраиваем контекст…'
-                : streaming
+                : isContinuingOutput
+                  ? 'Continuing...'
+                  : streaming
                   ? 'Thinking…'
                   : 'Local mode · stays open'}
             </div>
