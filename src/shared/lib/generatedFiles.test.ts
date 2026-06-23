@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseGeneratedFileBlocks, stripGeneratedFileBlocks } from './generatedFiles';
+import {
+  parseGeneratedFileBlocks,
+  resolveGeneratedApplyPath,
+  stripGeneratedFileBlocks,
+} from './generatedFiles';
 
 describe('parseGeneratedFileBlocks', () => {
   it('parses file fences', () => {
@@ -28,6 +32,28 @@ describe('parseGeneratedFileBlocks', () => {
       complete: false,
       content: 'fn main() {\n',
     });
+  });
+
+  it('resolves bare filenames under folder scope', () => {
+    expect(
+      resolveGeneratedApplyPath('index.html', {
+        kind: 'folder',
+        path: 'test/qwentest',
+        treeSummary: '',
+        files: [],
+      })
+    ).toBe('test/qwentest/index.html');
+  });
+
+  it('keeps workspace-relative paths when already prefixed', () => {
+    expect(
+      resolveGeneratedApplyPath('test/qwentest/index.html', {
+        kind: 'folder',
+        path: 'test/qwentest',
+        treeSummary: '',
+        files: [],
+      })
+    ).toBe('test/qwentest/index.html');
   });
 
   it('strips generated file blocks from prose', () => {

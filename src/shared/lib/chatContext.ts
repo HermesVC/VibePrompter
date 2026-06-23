@@ -1,6 +1,6 @@
 /** Layered chat context — mirrors backend `ChatContextPayload`. */
 
-export type ChatScopeKind = 'none' | 'snippet' | 'file' | 'workspace';
+export type ChatScopeKind = 'none' | 'snippet' | 'file' | 'folder' | 'workspace';
 
 export type ApplyPolicy = 'always_ask' | 'always_apply' | 'allow_list_only';
 
@@ -43,6 +43,18 @@ export type ChatScope =
   | {
       kind: 'workspace';
       treeSummary?: string;
+    }
+  | {
+      kind: 'folder';
+      path: string;
+      treeSummary: string;
+      files: Array<{
+        path: string;
+        content: string;
+        contentHash: string;
+        languageId?: string;
+      }>;
+      truncated?: boolean;
     };
 
 export interface ChatContextState {
@@ -93,12 +105,22 @@ export function formatScopeUserContext(scope: ChatScope): string {
       return scope.treeSummary
         ? `[Workspace tree]\n${scope.treeSummary}`
         : '';
+    case 'folder': {
+      let out = `[Attached folder: ${scope.path}]\n[Folder tree]\n${scope.treeSummary}`;
+      if (scope.files.length) {
+        out += '\n\n[Folder files]\n';
+        for (const f of scope.files) {
+          out += `[File: ${f.path}]\n\`\`\`\n${f.content}\n\`\`\`\n`;
+        }
+      }
+      return out;
+    }
     default:
       return '';
   }
 }
 
-export type ScopeAttachmentKind = 'snippet' | 'file' | 'workspace';
+export type ScopeAttachmentKind = 'snippet' | 'file' | 'folder' | 'workspace';
 
 export interface ParsedScopeAttachment {
   kind: ScopeAttachmentKind;
@@ -128,6 +150,19 @@ export function splitUserMessageScope(content: string): {
           ? 'Snippet'
           : header;
     return { userText, attachment: { kind, label, body } };
+  }
+
+  const folder = /(?:^|\n\n)(\[Attached folder:[^\n]+\]\n[\s\S]*)$/;
+  const folderMatch = content.match(folder);
+  if (folderMatch) {
+    return {
+      userText: content.slice(0, folderMatch.index).trim(),
+      attachment: {
+        kind: 'folder',
+        label: folderMatch[0].match(/\[Attached folder:\s*([^\]]+)\]/)?.[1] ?? 'Folder',
+        body: folderMatch[1].trim(),
+      },
+    };
   }
 
   const tree = /(?:^|\n\n)(\[Workspace tree\]\n)([\s\S]*)$/;
@@ -164,6 +199,13 @@ export function scopeLabel(scope: ChatScope): string | null {
       return `File · ${scope.path} (${scope.lineStart}-${scope.lineEnd})`;
     case 'workspace':
       return 'Workspace';
+    case 'folder': {
+      const n = scope.files.length;
+      const suffix = scope.truncated ? ', truncated' : '';
+      return n > 0
+        ? `Folder · ${scope.path} (${n} files${suffix})`
+        : `Folder · ${scope.path}`;
+    }
     default:
       return null;
   }
@@ -175,6 +217,6 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   allowPaths: [],
   allowGlobs: [],
   allowDirs: [],
-  allowExtensions: ['.php', '.ts', '.tsx', '.js', '.rs'],
+  allowExtensions: ['.php', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.rs'],
   denyGlobs: ['.env', '**/.env', '**/vendor/**', '**/node_modules/**'],
 };

@@ -60,7 +60,7 @@ export function ApplyConfirmDialog({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100,
+        zIndex: 10_000,
         background: 'rgba(0,0,0,0.45)',
         display: 'flex',
         alignItems: 'center',

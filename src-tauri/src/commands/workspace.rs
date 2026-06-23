@@ -101,6 +101,70 @@ pub async fn pick_workspace_file(app: AppHandle) -> Result<Option<String>, AppEr
 }
 
 #[tauri::command]
+pub async fn load_folder_scope(
+    state: State<'_, AppState>,
+    path: String,
+    max_content_chars: Option<u32>,
+) -> Result<crate::workspace::FolderScopeDto, AppError> {
+    state
+        .workspace
+        .load_folder_scope(&path, max_content_chars.unwrap_or(12_000))
+        .await
+}
+
+#[tauri::command]
+pub async fn pick_workspace_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let settings = state.workspace.get_settings().await?;
+    let root = settings.workspace_root.trim();
+    if root.is_empty() {
+        return Err(AppError::Validation(
+            "workspace root is not configured — set it in Settings → Workspace".into(),
+        ));
+    }
+    let root_pb = PathBuf::from(root);
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<FilePath>>();
+    app.dialog()
+        .file()
+        .set_title("Select folder in workspace")
+        .set_directory(&root_pb)
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    let path = rx
+        .await
+        .map_err(|_| AppError::Config("dialog closed".into()))?;
+    let Some(picked) = path else {
+        return Ok(None);
+    };
+    let abs = match picked {
+        FilePath::Path(pb) => pb,
+        #[allow(unused)]
+        FilePath::Url(url) => PathBuf::from(url.to_string()),
+    };
+    let canon_root = std::fs::canonicalize(&root_pb)
+        .map_err(|e| AppError::Validation(format!("workspace root invalid: {e}")))?;
+    let canon_picked = std::fs::canonicalize(&abs)
+        .map_err(|e| AppError::Validation(format!("folder not found: {e}")))?;
+    if !canon_picked.starts_with(&canon_root) {
+        return Err(AppError::Validation(
+            "selected folder is outside the workspace root".into(),
+        ));
+    }
+    if !canon_picked.is_dir() {
+        return Err(AppError::Validation("expected a directory".into()));
+    }
+    let rel = canon_picked
+        .strip_prefix(&canon_root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| crate::workspace::rel_display_path(&root_pb, &canon_picked));
+    let rel = rel.trim_matches('/').to_string();
+    Ok(Some(if rel.is_empty() { ".".into() } else { rel }))
+}
+
+#[tauri::command]
 pub async fn preview_workspace_write(
     state: State<'_, AppState>,
     path: String,

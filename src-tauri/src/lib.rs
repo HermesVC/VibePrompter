@@ -178,6 +178,8 @@ pub fn run() {
             commands::workspace_tree_summary,
             commands::pick_workspace_root,
             commands::pick_workspace_file,
+            commands::pick_workspace_folder,
+            commands::load_folder_scope,
             commands::preview_workspace_write,
             commands::apply_workspace_write,
             commands::resolve_workspace_file_path,

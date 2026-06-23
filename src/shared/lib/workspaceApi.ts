@@ -27,6 +27,41 @@ export interface WriteResultDto {
   applied: boolean;
 }
 
+export interface FolderScopeFileDto {
+  path: string;
+  content: string;
+  contentHash: string;
+  languageId?: string;
+}
+
+export interface FolderScopeDto {
+  path: string;
+  treeSummary: string;
+  files: FolderScopeFileDto[];
+  truncated: boolean;
+}
+
+export async function listWorkspaceDir(
+  path?: string,
+  depth?: number
+): Promise<string[]> {
+  return invoke<string[]>('list_workspace_dir', { path, depth });
+}
+
+export async function loadFolderScope(
+  path: string,
+  maxContentChars?: number
+): Promise<FolderScopeDto> {
+  return invoke<FolderScopeDto>('load_folder_scope', {
+    path,
+    maxContentChars,
+  });
+}
+
+export async function pickWorkspaceFolder(): Promise<string | null> {
+  return invoke<string | null>('pick_workspace_folder');
+}
+
 export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
   return invoke<WorkspaceSettings>('get_workspace_settings');
 }

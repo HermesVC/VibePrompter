@@ -1,3 +1,5 @@
+import type { ChatScope } from './chatContext';
+
 export interface GeneratedFileBlock {
   path: string;
   language?: string;
@@ -106,8 +108,25 @@ function unquote(s: string | undefined): string | null {
   return value;
 }
 
-function normalizeGeneratedPath(path: string): string {
+export function normalizeGeneratedPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/{2,}/g, '/');
+}
+
+/** Map a model-generated path to a workspace-relative path for apply. */
+export function resolveGeneratedApplyPath(filePath: string, scope: ChatScope): string {
+  const path = normalizeGeneratedPath(filePath);
+  if (scope.kind !== 'folder') return path;
+
+  const folder = normalizeGeneratedPath(scope.path);
+  if (!folder || folder === '.') return path;
+  if (path === folder || path.startsWith(`${folder}/`)) return path;
+
+  // Models often emit bare filenames when folder scope is active.
+  if (!path.includes('/')) {
+    return normalizeGeneratedPath(`${folder}/${path}`);
+  }
+
+  return path;
 }
 
 function dedupeGeneratedFiles(blocks: GeneratedFileBlock[]): GeneratedFileBlock[] {

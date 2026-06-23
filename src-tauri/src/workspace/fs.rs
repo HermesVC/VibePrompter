@@ -74,12 +74,14 @@ pub fn resolve_under_root(workspace_root: &Path, rel: &str) -> AppResult<PathBuf
 }
 
 pub fn rel_display_path(workspace_root: &Path, abs: &Path) -> String {
-    if let Ok(root) = fs::canonicalize(workspace_root) {
-        if let Ok(rel) = abs.strip_prefix(&root) {
-            return rel.to_string_lossy().replace('\\', "/");
-        }
+    let Ok(root) = fs::canonicalize(workspace_root) else {
+        return abs.to_string_lossy().replace('\\', "/");
+    };
+    let abs_canon = fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
+    if let Ok(rel) = abs_canon.strip_prefix(&root) {
+        return rel.to_string_lossy().replace('\\', "/");
     }
-    abs.to_string_lossy().replace('\\', "/")
+    abs_canon.to_string_lossy().replace('\\', "/")
 }
 
 /// Read a file by absolute path for chat attach when workspace root is not configured.

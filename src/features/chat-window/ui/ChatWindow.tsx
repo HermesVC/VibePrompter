@@ -26,6 +26,7 @@ import {
 } from '@shared/lib/chatSessionSummary';
 import {
   parseGeneratedFileBlocks,
+  resolveGeneratedApplyPath,
   stripGeneratedFileBlocks,
   type GeneratedFileBlock,
 } from '@shared/lib/generatedFiles';
@@ -60,6 +61,7 @@ import { useChatNativeFileDrop } from '../hooks/useChatNativeFileDrop';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ChatContextBar } from './ChatContextBar';
 import { ApplyConfirmDialog } from './ApplyConfirmDialog';
+import { BatchApplyConfirmDialog, type BatchApplyItem } from './BatchApplyConfirmDialog';
 
 interface ChatImage extends ChatImageAttachment {}
 
@@ -181,6 +183,10 @@ export function ChatWindow() {
     before: string;
     after: string;
     decision: PolicyDecision;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
+  const [batchApplyDialog, setBatchApplyDialog] = useState<{
+    items: BatchApplyItem[];
     onConfirm: () => Promise<void>;
   } | null>(null);
   const chatContextRef = useRef(chatContext);
@@ -492,58 +498,116 @@ export function ChatWindow() {
     }
   }, []);
 
-  const promptApplyGeneratedFile = useCallback(async (file: GeneratedFileBlock) => {
-    if (!file.complete || !file.content.trim()) return;
-    try {
-      const preview = await previewWorkspaceWrite(file.path, file.content);
-      const before =
-        preview.lineCountBefore > 0
-          ? await readWorkspaceFile(file.path)
-              .then((f) => f.content)
-              .catch(() => '')
-          : '';
-      const settings = await getWorkspaceSettings();
-      const autoApply =
-        preview.decision === 'allow' && settings.applyPolicy === 'always_apply';
-
-      const doWrite = async () => {
-        const result = await applyWorkspaceWrite(
-          file.path,
-          file.content,
-          preview.contentHashBefore,
-          true
-        );
-        setChatContext((prev) =>
-          prev.scope.kind === 'file' && prev.scope.path === file.path
-            ? {
-                ...prev,
-                scope: {
-                  ...prev.scope,
-                  content: file.content,
-                  contentHash: result.contentHash,
-                },
-              }
-            : prev
-        );
-      };
-
-      if (autoApply) {
-        await doWrite();
-        return;
+  const updateScopeAfterGeneratedWrite = useCallback((path: string, content: string, contentHash: string) => {
+    setChatContext((prev) => {
+      if (prev.scope.kind === 'file' && prev.scope.path === path) {
+        return {
+          ...prev,
+          scope: { ...prev.scope, content, contentHash },
+        };
       }
-
-      setApplyDialog({
-        title: preview.lineCountBefore > 0 ? 'Apply generated file' : 'Create generated file',
-        path: file.path,
-        before,
-        after: file.content,
-        decision: preview.decision,
-        onConfirm: doWrite,
-      });
-    } catch (e) {
-      setAttachError(errorMessage(e));
-    }
+      if (prev.scope.kind === 'folder') {
+        const files = prev.scope.files.map((f) =>
+          f.path === path ? { ...f, content, contentHash } : f
+        );
+        return { ...prev, scope: { ...prev.scope, files } };
+      }
+      return prev;
+    });
   }, []);
+
+  const promptApplyGeneratedFiles = useCallback(
+    async (files: GeneratedFileBlock[]) => {
+      const scope = chatContextRef.current.scope;
+      const targets = files
+        .filter((f) => f.complete && f.content.trim())
+        .map((file) => ({
+          ...file,
+          path: resolveGeneratedApplyPath(file.path, scope),
+        }));
+      if (!targets.length) return;
+      setAttachError(null);
+      try {
+        const items = await Promise.all(
+          targets.map(async (file) => {
+            const preview = await previewWorkspaceWrite(file.path, file.content);
+            const before =
+              preview.lineCountBefore > 0
+                ? await readWorkspaceFile(file.path)
+                    .then((f) => f.content)
+                    .catch(() => '')
+                : '';
+            return { file, preview, before };
+          })
+        );
+
+        const worst: PolicyDecision = items.some((i) => i.preview.decision === 'deny')
+          ? 'deny'
+          : items.some((i) => i.preview.decision === 'ask')
+            ? 'ask'
+            : 'allow';
+
+        const applyAll = async () => {
+          for (const { file, preview } of items) {
+            if (preview.decision === 'deny') continue;
+            const result = await applyWorkspaceWrite(
+              file.path,
+              file.content,
+              preview.contentHashBefore,
+              true
+            );
+            updateScopeAfterGeneratedWrite(file.path, file.content, result.contentHash);
+          }
+        };
+
+        const settings = await getWorkspaceSettings();
+        if (worst === 'allow' && settings.applyPolicy === 'always_apply') {
+          await applyAll();
+          return;
+        }
+
+        if (items.length === 1) {
+          const { file, preview, before } = items[0];
+          setBatchApplyDialog(null);
+          setApplyDialog({
+            title: preview.lineCountBefore > 0 ? 'Apply generated file' : 'Create generated file',
+            path: file.path,
+            before,
+            after: file.content,
+            decision: preview.decision,
+            onConfirm: async () => {
+              const result = await applyWorkspaceWrite(
+                file.path,
+                file.content,
+                preview.contentHashBefore,
+                true
+              );
+              updateScopeAfterGeneratedWrite(file.path, file.content, result.contentHash);
+            },
+          });
+          return;
+        }
+
+        setBatchApplyDialog({
+          items: items.map(({ file, preview, before }) => ({
+            path: file.path,
+            before,
+            after: file.content,
+            decision: preview.decision,
+          })),
+          onConfirm: applyAll,
+        });
+        setApplyDialog(null);
+      } catch (e) {
+        setAttachError(errorMessage(e));
+      }
+    },
+    [updateScopeAfterGeneratedWrite]
+  );
+
+  const promptApplyGeneratedFile = useCallback(async (file: GeneratedFileBlock) => {
+    await promptApplyGeneratedFiles([file]);
+  }, [promptApplyGeneratedFiles]);
 
   const send = useCallback(async () => {
     const text = draft.trim();
@@ -1286,6 +1350,7 @@ export function ChatWindow() {
                   : undefined
               }
               onApplyGeneratedFile={(file) => void promptApplyGeneratedFile(file)}
+              onApplyGeneratedFiles={(files) => void promptApplyGeneratedFiles(files)}
             />
           ))}
         </div>
@@ -1497,6 +1562,15 @@ export function ChatWindow() {
           }
         }}
       />
+      <BatchApplyConfirmDialog
+        open={batchApplyDialog !== null}
+        items={batchApplyDialog?.items ?? []}
+        onCancel={() => setBatchApplyDialog(null)}
+        onConfirm={async () => {
+          if (!batchApplyDialog) return;
+          await batchApplyDialog.onConfirm();
+        }}
+      />
     </div>
   );
 }
@@ -1519,6 +1593,8 @@ function UserMessageBody({ content }: { content: string }) {
   const attachTitle =
     attachment.kind === 'file'
       ? `File · ${attachment.label}`
+      : attachment.kind === 'folder'
+        ? `Folder · ${attachment.label}`
       : attachment.kind === 'snippet'
         ? 'Snippet'
         : attachment.label;
@@ -1621,12 +1697,14 @@ function MessageBubble({
   scopeWorking,
   onApply,
   onApplyGeneratedFile,
+  onApplyGeneratedFiles,
 }: {
   message: ChatMessage;
   scopeKind?: string;
   scopeWorking?: string;
   onApply?: () => void;
   onApplyGeneratedFile?: (file: GeneratedFileBlock) => void;
+  onApplyGeneratedFiles?: (files: GeneratedFileBlock[]) => void;
 }) {
   const isUser = m.role === 'user';
   const generatedFiles = !isUser ? parseGeneratedFileBlocks(m.content) : [];
@@ -1679,7 +1757,11 @@ function MessageBubble({
           assistantDisplay || null
         )}
         {!isUser && generatedFiles.length > 0 && (
-          <GeneratedFilesList files={generatedFiles} onApply={onApplyGeneratedFile} />
+          <GeneratedFilesList
+            files={generatedFiles}
+            onApply={onApplyGeneratedFile}
+            onApplySelected={onApplyGeneratedFiles}
+          />
         )}
         {m.streaming && (
           <span
@@ -1728,13 +1810,35 @@ function MessageBubble({
 function GeneratedFilesList({
   files,
   onApply,
+  onApplySelected,
 }: {
   files: GeneratedFileBlock[];
   onApply?: (file: GeneratedFileBlock) => void;
+  onApplySelected?: (files: GeneratedFileBlock[]) => void;
 }) {
+  const completePaths = useMemo(
+    () => files.filter((f) => f.complete && f.content.trim()).map((f) => f.path),
+    [files]
+  );
   const [openPath, setOpenPath] = useState(files[0]?.path ?? '');
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(completePaths));
+
+  useEffect(() => {
+    setSelected(new Set(completePaths));
+  }, [completePaths.join('|')]);
+
   const open = files.find((f) => f.path === openPath) ?? files[0];
   if (!open) return null;
+
+  const selectedFiles = files.filter((f) => selected.has(f.path) && f.complete);
+  const toggle = (path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   return (
     <div
@@ -1759,39 +1863,85 @@ function GeneratedFilesList({
         <I.code size={13} />
         <span>Generated files</span>
         <span style={{ color: 'var(--fg-dim)', fontWeight: 500 }}>({files.length})</span>
+        {selectedFiles.length > 1 && onApplySelected ? (
+          <button
+            type="button"
+            onClick={() => onApplySelected(selectedFiles)}
+            style={{
+              marginLeft: 'auto',
+              fontSize: 10,
+              padding: '2px 8px',
+              borderRadius: 6,
+              border: '.5px solid var(--accent-tint-2)',
+              background: 'var(--accent-tint)',
+              color: 'var(--accent)',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            Apply selected ({selectedFiles.length})
+          </button>
+        ) : null}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {files.map((file) => {
           const active = file.path === open.path;
+          const checked = selected.has(file.path);
           return (
-            <button
+            <div
               key={file.path}
-              type="button"
-              onClick={() => setOpenPath(file.path)}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr auto',
+                gridTemplateColumns: 'auto 1fr auto auto',
                 alignItems: 'center',
-                gap: 8,
+                gap: 6,
                 width: '100%',
                 minHeight: 28,
                 border: '.5px solid var(--border)',
                 borderRadius: 6,
                 background: active ? 'var(--accent-tint)' : 'var(--surface)',
-                color: active ? 'var(--accent)' : 'var(--fg)',
-                padding: '5px 7px',
-                cursor: 'pointer',
-                textAlign: 'left',
-                fontSize: 11,
+                padding: '3px 6px',
               }}
             >
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!file.complete}
+                onChange={() => toggle(file.path)}
+                title="Include in batch apply"
+              />
+              <button
+                type="button"
+                onClick={() => setOpenPath(file.path)}
+                style={{
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  border: 'none',
+                  background: 'transparent',
+                  color: active ? 'var(--accent)' : 'var(--fg)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontSize: 11,
+                  padding: 0,
+                }}
+              >
                 {file.path}
-              </span>
+              </button>
               <span style={{ color: file.complete ? 'var(--fg-dim)' : 'var(--warn)', fontSize: 10 }}>
                 {file.complete ? file.language ?? 'file' : 'incomplete'}
               </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onApply?.(file)}
+                disabled={!file.complete || !onApply}
+                title={file.complete ? 'Apply this file' : 'Wait until generation completes'}
+                style={miniFileBtnStyle(!file.complete || !onApply)}
+              >
+                <I.download size={11} />
+              </button>
+            </div>
           );
         })}
       </div>

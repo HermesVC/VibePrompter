@@ -89,6 +89,35 @@ pub enum ChatScope {
         #[serde(default)]
         tree_summary: Option<String>,
     },
+    Folder {
+        path: String,
+        #[serde(default)]
+        tree_summary: String,
+        #[serde(default)]
+        files: Vec<FolderScopeFile>,
+        #[serde(default)]
+        truncated: bool,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderScopeFile {
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub content_hash: String,
+    #[serde(default)]
+    pub language_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderScopeDto {
+    pub path: String,
+    pub tree_summary: String,
+    pub files: Vec<FolderScopeFile>,
+    pub truncated: bool,
 }
 
 fn one() -> u32 {

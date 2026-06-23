@@ -200,6 +200,44 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
                  <workspace-tree>\n{tree}\n</workspace-tree>"
             ));
         }
+        ChatScope::Folder {
+            path,
+            tree_summary,
+            files,
+            truncated,
+        } => {
+            let mut block = format!(
+                "You are in FOLDER scoped session for `{path}`.\n\
+                 Rules:\n\
+                 - Refer to files by relative paths from the listing below.\n\
+                 - File bodies included in this scope are authoritative for those paths.\n\
+                 - Do not claim to have read files that are not listed with contents.\n\
+                 - Prefer small, targeted edits; use file fences with paths when changing multiple files.\n\
+                 - For new or changed files in this folder, use ```file paths relative to the workspace root \
+                 (prefix with `{path}/` when the scoped path is not `.`, e.g. `{path}/index.html`).\n\n\
+                 <folder-tree path=\"{path}\">\n{tree_summary}\n</folder-tree>"
+            );
+            if *truncated {
+                block.push_str(
+                    "\n\n(Note: not all files in this folder fit the context budget — tree lists more than bodies included.)",
+                );
+            }
+            if !files.is_empty() {
+                block.push_str("\n\nIncluded file bodies:\n");
+                for f in files {
+                    let lang = f
+                        .language_id
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("plaintext");
+                    block.push_str(&format!(
+                        "<file path=\"{}\" lang=\"{}\">\n{}\n</file>\n",
+                        f.path, lang, f.content
+                    ));
+                }
+            }
+            parts.push(block);
+        }
     }
 
     for m in &ctx.modifiers {
@@ -229,6 +267,11 @@ fn scope_language(scope: &ChatScope) -> Option<String> {
         } => language_id
             .clone()
             .or_else(|| Some(detect_language(Some(path), Some(content)))),
+        ChatScope::Folder { files, .. } => files.first().and_then(|f| {
+            f.language_id
+                .clone()
+                .or_else(|| Some(detect_language(Some(&f.path), Some(&f.content))))
+        }),
         _ => None,
     }
 }

@@ -831,6 +831,7 @@ fn augment_messages_with_scope(
     }
     if last.content.contains("[Attached snippet")
         || last.content.contains("[Attached file")
+        || last.content.contains("[Attached folder")
         || last.content.contains("[Workspace tree]")
     {
         return;
@@ -863,6 +864,21 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
             .filter(|s| !s.is_empty())
             .map(|tree| format!("[Workspace tree]\n{tree}"))
             .unwrap_or_default(),
+        ChatScope::Folder {
+            path,
+            tree_summary,
+            files,
+            ..
+        } => {
+            let mut out = format!("[Attached folder: {path}]\n[Folder tree]\n{tree_summary}");
+            if !files.is_empty() {
+                out.push_str("\n\n[Folder files]\n");
+                for f in files {
+                    out.push_str(&format!("[File: {}]\n```\n{}\n```\n", f.path, f.content));
+                }
+            }
+            out
+        }
     }
 }
 

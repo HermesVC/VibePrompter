@@ -10,7 +10,9 @@ import { captureEditorSelection, languageIdForSnippet } from '@shared/lib/clipbo
 import { errorMessage } from '@shared/lib/utils';
 import {
   listChatModifiers,
+  loadFolderScope,
   pickWorkspaceFile,
+  pickWorkspaceFolder,
   readWorkspaceFile,
   resolveWorkspaceFilePath,
   workspaceTreeSummary,
@@ -83,6 +85,29 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
     }
   }, [onError, setScope]);
 
+  const attachFolder = useCallback(async () => {
+    onError(null);
+    try {
+      const picked = await pickWorkspaceFolder();
+      if (!picked) return;
+      const bundle = await loadFolderScope(picked, 12_000);
+      setScope({
+        kind: 'folder',
+        path: bundle.path,
+        treeSummary: bundle.treeSummary,
+        files: bundle.files.map((f) => ({
+          path: f.path,
+          content: f.content,
+          contentHash: f.contentHash,
+          languageId: f.languageId,
+        })),
+        truncated: bundle.truncated,
+      });
+    } catch (e) {
+      onError(errorMessage(e));
+    }
+  }, [onError, setScope]);
+
   const attachWorkspace = useCallback(async () => {
     onError(null);
     try {
@@ -139,6 +164,14 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           title="Pick a file — contents go into the prompt"
         >
           File
+        </ScopeBtn>
+        <ScopeBtn
+          active={ctx.scope.kind === 'folder'}
+          disabled={disabled}
+          onClick={attachFolder}
+          title="Pick a folder — tree + file bodies (within budget)"
+        >
+          Folder
         </ScopeBtn>
         <ScopeBtn
           active={ctx.scope.kind === 'workspace'}
@@ -207,6 +240,22 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           preview={
             ctx.scope.kind === 'file'
               ? ctx.scope.content.split('\n').slice(0, 4).join('\n')
+              : ''
+          }
+        />
+      )}
+      {ctx.scope.kind === 'folder' && (
+        <ScopePreview
+          title={
+            ctx.scope.kind === 'folder'
+              ? `Папка: ${ctx.scope.path} · ${ctx.scope.files.length} файлов${
+                  ctx.scope.truncated ? ' (не все влезли)' : ''
+                }`
+              : ''
+          }
+          preview={
+            ctx.scope.kind === 'folder'
+              ? ctx.scope.treeSummary.split('\n').slice(0, 5).join('\n')
               : ''
           }
         />
