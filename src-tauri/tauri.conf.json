@@ -51,6 +51,22 @@
         "visible": false,
         "focus": true,
         "shadow": false
+      },
+      {
+        "label": "chat-window",
+        "title": "VibePrompter Chat",
+        "width": 420,
+        "height": 560,
+        "minWidth": 320,
+        "minHeight": 400,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "visible": false,
+        "focus": true,
+        "shadow": false
       }
     ],
     "security": {

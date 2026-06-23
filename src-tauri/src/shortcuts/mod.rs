@@ -99,6 +99,7 @@ pub(crate) fn dispatch_action(app: &AppHandle, action: &str) {
             }
         }
         "open_palette" => crate::tray::toggle_main_window(app),
+        "open_chat" => crate::chat::toggle_chat_window(app),
         // Rewrite / Grammar / Summarize all drive the same recipe: grab the
         // user's current text *selection* (not just clipboard) via a
         // synthesized Ctrl+C, open the refine overlay near the cursor,

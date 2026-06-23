@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::models::{
-    ChatImage, ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
+    ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
     TokenUsage,
 };
 fn openai_message_content(msg: &ChatMessage) -> serde_json::Value {
@@ -62,6 +62,7 @@ fn anthropic_message_content(msg: &ChatMessage) -> serde_json::Value {
 #[cfg(test)]
 mod content_tests {
     use super::*;
+    use crate::models::ChatImage;
 
     #[test]
     fn openai_text_only_message_stays_a_string() {

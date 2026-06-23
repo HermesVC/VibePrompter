@@ -5,7 +5,8 @@
   "windows": [
     "main",
     "mode-hud",
-    "refine-overlay"
+    "refine-overlay",
+    "chat-window"
   ],
   "permissions": [
     "core:default",

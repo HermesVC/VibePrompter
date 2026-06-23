@@ -5,6 +5,7 @@ import { AppRouter } from './router';
 import { BackendThemeBridge } from './BackendThemeBridge';
 import { ModeHud } from '@features/overlay-hud';
 import { RefineOverlay } from '@features/refine-overlay';
+import { ChatWindow } from '@features/chat-window';
 import { WindowTitlebar, AppIcon } from '@shared/ui';
 
 /**
@@ -47,6 +48,9 @@ export function App() {
   }
   if (WINDOW_LABEL === 'refine-overlay') {
     return <RefineOverlay />;
+  }
+  if (WINDOW_LABEL === 'chat-window') {
+    return <ChatWindow />;
   }
   return (
     <AppProviders>

@@ -94,6 +94,7 @@ impl TrayState {
 #[derive(Debug, Default, Clone)]
 pub struct TrayAccelerators {
     pub palette: Option<String>,
+    pub chat: Option<String>,
     pub mode_switch: Option<String>,
 }
 
@@ -130,6 +131,14 @@ pub fn init(
         accels.palette.as_deref(),
     )
     .map_err(|e| AppError::Config(format!("tray menu palette: {e}")))?;
+    let chat_item = MenuItem::with_id(
+        app,
+        "tray.chat",
+        "Open chat",
+        true,
+        accels.chat.as_deref(),
+    )
+    .map_err(|e| AppError::Config(format!("tray menu chat: {e}")))?;
     let cycle_item = MenuItem::with_id(
         app,
         "tray.cycle",
@@ -187,6 +196,7 @@ pub fn init(
         &[
             &show_item,
             &palette_item,
+            &chat_item,
             &cycle_item,
             &modes_submenu,
             &sep,
@@ -261,6 +271,14 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         accels.palette.as_deref(),
     )
     .map_err(|e| AppError::Config(format!("rebuild palette: {e}")))?;
+    let chat_item = MenuItem::with_id(
+        app,
+        "tray.chat",
+        "Open chat",
+        true,
+        accels.chat.as_deref(),
+    )
+    .map_err(|e| AppError::Config(format!("rebuild chat: {e}")))?;
     let cycle_item = MenuItem::with_id(
         app,
         "tray.cycle",
@@ -310,6 +328,7 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         &[
             &show_item,
             &palette_item,
+            &chat_item,
             &cycle_item,
             &modes_submenu,
             &sep,
@@ -428,6 +447,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id.as_ref() {
         "tray.show" => show_main_window(app),
         "tray.palette" => toggle_main_window(app),
+        "tray.chat" => crate::chat::toggle_chat_window(app),
         "tray.cycle" => {
             if let Err(e) = cycle_mode(app) {
                 tracing::warn!("tray cycle_mode failed: {e}");

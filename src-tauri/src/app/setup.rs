@@ -128,6 +128,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     };
     let tray_accels = crate::tray::TrayAccelerators {
         palette: find_accel("open_palette"),
+        chat: find_accel("open_chat"),
         mode_switch: find_accel("mode_switch"),
     };
 

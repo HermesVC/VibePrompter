@@ -55,6 +55,7 @@ pub async fn list_global_shortcuts(
                 i.action.as_str(),
                 "mode_switch"
                     | "open_palette"
+                    | "open_chat"
                     | "rewrite_selection"
                     | "fix_grammar"
                     | "summarize"

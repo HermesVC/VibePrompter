@@ -1,6 +1,7 @@
 //! Tauri command handlers — thin IPC adapters. Business logic lives in `services`.
 
 pub mod catalog;
+pub mod chat;
 pub mod connections;
 pub mod diagnostics;
 pub mod history;
@@ -9,6 +10,7 @@ pub mod settings;
 pub mod shortcuts;
 
 pub use catalog::*;
+pub use chat::*;
 pub use connections::*;
 pub use diagnostics::*;
 pub use history::*;

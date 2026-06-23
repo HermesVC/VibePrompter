@@ -16,6 +16,7 @@ mod utils;
 mod platform;
 
 // Stub modules — populated by later sub-projects.
+mod chat;
 mod clipboard;
 mod overlay;
 mod prompts;
@@ -159,6 +160,9 @@ pub fn run() {
             commands::refine_followup,
             commands::refine_switch_connection,
             commands::refine_copy_and_hide,
+            commands::chat_toggle,
+            commands::chat_hide,
+            commands::chat_complete_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

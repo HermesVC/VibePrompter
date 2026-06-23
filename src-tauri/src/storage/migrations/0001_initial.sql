@@ -247,7 +247,8 @@ INSERT OR IGNORE INTO shortcuts (id, label, hint, icon_name, accelerator, action
  ('rewrite', 'Rewrite selection',    'Improve writing in place.',  'pen',       'Ctrl+Alt+F',     'rewrite_selection', 1, 1, '2026-01-01T00:00:00Z'),
  ('grammar', 'Fix grammar',          'Quick grammar pass.',        'text',      'Ctrl+Alt+G',     'fix_grammar',       1, 2, '2026-01-01T00:00:00Z'),
  ('summary', 'Quick summarize',      'Compress to bullets.',       'summarize', 'Ctrl+Alt+S',     'summarize',         1, 3, '2026-01-01T00:00:00Z'),
- ('modes',   'Toggle modes',         'Cycle the active mode.',     'layers',    'Ctrl+Alt+M',     'mode_switch',       1, 4, '2026-01-01T00:00:00Z');
+ ('modes',   'Toggle modes',         'Cycle the active mode.',     'layers',    'Ctrl+Alt+M',     'mode_switch',       1, 4, '2026-01-01T00:00:00Z'),
+ ('chat',    'Open chat',            'Talk directly with your LLM.','mail',      'Ctrl+Alt+C',     'open_chat',         1, 5, '2026-01-01T00:00:00Z');
 
 -- Default settings. Dead keys (`auto_paste`, `clipboard_fallback`,
 -- `low_memory_mode`, `concurrent_requests`) that previous migrations dropped
