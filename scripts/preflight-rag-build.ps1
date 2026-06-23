@@ -153,17 +153,31 @@ function Test-EmbeddingEndpoint([string] $BaseUrl, [string[]] $FallbackModels) {
     return $null
 }
 
-function Run-CheckedCommand([string] $Label, [string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory) {
+function Run-CheckedCommand(
+    [string] $Label,
+    [string] $FilePath,
+    [string[]] $Arguments,
+    [string] $WorkingDirectory,
+    [int] $MaxAttempts = 1
+) {
     Write-Step $Label
-    Push-Location $WorkingDirectory
-    try {
-        & $FilePath @Arguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Label failed with exit code $LASTEXITCODE"
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Push-Location $WorkingDirectory
+        try {
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok $Label
+                return
+            }
+            if ($attempt -lt $MaxAttempts) {
+                Write-Warn "$Label failed with exit code $LASTEXITCODE; retrying ($attempt/$MaxAttempts)..."
+                Start-Sleep -Seconds 2
+            } else {
+                throw "$Label failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
         }
-        Write-Ok $Label
-    } finally {
-        Pop-Location
     }
 }
 
@@ -189,7 +203,8 @@ if (-not $SkipNpmBuild) {
         -Label "npm run build" `
         -FilePath "cmd.exe" `
         -Arguments @("/d", "/c", "npm run build") `
-        -WorkingDirectory $repoRoot
+        -WorkingDirectory $repoRoot `
+        -MaxAttempts 3
 }
 
 if (-not $SkipCargoCheck) {
