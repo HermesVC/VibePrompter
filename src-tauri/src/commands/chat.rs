@@ -935,7 +935,10 @@ mod chat_command_tests {
     fn stitches_repeated_continuation_overlap() {
         let a = "function demo() {\n    return 1;\n";
         let b = "    return 1;\n}\n";
-        assert_eq!(stitch_continuation(a, b), "function demo() {\n    return 1;\n}\n");
+        assert_eq!(
+            stitch_continuation(a, b),
+            "function demo() {\n    return 1;\n}\n"
+        );
     }
 
     #[test]

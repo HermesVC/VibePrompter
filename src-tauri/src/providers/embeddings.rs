@@ -50,9 +50,8 @@ pub async fn embed_texts(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        AppError::Validation("no embedding model candidates available".into())
-    }))
+    Err(last_err
+        .unwrap_or_else(|| AppError::Validation("no embedding model candidates available".into())))
 }
 
 async fn embed_model_candidates(
@@ -94,7 +93,10 @@ async fn discover_embedding_models(conn: &ConnectionRow, cfg: &HttpConfig) -> Ve
     {
         Ok(resp) if resp.status().is_success() => resp,
         Ok(resp) => {
-            tracing::debug!("embedding model discovery skipped: /models {}", resp.status());
+            tracing::debug!(
+                "embedding model discovery skipped: /models {}",
+                resp.status()
+            );
             return Vec::new();
         }
         Err(e) => {

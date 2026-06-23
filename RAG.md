@@ -258,6 +258,27 @@ Default/fallback embed models в коде: `text-embedding-nomic-embed-text-v1.5
 
 ---
 
+## Compact semantic memory policy
+
+Vector retrieval is deliberately small and typed. The backend should not inject
+raw top-k chat excerpts into the system prompt:
+
+- low-signal turns such as greetings, "ok", "yes", and assistant hello text are
+  skipped before indexing;
+- retrieved snippets are classified as `decision`, `bug`, `repo`, `code`,
+  `preference`, or `note`;
+- important classes get a small ranking boost, but still need semantic
+  similarity to the current query;
+- each snippet is whitespace-compacted and trimmed;
+- the whole semantic block is capped to a small budget, with an absolute max,
+  so a huge model context does not accidentally create a huge memory block.
+
+The goal is for semantic memory to recall durable facts, decisions, bugs,
+repo paths, code context, and user preferences. It should not replay the chat
+transcript.
+
+---
+
 ## Repo preflight script
 
 Для проверки RAG/embeddings и сборки используем единый скрипт:

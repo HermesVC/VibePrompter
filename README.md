@@ -129,6 +129,11 @@ powershell -ExecutionPolicy Bypass -File scripts/preflight-rag-build.ps1 `
   -DockerComposeFile docker-compose.yml
 ```
 
+Chat semantic memory is intentionally compact. The backend filters low-signal
+turns such as greetings, classifies retrieved snippets as `decision`, `bug`,
+`repo`, `code`, `preference`, or `note`, and caps retrieval to a small prompt
+budget so long context recovery does not spend thousands of tokens on memory.
+
 ---
 
 ## Contributing
