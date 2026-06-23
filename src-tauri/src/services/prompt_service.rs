@@ -73,6 +73,7 @@ impl PromptService {
                 &mode.system_prompt,
                 &mode.variables,
             )),
+            ..Default::default()
         };
 
         // Precedence: explicit `connection_id` arg → mode's `provider_override`
@@ -202,6 +203,7 @@ pub async fn run_with_row(
                 &mode.system_prompt,
                 &mode.variables,
             )),
+            ..Default::default()
         },
         // `run_with_row` is a dead-code escape hatch — use default HTTP
         // config; real callers go through `ConnectionService` which threads

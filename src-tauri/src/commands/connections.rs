@@ -171,6 +171,7 @@ pub async fn run_prompt_stream(
             &mode.system_prompt,
             &mode.variables,
         )),
+        ..Default::default()
     };
 
     let token_event = format!("stream:{stream_id}:token");

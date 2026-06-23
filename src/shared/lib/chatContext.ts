@@ -95,6 +95,14 @@ export function buildChatContextPayload(ctx: ChatContextState): {
 }
 
 /** Duplicate scoped content into the user turn — local models often ignore system. */
+const SCOPE_TREE_MAX_CHARS = 10_000;
+const SCOPE_FILES_MAX_CHARS = 14_000;
+
+function capText(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n… (${label} truncated)`;
+}
+
 export function formatScopeUserContext(scope: ChatScope): string {
   switch (scope.kind) {
     case 'snippet':
@@ -103,14 +111,21 @@ export function formatScopeUserContext(scope: ChatScope): string {
       return `[Attached file: ${scope.path} (lines ${scope.lineStart}-${scope.lineEnd})]\n\`\`\`\n${scope.content}\n\`\`\``;
     case 'workspace':
       return scope.treeSummary
-        ? `[Workspace tree]\n${scope.treeSummary}`
+        ? `[Workspace tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'workspace tree')}`
         : '';
     case 'folder': {
-      let out = `[Attached folder: ${scope.path}]\n[Folder tree]\n${scope.treeSummary}`;
+      let out = `[Attached folder: ${scope.path}]\n[Folder tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'folder tree')}`;
       if (scope.files.length) {
         out += '\n\n[Folder files]\n';
+        let used = 0;
         for (const f of scope.files) {
-          out += `[File: ${f.path}]\n\`\`\`\n${f.content}\n\`\`\`\n`;
+          const block = `[File: ${f.path}]\n\`\`\`\n${f.content}\n\`\`\`\n`;
+          if (used > 0 && used + block.length > SCOPE_FILES_MAX_CHARS) {
+            out += `… (folder file bodies truncated, ${scope.files.length} total)\n`;
+            break;
+          }
+          out += block;
+          used += block.length;
         }
       }
       return out;

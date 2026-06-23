@@ -139,8 +139,14 @@ pub fn plan_sliding_window_with_aggression(
         let candidate_tokens: u32 = candidate.iter().map(estimate_message_tokens).sum();
         if candidate_tokens <= budget || active_rev.is_empty() {
             active_rev = candidate;
+        } else {
+            let mut trimmed = candidate;
+            shrink_oversized_active(&mut trimmed, budget);
+            active_rev = trimmed;
         }
     }
+
+    shrink_oversized_active(&mut active_rev, budget);
 
     let evicted_len = messages.len().saturating_sub(active_rev.len());
     let evicted = if evicted_len > 0 {
@@ -152,6 +158,24 @@ pub fn plan_sliding_window_with_aggression(
     WindowPlan {
         active: active_rev,
         evicted,
+    }
+}
+
+/// Conservative per-message cap so a single scope attachment cannot blow the context.
+fn shrink_oversized_active(active: &mut Vec<ChatMessage>, budget_tokens: u32) {
+    let max_chars = ((budget_tokens.max(2048) / 2) as usize).saturating_mul(3);
+    for m in active.iter_mut() {
+        if m.content.chars().count() > max_chars {
+            m.content = truncate_turn_content(&m.content, max_chars);
+        }
+    }
+    let mut total: u32 = active.iter().map(estimate_message_tokens).sum();
+    while total > budget_tokens && active.len() > 1 {
+        let idx = active.len().saturating_sub(2);
+        let current = active[idx].content.chars().count();
+        let shrink_to = (current / 2).max(2_000).min(current);
+        active[idx].content = truncate_turn_content(&active[idx].content, shrink_to);
+        total = active.iter().map(estimate_message_tokens).sum();
     }
 }
 
@@ -248,11 +272,24 @@ pub async fn compress_evicted_turns(
     let params = CompletionParams {
         model: None,
         temperature: Some(0.2),
-        max_tokens: Some(700),
+        max_tokens: Some(400),
         system: Some(COMPRESS_SYSTEM.into()),
+        disable_thinking: Some(true),
+        retry: Some(false),
     };
 
-    let result = providers::complete(conn, messages, params, cfg).await?;
+    const COMPRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+    let compress_future =
+        providers::complete(conn, messages, params, cfg);
+    let result = match tokio::time::timeout(COMPRESS_TIMEOUT, compress_future).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(AppError::Validation(
+                "memory compression timed out".into(),
+            ));
+        }
+    };
     let merged = result.text.trim();
     if merged.is_empty() {
         return Err(AppError::Validation(

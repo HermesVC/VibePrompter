@@ -225,6 +225,13 @@ pub async fn chat_complete_stream(
             .collect();
 
         if !evicted_for_compression.is_empty() {
+            let _ = app.emit(
+                &status_event,
+                serde_json::json!({
+                    "phase": "compressing_memory",
+                    "generation": stream_generation,
+                }),
+            );
             match crate::chat::compress_evicted_turns(
                 &row,
                 &cfg,
@@ -323,6 +330,7 @@ pub async fn chat_complete_stream(
             temperature: Some(temperature),
             max_tokens: Some(effective_max_tokens),
             system: request_system.filter(|s| !s.trim().is_empty()),
+            ..Default::default()
         };
 
         let max_out_for_post = effective_max_tokens;

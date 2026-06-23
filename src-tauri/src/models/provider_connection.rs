@@ -140,6 +140,12 @@ pub struct CompletionParams {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub system: Option<String>,
+    /// Disable Qwen-style thinking for internal calls (memory compression).
+    #[serde(default)]
+    pub disable_thinking: Option<bool>,
+    /// When false, skip transient retry loop (faster fail for auxiliary calls).
+    #[serde(default)]
+    pub retry: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

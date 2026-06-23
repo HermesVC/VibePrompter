@@ -76,7 +76,7 @@ impl WorkspaceService {
         if entries.is_empty() {
             return Ok("(empty workspace)".into());
         }
-        Ok(entries.join("\n"))
+        Ok(cap_tree_lines(&entries, 10_000))
     }
 
     /// Load folder scope: directory tree + file bodies up to a character budget.
@@ -92,7 +92,7 @@ impl WorkspaceService {
         let tree_summary = if entries.is_empty() {
             "(empty folder)".into()
         } else {
-            entries.join("\n")
+            cap_tree_lines(&entries, 10_000)
         };
 
         let max_chars = max_content_chars.max(1024) as usize;
@@ -198,6 +198,22 @@ impl WorkspaceService {
             applied: true,
         })
     }
+}
+
+fn cap_tree_lines(entries: &[String], max_chars: usize) -> String {
+    let mut out = String::new();
+    for entry in entries {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        if out.chars().count() + entry.chars().count() + 48 > max_chars {
+            let n = entries.len();
+            let shown = out.lines().count();
+            return format!("{out}\n… ({shown} of {n} entries, tree truncated)");
+        }
+        out.push_str(entry);
+    }
+    out
 }
 
 fn normalize_folder_scope_path(workspace_root: &Path, path: &str) -> String {

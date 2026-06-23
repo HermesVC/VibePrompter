@@ -334,15 +334,19 @@ pub async fn complete(
         })?;
 
     let started = std::time::Instant::now();
-    let (text, usage) = with_retry(|| async {
+    let call = || async {
         match kind {
             ConnectionKind::Openai => openai_chat(conn, &model, &messages, &params, cfg).await,
             ConnectionKind::Anthropic => {
                 anthropic_chat(conn, &model, &messages, &params, cfg).await
             }
         }
-    })
-    .await?;
+    };
+    let (text, usage) = if params.retry == Some(false) {
+        call().await?
+    } else {
+        with_retry(call).await?
+    };
 
     Ok(CompletionResult {
         text,
@@ -898,6 +902,25 @@ fn json_u64(v: &serde_json::Value) -> Option<u64> {
 struct OpenAiChoiceMessage {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+}
+
+fn openai_assistant_text(msg: &OpenAiChoiceMessage) -> String {
+    if let Some(c) = msg.content.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        return c.to_string();
+    }
+    if let Some(r) = msg.reasoning_content.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    {
+        // Thinking models may put the answer only in reasoning when thinking is on.
+        if let Some(after) = r.rsplit_once("\n\n") {
+            let tail = after.1.trim();
+            if !tail.is_empty() && !tail.starts_with("Thinking Process") {
+                return tail.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,6 +972,9 @@ async fn openai_chat(
     if let Some(mt) = params.max_tokens {
         body["max_tokens"] = json!(mt);
     }
+    if params.disable_thinking == Some(true) {
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
 
     log_raw_req(cfg, "POST", &url, &body);
     let req = http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body);
@@ -978,7 +1004,7 @@ async fn openai_chat(
         .choices
         .into_iter()
         .next()
-        .and_then(|c| c.message.content)
+        .map(|c| openai_assistant_text(&c.message))
         .unwrap_or_default();
     let usage = parsed
         .usage

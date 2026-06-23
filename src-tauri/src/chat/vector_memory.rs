@@ -19,6 +19,17 @@ const RETRIEVAL_MAX_CHARS: usize = 2_200;
 const EXCERPT_MAX_CHARS: usize = 420;
 const INDEX_BATCH: usize = 8;
 const MAX_SESSION_CHUNKS: i64 = 1_500;
+/// Embed models (nomic) truncate around 2048 tokens — keep query well under that.
+const EMBED_QUERY_MAX_CHARS: usize = 4_000;
+
+fn truncate_query_for_embed(query: &str) -> String {
+    let t = query.trim();
+    if t.chars().count() <= EMBED_QUERY_MAX_CHARS {
+        return t.to_string();
+    }
+    let head: String = t.chars().take(EMBED_QUERY_MAX_CHARS).collect();
+    format!("{head}…")
+}
 
 #[derive(Debug, Clone)]
 pub struct RetrievedChunk {
@@ -203,10 +214,12 @@ pub async fn retrieve_relevant(
         return Vec::new();
     }
 
+    let query_for_embed = truncate_query_for_embed(query);
+
     let query_emb = if let Some(cached) = query_emb_cache {
         cached.clone()
     } else {
-        let emb = match providers::embed_texts(conn, cfg, &[query.to_string()], None).await {
+        let emb = match providers::embed_texts(conn, cfg, &[query_for_embed], None).await {
             Ok(v) => v.into_iter().next(),
             Err(e) => {
                 tracing::warn!("vector memory retrieve skipped: {e}");

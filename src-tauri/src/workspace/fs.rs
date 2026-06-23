@@ -238,6 +238,11 @@ fn walk_dir(
             || name == "vendor"
             || name == ".git"
             || name == "target"
+            || name == "__pycache__"
+            || name == ".venv"
+            || name == "dist"
+            || name == "emsdk"
+            || name == "occt-build"
             || name.starts_with('.')
         {
             continue;

@@ -576,6 +576,7 @@ async fn run_stream(
         temperature: Some(mode.temperature),
         max_tokens: Some(effective_max_tokens as u32),
         system: Some(system_prompt),
+        ..Default::default()
     };
 
     let cfg = state.connections.http_config().await;
@@ -903,6 +904,7 @@ async fn run_followup_stream(
         temperature: Some(mode.temperature),
         max_tokens: Some(effective_max_tokens as u32),
         system: Some(system_prompt),
+        ..Default::default()
     };
 
     let cfg = state.connections.http_config().await;
