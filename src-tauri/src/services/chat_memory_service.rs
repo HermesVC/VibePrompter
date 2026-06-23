@@ -38,10 +38,6 @@ impl ChatMemoryService {
         self.repo.prune_session(session_id, keep_latest).await
     }
 
-    pub async fn chunk_count(&self, session_id: &str) -> AppResult<i64> {
-        self.repo.chunk_count(session_id).await
-    }
-
     pub async fn list_content_hashes(&self, session_id: &str) -> AppResult<Vec<String>> {
         self.repo.list_content_hashes(session_id).await
     }

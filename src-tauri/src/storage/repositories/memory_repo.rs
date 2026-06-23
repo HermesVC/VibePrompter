@@ -7,7 +7,6 @@ use crate::utils::{AppError, AppResult};
 #[derive(Debug, Clone)]
 pub struct MemoryChunkRow {
     pub id: i64,
-    pub session_id: String,
     pub role: String,
     pub content: String,
     pub embedding: Vec<f32>,
@@ -50,8 +49,8 @@ impl MemoryRepo {
     }
 
     pub async fn list_session_chunks(&self, session_id: &str) -> AppResult<Vec<MemoryChunkRow>> {
-        let rows: Vec<(i64, String, String, String, Vec<u8>, i64)> = sqlx::query_as(
-            "SELECT id, session_id, role, content, embedding, dims
+        let rows: Vec<(i64, String, String, Vec<u8>, i64)> = sqlx::query_as(
+            "SELECT id, role, content, embedding, dims
              FROM chat_memory_chunks WHERE session_id = ?1 ORDER BY id ASC",
         )
         .bind(session_id)
@@ -60,11 +59,10 @@ impl MemoryRepo {
         .map_err(|e| AppError::Database(e))?;
 
         let mut out = Vec::with_capacity(rows.len());
-        for (id, sid, role, content, blob, dims) in rows {
+        for (id, role, content, blob, dims) in rows {
             let embedding = blob_to_embedding(&blob, dims as usize)?;
             out.push(MemoryChunkRow {
                 id,
-                session_id: sid,
                 role,
                 content,
                 embedding,
@@ -103,16 +101,6 @@ impl MemoryRepo {
         .await
         .map_err(|e| AppError::Database(e))?;
         Ok(())
-    }
-
-    pub async fn chunk_count(&self, session_id: &str) -> AppResult<i64> {
-        let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM chat_memory_chunks WHERE session_id = ?1")
-                .bind(session_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| AppError::Database(e))?;
-        Ok(row.0)
     }
 
     pub async fn list_content_hashes(&self, session_id: &str) -> AppResult<Vec<String>> {

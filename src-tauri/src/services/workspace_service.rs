@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use crate::storage::repositories::SettingsRepo;
 use crate::utils::{AppError, AppResult};
 use crate::workspace::{
-    compose_system_prompt, content_hash, extract_snippet_output, list_dir_recursive,
+    compose_system_prompt, extract_snippet_output, list_dir_recursive,
     list_modifiers, read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo,
-    FileContentDto, FolderScopeDto, FolderScopeFile, PolicyDecision, PolicyDecisionDto,
-    PolicyEngine, WorkspaceSettings, WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
+    FileContentDto, FolderScopeDto, FolderScopeFile, PolicyDecision, PolicyEngine, WorkspaceSettings,
+    WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
 
 #[derive(Clone)]
@@ -197,14 +197,6 @@ impl WorkspaceService {
             content_hash: hash,
             applied: true,
         })
-    }
-
-    pub fn evaluate_policy(&self, settings: &WorkspaceSettings, path: &str) -> PolicyDecisionDto {
-        PolicyEngine::evaluate_write(settings, path).into()
-    }
-
-    pub fn hash_content(&self, content: &str) -> String {
-        content_hash(content)
     }
 }
 

@@ -22,8 +22,6 @@ pub use vector_memory::{
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::utils::AppResult;
-
 pub fn toggle_chat_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("chat-window") {
         let visible = win.is_visible().unwrap_or(false);
@@ -37,18 +35,6 @@ pub fn toggle_chat_window(app: &AppHandle) {
         let _ = win.set_focus();
         let _ = app.emit("chat:opened", ());
     }
-}
-
-pub fn show_chat_window(app: &AppHandle) -> AppResult<()> {
-    let win = app
-        .get_webview_window("chat-window")
-        .ok_or_else(|| crate::utils::AppError::Config("chat-window not configured".into()))?;
-    win.show()
-        .map_err(|e| crate::utils::AppError::Config(format!("show chat-window: {e}")))?;
-    let _ = win.set_always_on_top(true);
-    let _ = win.set_focus();
-    let _ = app.emit("chat:opened", ());
-    Ok(())
 }
 
 pub fn hide_chat_window(app: &AppHandle) {

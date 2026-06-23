@@ -20,7 +20,7 @@ pub mod embeddings;
 pub mod lmstudio;
 pub mod prompt_format;
 
-pub use embeddings::{embed_texts, resolve_embed_model};
+pub use embeddings::embed_texts;
 
 use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings, TokenUsage,

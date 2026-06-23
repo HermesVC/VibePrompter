@@ -113,10 +113,6 @@ pub fn hints_for(id: &str) -> &'static str {
         .unwrap_or("Preserve formatting and meaning.")
 }
 
-pub fn list_profiles() -> Vec<(&'static str, &'static [&'static str])> {
-    PROFILES.iter().map(|p| (p.id, p.extensions)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

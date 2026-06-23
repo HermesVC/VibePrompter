@@ -9,7 +9,7 @@ pub use context::{
     user_requests_code_edit,
 };
 pub use fs::{
-    content_hash, list_dir_recursive, read_absolute_file_for_context, read_file_range,
+    list_dir_recursive, read_absolute_file_for_context, read_file_range,
     rel_display_path, write_file_checked,
 };
 pub use policy::{PolicyDecision, PolicyEngine};

@@ -87,21 +87,6 @@ fn estimate_summary_tokens(summary: &str) -> u32 {
 }
 
 /// Split history into messages that fit the model window vs turns to compress into memory.
-pub fn plan_sliding_window(
-    messages: Vec<ChatMessage>,
-    context_limit: i64,
-    summary: &str,
-    reserve_output: u32,
-) -> WindowPlan {
-    plan_sliding_window_with_aggression(
-        messages,
-        context_limit,
-        summary,
-        reserve_output,
-        WindowAggression::Normal,
-    )
-}
-
 pub fn plan_sliding_window_with_aggression(
     messages: Vec<ChatMessage>,
     context_limit: i64,
@@ -292,8 +277,8 @@ mod tests {
     #[test]
     fn evicts_oldest_when_over_budget() {
         let messages: Vec<ChatMessage> =
-            (0..8).map(|i| msg("user", &"word ".repeat(400))).collect();
-        let plan = plan_sliding_window(messages, 8192, "", 1024);
+            (0..8).map(|_| msg("user", &"word ".repeat(400))).collect();
+        let plan = plan_sliding_window_with_aggression(messages, 8192, "", 1024, WindowAggression::Normal);
         assert!(!plan.evicted.is_empty());
         assert!(!plan.active.is_empty());
         assert_eq!(plan.evicted.len() + plan.active.len(), 8);
@@ -302,7 +287,7 @@ mod tests {
     #[test]
     fn keeps_all_when_fits() {
         let messages = vec![msg("user", "hi"), msg("assistant", "hello")];
-        let plan = plan_sliding_window(messages.clone(), 8192, "", 1024);
+        let plan = plan_sliding_window_with_aggression(messages.clone(), 8192, "", 1024, WindowAggression::Normal);
         assert!(plan.evicted.is_empty());
         assert_eq!(plan.active.len(), 2);
     }

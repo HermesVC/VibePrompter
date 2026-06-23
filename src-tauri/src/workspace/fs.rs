@@ -1,7 +1,6 @@
 //! Cross-platform filesystem access — OS-specific code stays out of tool logic.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -256,10 +255,4 @@ fn walk_dir(
         }
     }
     Ok(())
-}
-
-pub fn count_lines(path: &Path) -> AppResult<u32> {
-    let f = fs::File::open(path).map_err(|e| AppError::Validation(format!("read failed: {e}")))?;
-    let reader = BufReader::new(f);
-    Ok(reader.lines().count().max(1) as u32)
 }
