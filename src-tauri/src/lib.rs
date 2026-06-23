@@ -163,6 +163,7 @@ pub fn run() {
             commands::chat_toggle,
             commands::chat_hide,
             commands::chat_complete_stream,
+            commands::read_chat_attachment_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

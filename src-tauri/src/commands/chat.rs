@@ -185,3 +185,120 @@ pub async fn chat_complete_stream(
         }
     }
 }
+
+/// Read files dropped onto the chat window from OS paths (Tauri drag-drop).
+#[tauri::command]
+pub fn read_chat_attachment_paths(paths: Vec<String>) -> Result<Vec<ChatDroppedFile>, AppError> {
+    const MAX_IMAGE: usize = 4 * 1024 * 1024;
+    const MAX_TEXT: usize = 512 * 1024;
+
+    let mut out = Vec::new();
+    for path in paths {
+        let p = std::path::Path::new(&path);
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let meta = std::fs::metadata(p)
+            .map_err(|e| AppError::Validation(format!("{name}: {e}")))?;
+        if meta.is_dir() {
+            continue;
+        }
+
+        let bytes = std::fs::read(p).map_err(|e| AppError::Validation(format!("{name}: {e}")))?;
+
+        if is_image_ext(&ext) {
+            if bytes.len() > MAX_IMAGE {
+                return Err(AppError::Validation(format!(
+                    "{name}: images must be under 4 MB"
+                )));
+            }
+            out.push(ChatDroppedFile {
+                name,
+                mime_type: image_mime(&ext),
+                data_base64: Some(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &bytes,
+                )),
+                text: None,
+            });
+        } else if is_text_ext(&ext) {
+            if bytes.len() > MAX_TEXT {
+                return Err(AppError::Validation(format!(
+                    "{name}: text files must be under 512 KB"
+                )));
+            }
+            let text = String::from_utf8(bytes)
+                .map_err(|_| AppError::Validation(format!("{name}: not valid UTF-8 text")))?;
+            out.push(ChatDroppedFile {
+                name,
+                mime_type: "text/plain".into(),
+                data_base64: None,
+                text: Some(text),
+            });
+        } else {
+            return Err(AppError::Validation(format!(
+                "Unsupported file: {name} (images or text files only)"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatDroppedFile {
+    pub name: String,
+    pub mime_type: String,
+    pub data_base64: Option<String>,
+    pub text: Option<String>,
+}
+
+fn is_image_ext(ext: &str) -> bool {
+    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico")
+}
+
+fn is_text_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "txt" | "md"
+            | "markdown"
+            | "json"
+            | "csv"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "log"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "py"
+            | "rs"
+            | "html"
+            | "css"
+            | "toml"
+            | "ini"
+            | "env"
+    )
+}
+
+fn image_mime(ext: &str) -> String {
+    match ext {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "image/png",
+    }
+    .into()
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { I, ContextUsageRing, type IconName } from '@shared/ui';
 import {
   effectiveContextLimit,
@@ -13,11 +13,18 @@ import {
   type TokenUsage,
 } from '@shared/lib/contextUsage';
 
-interface ChatImage {
-  mimeType: string;
-  dataBase64: string;
-  previewUrl: string;
-}
+import {
+  clipboardHasAttachableFiles,
+  filesFromClipboardEvent,
+  filesFromDataTransfer,
+  ingestChatFiles,
+  ingestRustDroppedFiles,
+  MAX_CHAT_IMAGES,
+  type ChatImageAttachment,
+} from '@shared/lib/chatAttachments';
+import { useChatNativeFileDrop } from '../hooks/useChatNativeFileDrop';
+
+interface ChatImage extends ChatImageAttachment {}
 
 interface ChatMessage {
   id: string;
@@ -36,8 +43,6 @@ interface DonePayload {
   usage?: TokenUsage;
 }
 
-const MAX_IMAGES = 4;
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 /** Persists the chat window's mode choice — independent of tray/global active mode. */
 const CHAT_MODE_STORAGE_KEY = 'vp_chat_window_mode_id';
 
@@ -74,6 +79,7 @@ export function ChatWindow() {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -352,38 +358,86 @@ export function ChatWindow() {
     scheduleFlush,
   ]);
 
+  const applyIngestResult = useCallback(
+    (result: ReturnType<typeof ingestRustDroppedFiles>) => {
+      if (streaming) return;
+      setAttachError(null);
+      const { images, draftAppend, error } = result;
+      if (images.length) {
+        setPendingImages((prev) => [...prev, ...images].slice(0, MAX_CHAT_IMAGES));
+      }
+      if (draftAppend) {
+        setDraft((prev) => (prev.trim() ? `${prev.trim()}\n\n${draftAppend}` : draftAppend));
+      }
+      if (error) setAttachError(error);
+    },
+    [streaming]
+  );
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      if (!files.length || streaming) return;
+      setAttachError(null);
+      const { images, draftAppend, error } = await ingestChatFiles(files, pendingImages.length);
+      applyIngestResult({ images, draftAppend, error });
+    },
+    [applyIngestResult, pendingImages.length, streaming]
+  );
+
+  useChatNativeFileDrop({
+    streaming,
+    pendingImageCount: pendingImages.length,
+    onDragOverChange: setDragOver,
+    onIngest: applyIngestResult,
+  });
+
   const onPickFiles = async (files: FileList | null) => {
     if (!files?.length) return;
-    setAttachError(null);
-    const next = [...pendingImages];
-    for (const file of Array.from(files)) {
-      if (next.length >= MAX_IMAGES) {
-        setAttachError(`At most ${MAX_IMAGES} images`);
-        break;
-      }
-      if (!file.type.startsWith('image/')) {
-        setAttachError('Only images are supported');
-        continue;
-      }
-      if (file.size > MAX_IMAGE_BYTES) {
-        setAttachError('Each image must be under 4 MB');
-        continue;
-      }
-      try {
-        const dataUrl = await readFileAsDataUrl(file);
-        const comma = dataUrl.indexOf(',');
-        if (comma < 0) continue;
-        next.push({
-          mimeType: file.type,
-          dataBase64: dataUrl.slice(comma + 1),
-          previewUrl: dataUrl,
-        });
-      } catch {
-        setAttachError('Could not read image');
-      }
-    }
-    setPendingImages(next);
+    await addFiles(Array.from(files));
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (streaming || !clipboardHasAttachableFiles(e.nativeEvent)) return;
+    const files = filesFromClipboardEvent(e.nativeEvent);
+    if (!files.length) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (streaming || isTauri()) return;
+    const types = Array.from(e.dataTransfer.types);
+    const hasFiles = types.some(
+      (t) => t === 'Files' || t === 'application/x-moz-file'
+    );
+    if (!hasFiles) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setDragOver(true);
+  };
+
+  const onDragEnter = (e: React.DragEvent) => {
+    if (streaming || isTauri()) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragOver(false);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    if (streaming || isTauri()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const files = filesFromDataTransfer(e.dataTransfer);
+    if (files.length) void addFiles(files);
   };
 
   const clearChat = () => {
@@ -432,6 +486,10 @@ export function ChatWindow() {
     >
       <div
         className="ph-anim-pop-in"
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         style={{
           position: 'relative',
           flex: 1,
@@ -440,11 +498,14 @@ export function ChatWindow() {
           background: 'var(--glass)',
           backdropFilter: 'blur(20px) saturate(160%)',
           WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-          border: '1px solid var(--border-strong)',
+          border: dragOver
+            ? '1px solid var(--accent)'
+            : '1px solid var(--border-strong)',
           borderRadius: 14,
-          boxShadow: 'none',
+          boxShadow: dragOver ? '0 0 0 2px var(--accent-tint)' : 'none',
           isolation: 'isolate',
           overflow: 'hidden',
+          transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
         }}
       >
         <WindowResizeHandles />
@@ -605,9 +666,33 @@ export function ChatWindow() {
             display: 'flex',
             flexDirection: 'column',
             gap: 10,
+            position: 'relative',
           }}
         >
-          {messages.length === 0 && (
+          {dragOver && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 5,
+                pointerEvents: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                background: 'color-mix(in srgb, var(--accent) 10%, var(--glass))',
+                borderRadius: 8,
+                color: 'var(--accent)',
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              <I.image size={28} style={{ opacity: 0.85 }} />
+              <span>Drop images or text files</span>
+            </div>
+          )}
+          {messages.length === 0 && !dragOver && (
             <div
               style={{
                 flex: 1,
@@ -623,7 +708,7 @@ export function ChatWindow() {
               }}
             >
               <I.sparkles size={22} style={{ color: 'var(--accent)', opacity: 0.7 }} />
-              <span>Ask anything — attach images for vision models.</span>
+              <span>Ask anything — drop files, paste images, or attach below.</span>
               <span style={{ fontSize: 11, opacity: 0.8 }}>
                 This window stays open until you hide it.
               </span>
@@ -696,7 +781,7 @@ export function ChatWindow() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.txt,.md,.json,.csv,.xml,.yaml,.yml,text/plain,application/json"
               multiple
               style={{ display: 'none' }}
               onChange={(e) => {
@@ -710,7 +795,7 @@ export function ChatWindow() {
                 fileInputRef.current?.click();
               }}
               disabled={streaming}
-              title="Attach image"
+              title="Attach image or text file"
               style={iconBtnStyle(streaming)}
             >
               <I.image size={13} />
@@ -718,6 +803,7 @@ export function ChatWindow() {
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -727,7 +813,7 @@ export function ChatWindow() {
                   hide();
                 }
               }}
-              placeholder="Message… (Enter to send, Shift+Enter for newline)"
+              placeholder="Message… (Enter send · Shift+Enter newline · Ctrl+V files)"
               rows={1}
               style={{
                 flex: 1,
@@ -877,18 +963,6 @@ function sendBtnStyle(disabled = false): React.CSSProperties {
     opacity: disabled ? 0.6 : 1,
     flexShrink: 0,
   };
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') resolve(reader.result);
-      else reject(new Error('read failed'));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
-    reader.readAsDataURL(file);
-  });
 }
 
 type ResizeDirection =
