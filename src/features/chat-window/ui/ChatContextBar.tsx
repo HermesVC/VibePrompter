@@ -35,7 +35,17 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
 
   const setScope = useCallback(
     (scope: ChatScope) => {
-      onChange((prev) => ({ ...prev, scope }));
+      onChange((prev) => {
+        const keepsDev =
+          scope.kind === 'file' || scope.kind === 'folder' || scope.kind === 'workspace';
+        return {
+          ...prev,
+          scope,
+          modifiers: keepsDev
+            ? prev.modifiers
+            : prev.modifiers.filter((m) => m !== 'developer'),
+        };
+      });
     },
     [onChange]
   );
@@ -124,6 +134,10 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
   }, [onChange, onError]);
 
   const label = scopeLabel(ctx.scope);
+  const fileScope =
+    ctx.scope.kind === 'file' ||
+    ctx.scope.kind === 'folder' ||
+    ctx.scope.kind === 'workspace';
 
   return (
     <div
@@ -265,12 +279,17 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           <span style={{ fontSize: 10, color: 'var(--fg-dim)', marginRight: 2 }}>+</span>
           {modifiers.map((m) => {
             const on = ctx.modifiers.includes(m.id);
+            const devLocked = m.id === 'developer' && !fileScope;
             return (
               <button
                 key={m.id}
                 type="button"
-                disabled={disabled}
-                title={m.description}
+                disabled={disabled || devLocked}
+                title={
+                  devLocked
+                    ? 'Сначала привяжите File, Folder или Workspace'
+                    : m.description
+                }
                 onClick={() =>
                   onChange((prev) => ({
                     ...prev,
@@ -283,8 +302,13 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
                   borderRadius: 999,
                   border: '.5px solid var(--border-strong)',
                   background: on ? 'var(--accent-tint)' : 'transparent',
-                  color: on ? 'var(--accent)' : 'var(--fg-mute)',
-                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  color: devLocked
+                    ? 'var(--fg-dim)'
+                    : on
+                      ? 'var(--accent)'
+                      : 'var(--fg-mute)',
+                  cursor: disabled || devLocked ? 'not-allowed' : 'pointer',
+                  opacity: devLocked ? 0.55 : 1,
                 }}
               >
                 {m.label}

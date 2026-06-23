@@ -67,6 +67,11 @@ pub fn user_requests_code_edit(user_text: &str) -> bool {
 pub fn list_modifiers() -> Vec<ChatModifierInfo> {
     vec![
         ChatModifierInfo {
+            id: "developer".into(),
+            label: "Developer".into(),
+            description: "PLAN.md step-by-step workflow (only with File / Folder / Workspace scope)".into(),
+        },
+        ChatModifierInfo {
             id: "translate_en".into(),
             label: "→ English".into(),
             description: "Translate output to English".into(),
@@ -112,6 +117,51 @@ fn modifier_block(id: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+fn scope_involves_workspace_files(scope: &ChatScope) -> bool {
+    matches!(
+        scope,
+        ChatScope::File { .. } | ChatScope::Folder { .. } | ChatScope::Workspace { .. }
+    )
+}
+
+fn developer_mode_active(modifiers: &[String]) -> bool {
+    modifiers.iter().any(|m| m == "developer")
+}
+
+const PLAN_DRIVEN_PROTOCOL: &str = r#"## Plan-driven developer workflow (active)
+
+This applies only because Developer mode is on and a file/folder/workspace scope is attached.
+
+Treat a task as LARGE if it needs 2+ files, new architecture, or unclear scope.
+For LARGE tasks, do NOT jump straight to full implementation.
+
+### Phase A — Plan (first response on a new large task)
+1. Create `PLAN.md` in the scoped folder via a file fence (workspace-relative path).
+2. Structure PLAN.md:
+   - **Goal** — one paragraph
+   - **Scope** — in / out
+   - **Design** — stack and key decisions (prefix important lines with DECISION: for memory)
+   - **Steps** — numbered checklist `- [ ] 1. …` (one atomic concern per step)
+   - **Verification** — how to verify each step
+   - **Status** — `Current step: 0 / N`, `Last completed: none`
+3. After PLAN.md, output a short summary (3–5 bullets) and tell the user to Apply PLAN.md, then say «иди по плану» or «следующий пункт».
+4. In Phase A output ONLY PLAN.md (no other code files).
+
+### Phase B — Execute (continue / иди по плану / следующий пункт)
+1. Use PLAN.md from context or retrieved memory. Pick the first unchecked `- [ ]` step.
+2. Implement ONE step only (file fences).
+3. After code, outside fences:
+   - **Step review**: what changed, risks
+   - **Self-check**: syntax, imports, scope fit
+   - **Fixes**: if needed, fix fences in the same turn
+4. Update PLAN.md: mark step `[x]`, update Status.
+5. Stop after one step unless the user explicitly asked for full autopilot.
+
+### Phase C — Small tasks
+Single-file fix or trivial change: skip PLAN.md, implement directly.
+
+Use Russian for prose unless the user uses another language."#;
 
 pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -246,6 +296,10 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
         }
     }
 
+    if developer_mode_active(&ctx.modifiers) && scope_involves_workspace_files(&ctx.scope) {
+        parts.push(PLAN_DRIVEN_PROTOCOL.to_string());
+    }
+
     parts.join("\n\n")
 }
 
@@ -366,6 +420,47 @@ mod tests {
         assert!(!user_requests_code_edit("объясни этот код"));
         assert!(user_requests_code_edit("исправь ошибку в сниппете"));
         assert!(user_requests_code_edit("please refactor this function"));
+    }
+
+    #[test]
+    fn plan_protocol_requires_developer_and_file_scope() {
+        let folder_scope = ChatScope::Folder {
+            path: "test/app".into(),
+            tree_summary: "index.html".into(),
+            files: vec![],
+            truncated: false,
+        };
+        let with_dev = ChatContextPayload {
+            scope: folder_scope.clone(),
+            modifiers: vec!["developer".into()],
+            language_id: None,
+        };
+        let sys = compose_system_prompt("", &with_dev);
+        assert!(sys.contains("PLAN.md"));
+        assert!(sys.contains("Plan-driven developer workflow"));
+
+        let no_dev = ChatContextPayload {
+            scope: folder_scope.clone(),
+            modifiers: vec![],
+            language_id: None,
+        };
+        assert!(!compose_system_prompt("", &no_dev).contains("Plan-driven developer workflow"));
+
+        let snippet_scope = ChatContextPayload {
+            scope: ChatScope::Snippet {
+                original: "x".into(),
+                working: "x".into(),
+                path: None,
+                line_start: None,
+                line_end: None,
+                language_id: None,
+            },
+            modifiers: vec!["developer".into()],
+            language_id: None,
+        };
+        assert!(
+            !compose_system_prompt("", &snippet_scope).contains("Plan-driven developer workflow")
+        );
     }
 
     #[test]
