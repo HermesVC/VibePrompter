@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { I } from '@shared/ui';
+import { I, type IconName } from '@shared/ui';
 
 interface ChatImage {
   mimeType: string;
@@ -28,6 +28,16 @@ interface DonePayload {
 
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+/** Persists the chat window's mode choice — independent of tray/global active mode. */
+const CHAT_MODE_STORAGE_KEY = 'vp_chat_window_mode_id';
+
+interface ChatModeOption {
+  id: string;
+  name: string;
+  iconName: string;
+  provider: string | null;
+  enabled?: boolean;
+}
 
 /**
  * Persistent chat window — multi-turn LLM conversation that stays open until
@@ -44,14 +54,15 @@ export function ChatWindow() {
     Array<{ id: string; label: string; hasKey: boolean; isDefault: boolean }>
   >([]);
   const [connectionId, setConnectionId] = useState('');
+  const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
-  const [modeName, setModeName] = useState('Chat');
 
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bufRef = useRef('');
   const flushPendingRef = useRef(false);
   const assistantIdRef = useRef<string | null>(null);
+  const modeConnSyncedRef = useRef(false);
 
   const scheduleFlush = useCallback((assistantId: string) => {
     if (flushPendingRef.current) return;
@@ -83,25 +94,62 @@ export function ChatWindow() {
     };
   }, []);
 
+  const applyLocalMode = useCallback((mode: ChatModeOption) => {
+    setModeId(mode.id);
+    try {
+      localStorage.setItem(CHAT_MODE_STORAGE_KEY, mode.id);
+    } catch {
+      /* best-effort */
+    }
+    if (mode.provider) {
+      setConnectionId(mode.provider);
+    }
+  }, []);
+
+  const loadModes = useCallback(() => {
+    invoke<ChatModeOption[]>('list_modes')
+      .then((all) => {
+        const enabled = all.filter((m) => m.enabled !== false);
+        setModes(enabled);
+        setModeId((current) => {
+          if (current && enabled.some((m) => m.id === current)) {
+            return current;
+          }
+          let stored: string | null = null;
+          try {
+            stored = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
+          const pick =
+            (stored ? enabled.find((m) => m.id === stored) : undefined) ?? enabled[0];
+          return pick?.id ?? current;
+        });
+      })
+      .catch(() => setModes([]));
+  }, []);
+
   useEffect(() => {
     invoke<typeof conns>('list_connections').then(setConns).catch(() => setConns([]));
-    invoke<{ id: string; name: string }>('get_active_mode')
-      .then((m) => {
-        setModeId(m.id);
-        setModeName(m.name);
-      })
-      .catch(() => {});
+    loadModes();
     let unlisten: (() => void) | null = null;
-    listen<{ id: string; name: string }>('mode_changed', (e) => {
-      setModeId(e.payload.id);
-      setModeName(e.payload.name);
-    }).then((u) => {
+    listen('modes_changed', () => loadModes()).then((u) => {
       unlisten = u;
     });
     return () => {
       unlisten?.();
     };
-  }, []);
+  }, [loadModes]);
+
+  // On first load, apply the pinned connection from the restored local mode.
+  useEffect(() => {
+    if (!modeId || !modes.length || modeConnSyncedRef.current) return;
+    modeConnSyncedRef.current = true;
+    const mode = modes.find((m) => m.id === modeId);
+    if (mode?.provider) {
+      setConnectionId(mode.provider);
+    }
+  }, [modeId, modes]);
 
   useEffect(() => {
     const applySettings = (s: { theme?: string; accent?: string }) => {
@@ -297,6 +345,11 @@ export function ChatWindow() {
     setAttachError(null);
   };
 
+  const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
+  const iconKey = (activeMode?.iconName ?? 'mail') as IconName;
+  const ModeIcon =
+    (I as Record<string, React.ComponentType<{ size?: number }>>)[iconKey] ?? I.mail;
+
   return (
     <div
       className="ph-root"
@@ -310,6 +363,7 @@ export function ChatWindow() {
       <div
         className="ph-anim-pop-in"
         style={{
+          position: 'relative',
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
@@ -323,14 +377,17 @@ export function ChatWindow() {
           overflow: 'hidden',
         }}
       >
-        {/* Header */}
+        <WindowResizeHandles />
+        {/* Header — drag via empty strip + startDragging; controls opt out */}
         <div
+          onPointerDown={beginWindowDrag}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
             padding: '10px 12px',
             borderBottom: '.5px solid var(--divider)',
+            cursor: 'grab',
           }}
         >
           <div
@@ -341,7 +398,7 @@ export function ChatWindow() {
               gap: 8,
               flex: 1,
               minWidth: 0,
-              cursor: 'grab',
+              minHeight: 36,
             }}
           >
             <span
@@ -356,21 +413,61 @@ export function ChatWindow() {
                 justifyContent: 'center',
                 border: '.5px solid var(--accent-tint-2)',
                 pointerEvents: 'none',
+                flexShrink: 0,
               }}
             >
-              <I.mail size={14} />
+              <ModeIcon size={14} />
             </span>
-            <div style={{ minWidth: 0, pointerEvents: 'none' }}>
+            <div
+              data-tauri-drag-region
+              style={{ flex: 1, alignSelf: 'stretch', minWidth: 32 }}
+            />
+          </div>
+          <div style={{ minWidth: 0, flexShrink: 0 }} data-no-drag>
+            {modes.length > 0 ? (
+              <select
+                value={modeId ?? ''}
+                onChange={(e) => {
+                  const next = modes.find((m) => m.id === e.target.value);
+                  if (next) applyLocalMode(next);
+                }}
+                disabled={streaming}
+                title="Chat mode (local to this window)"
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  maxWidth: 200,
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--fg-strong)',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  fontFamily: 'var(--sans)',
+                  cursor: streaming ? 'not-allowed' : 'pointer',
+                  opacity: streaming ? 0.6 : 1,
+                }}
+              >
+                {modes.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
               <div style={{ fontSize: 12.5, color: 'var(--fg-strong)', fontWeight: 600 }}>
-                {modeName}
+                Chat
               </div>
-              <div style={{ fontSize: 10.5, color: 'var(--fg-dim)' }}>
-                {streaming ? 'Thinking…' : 'Chat — stays open'}
-              </div>
+            )}
+            <div style={{ fontSize: 10.5, color: 'var(--fg-dim)', pointerEvents: 'none' }}>
+              {streaming ? 'Thinking…' : 'Local mode · stays open'}
             </div>
           </div>
           {conns.filter((c) => c.hasKey).length > 1 && (
             <select
+              data-no-drag
               value={connectionId}
               onChange={(e) => setConnectionId(e.target.value)}
               disabled={streaming}
@@ -396,6 +493,7 @@ export function ChatWindow() {
           )}
           <button
             type="button"
+            data-no-drag
             onPointerDown={(e) => {
               e.preventDefault();
               clearChat();
@@ -407,6 +505,7 @@ export function ChatWindow() {
           </button>
           <button
             type="button"
+            data-no-drag
             onPointerDown={(e) => {
               e.preventDefault();
               hide();
@@ -712,4 +811,89 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('read failed'));
     reader.readAsDataURL(file);
   });
+}
+
+type ResizeDirection =
+  | 'East'
+  | 'North'
+  | 'NorthEast'
+  | 'NorthWest'
+  | 'South'
+  | 'SouthEast'
+  | 'SouthWest'
+  | 'West';
+
+function isInteractiveDragTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('select, button, input, textarea, a, [data-no-drag]'));
+}
+
+function beginWindowDrag(e: React.PointerEvent) {
+  if (isInteractiveDragTarget(e.target)) return;
+  e.preventDefault();
+  getCurrentWindow().startDragging().catch(() => {});
+}
+
+function beginWindowResize(direction: ResizeDirection) {
+  return (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    getCurrentWindow().startResizeDragging(direction).catch(() => {});
+  };
+}
+
+/** Invisible edge/corner hit targets — borderless windows need these on Windows. */
+function WindowResizeHandles() {
+  const edge = (
+    direction: ResizeDirection,
+    style: React.CSSProperties,
+    cursor: string
+  ) => (
+    <div
+      key={direction}
+      onPointerDown={beginWindowResize(direction)}
+      style={{
+        position: 'absolute',
+        zIndex: 30,
+        cursor,
+        touchAction: 'none',
+        ...style,
+      }}
+    />
+  );
+
+  return (
+    <>
+      {edge('North', { top: 0, left: 8, right: 8, height: 6 }, 'ns-resize')}
+      {edge('South', { bottom: 0, left: 8, right: 8, height: 6 }, 'ns-resize')}
+      {edge('West', { left: 0, top: 8, bottom: 8, width: 6 }, 'ew-resize')}
+      {edge('East', { right: 0, top: 8, bottom: 8, width: 6 }, 'ew-resize')}
+      {edge('NorthWest', { top: 0, left: 0, width: 10, height: 10 }, 'nwse-resize')}
+      {edge('NorthEast', { top: 0, right: 0, width: 10, height: 10 }, 'nesw-resize')}
+      {edge('SouthWest', { bottom: 0, left: 0, width: 10, height: 10 }, 'nesw-resize')}
+      <div
+        onPointerDown={beginWindowResize('SouthEast')}
+        title="Resize"
+        style={{
+          position: 'absolute',
+          right: 3,
+          bottom: 3,
+          width: 14,
+          height: 14,
+          zIndex: 31,
+          cursor: 'nwse-resize',
+          touchAction: 'none',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'flex-end',
+          color: 'var(--fg-dim)',
+          opacity: 0.55,
+        }}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden>
+          <path d="M9 1v8H1V6h3V1h5Z" />
+        </svg>
+      </div>
+    </>
+  );
 }
