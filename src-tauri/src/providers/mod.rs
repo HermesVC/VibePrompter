@@ -17,8 +17,81 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::models::{
-    ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings, TokenUsage,
+    ChatImage, ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
+    TokenUsage,
 };
+fn openai_message_content(msg: &ChatMessage) -> serde_json::Value {
+    if msg.images.is_empty() {
+        return json!(msg.content);
+    }
+    let mut parts: Vec<serde_json::Value> = Vec::with_capacity(1 + msg.images.len());
+    if !msg.content.is_empty() {
+        parts.push(json!({ "type": "text", "text": msg.content }));
+    }
+    for img in &msg.images {
+        let data_url = format!("data:{};base64,{}", img.mime_type, img.data_base64);
+        parts.push(json!({
+            "type": "image_url",
+            "image_url": { "url": data_url }
+        }));
+    }
+    json!(parts)
+}
+
+fn anthropic_message_content(msg: &ChatMessage) -> serde_json::Value {
+    if msg.images.is_empty() {
+        return json!(msg.content);
+    }
+    let mut parts: Vec<serde_json::Value> = Vec::with_capacity(1 + msg.images.len());
+    for img in &msg.images {
+        parts.push(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img.mime_type,
+                "data": img.data_base64
+            }
+        }));
+    }
+    if !msg.content.is_empty() {
+        parts.push(json!({ "type": "text", "text": msg.content }));
+    }
+    json!(parts)
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    #[test]
+    fn openai_text_only_message_stays_a_string() {
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: "hello".into(),
+            images: vec![],
+        };
+        assert_eq!(openai_message_content(&msg), json!("hello"));
+    }
+
+    #[test]
+    fn anthropic_image_message_includes_base64_block() {
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: "what is this?".into(),
+            images: vec![ChatImage {
+                mime_type: "image/png".into(),
+                data_base64: "abc".into(),
+            }],
+        };
+        let v = anthropic_message_content(&msg);
+        assert!(v.is_array());
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr[0]["type"], "image");
+        assert_eq!(arr[0]["source"]["data"], "abc");
+        assert_eq!(arr[1]["text"], "what is this?");
+    }
+}
+
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
@@ -430,7 +503,7 @@ where
                 payload_messages.push(serde_json::json!({ "role": "system", "content": sys }));
             }
             for m in &messages {
-                payload_messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
+                payload_messages.push(serde_json::json!({ "role": m.role, "content": openai_message_content(m) }));
             }
             let mut body = serde_json::json!({
                 "model": model,
@@ -453,7 +526,7 @@ where
             let payload_messages: Vec<serde_json::Value> = messages
                 .iter()
                 .filter(|m| m.role != "system")
-                .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+                .map(|m| serde_json::json!({ "role": m.role, "content": anthropic_message_content(m) }))
                 .collect();
             let mut body = serde_json::json!({
                 "model": model,
@@ -625,7 +698,11 @@ pub async fn ping_with_result(
 ) -> AppResult<CompletionResult> {
     complete(
         conn,
-        vec![ChatMessage { role: "user".into(), content: "ping".into() }],
+        vec![ChatMessage {
+            role: "user".into(),
+            content: "ping".into(),
+            images: vec![],
+        }],
         CompletionParams { max_tokens: Some(4), ..Default::default() },
         cfg,
     )
@@ -675,7 +752,7 @@ async fn openai_chat(
         payload_messages.push(json!({ "role": "system", "content": sys }));
     }
     for m in messages {
-        payload_messages.push(json!({ "role": m.role, "content": m.content }));
+        payload_messages.push(json!({ "role": m.role, "content": openai_message_content(m) }));
     }
 
     let mut body = json!({
@@ -807,7 +884,7 @@ async fn anthropic_chat(
     let payload_messages: Vec<serde_json::Value> = messages
         .iter()
         .filter(|m| m.role != "system")
-        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .map(|m| json!({ "role": m.role, "content": anthropic_message_content(m) }))
         .collect();
 
     let mut body = json!({

@@ -163,6 +163,7 @@ pub async fn run_prompt_stream(
     let messages = vec![crate::models::ChatMessage {
         role: "user".into(),
         content: input.clone(),
+        images: vec![],
     }];
     let params = crate::models::CompletionParams {
         model: None,

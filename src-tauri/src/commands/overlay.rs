@@ -167,8 +167,12 @@ pub async fn refine_retry(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub async fn refine_followup(app: AppHandle, instruction: String) -> AppResult<()> {
-    crate::overlay::followup(app, instruction).await
+pub async fn refine_followup(
+    app: AppHandle,
+    instruction: String,
+    images: Option<Vec<crate::models::ChatImage>>,
+) -> AppResult<()> {
+    crate::overlay::followup(app, instruction, images.unwrap_or_default()).await
 }
 
 #[tauri::command]

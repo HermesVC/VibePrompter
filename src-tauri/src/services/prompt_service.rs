@@ -55,7 +55,11 @@ impl PromptService {
             })?
             .clone();
 
-        let messages = vec![ChatMessage { role: "user".into(), content: input.to_string() }];
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: input.to_string(),
+            images: vec![],
+        }];
         let params = CompletionParams {
             model: None, // honor the connection's default model
             temperature: Some(mode.temperature),
@@ -180,7 +184,11 @@ pub async fn run_with_row(
 
     let result = crate::providers::complete(
         row,
-        vec![ChatMessage { role: "user".into(), content: input.to_string() }],
+        vec![ChatMessage {
+            role: "user".into(),
+            content: input.to_string(),
+            images: vec![],
+        }],
         CompletionParams {
             model: None,
             temperature: Some(mode.temperature),

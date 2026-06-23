@@ -308,7 +308,7 @@ export function RefineOverlay() {
           overflow: 'hidden',
         }}
       >
-        {/* Header */}
+        {/* Header — drag region moves the borderless Tauri window */}
         <div
           style={{
             display: 'flex',
@@ -318,27 +318,40 @@ export function RefineOverlay() {
             borderBottom: '.5px solid var(--divider)',
           }}
         >
-          <span
+          <div
+            data-tauri-drag-region
             style={{
-              width: 26,
-              height: 26,
-              borderRadius: 7,
-              background: 'var(--accent-tint)',
-              color: 'var(--accent)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              border: '.5px solid var(--accent-tint-2)',
+              gap: 10,
+              flex: 1,
+              minWidth: 0,
+              cursor: 'grab',
             }}
           >
-            <ModeIcon size={14} />
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12.5, color: 'var(--fg-strong)', fontWeight: 600 }}>
-              {meta?.modeName ?? 'Refine'}
-            </div>
-            <div style={{ fontSize: 10.5, color: 'var(--fg-dim)' }}>
-              {subtitle}
+            <span
+              style={{
+                width: 26,
+                height: 26,
+                borderRadius: 7,
+                background: 'var(--accent-tint)',
+                color: 'var(--accent)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: '.5px solid var(--accent-tint-2)',
+                pointerEvents: 'none',
+              }}
+            >
+              <ModeIcon size={14} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0, pointerEvents: 'none' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--fg-strong)', fontWeight: 600 }}>
+                {meta?.modeName ?? 'Refine'}
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--fg-dim)' }}>
+                {subtitle}
+              </div>
             </div>
           </div>
           {conns.filter((c) => c.hasKey).length > 1 && (
@@ -531,7 +544,16 @@ export function RefineOverlay() {
             re-streams a new result into the same overlay. Esc clears the
             field without triggering a follow-up. */}
         {done && !error && !isSummarize && (
-          <FollowupBar onSend={(instruction) => invoke('refine_followup', { instruction })} />
+          <FollowupBar
+            onSend={(instruction, images) =>
+              invoke('refine_followup', {
+                instruction,
+                images: images.length
+                  ? images.map(({ mimeType, dataBase64 }) => ({ mimeType, dataBase64 }))
+                  : undefined,
+              })
+            }
+          />
         )}
 
         {done && !error && <OverlayFirstTip summarize={isSummarize} />}
@@ -812,85 +834,263 @@ function diffWords(a: string, b: string): DiffSeg[] {
  * while the model is streaming. Enter sends, Shift+Enter inserts a newline
  * (so you can write a longer instruction without firing prematurely), Esc
  * clears the field. The bar stays visible after sending — chains of
- * follow-ups are explicit by design.
+ * follow-ups are explicit by design. Optional image attachments are sent to
+ * vision-capable models alongside the tweak instruction.
  */
-function FollowupBar({ onSend }: { onSend: (instruction: string) => void }) {
+const MAX_FOLLOWUP_IMAGES = 4;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+interface FollowupImage {
+  id: string;
+  mimeType: string;
+  dataBase64: string;
+  previewUrl: string;
+}
+
+function FollowupBar({
+  onSend,
+}: {
+  onSend: (instruction: string, images: FollowupImage[]) => void;
+}) {
   const [value, setValue] = useState('');
+  const [images, setImages] = useState<FollowupImage[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const send = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
-    onSend(trimmed);
+    onSend(trimmed, images);
     setValue('');
+    setImages([]);
+    setAttachError(null);
   };
+
+  const onPickFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setAttachError(null);
+    const next = [...images];
+    for (const file of Array.from(files)) {
+      if (next.length >= MAX_FOLLOWUP_IMAGES) {
+        setAttachError(`At most ${MAX_FOLLOWUP_IMAGES} images`);
+        break;
+      }
+      if (!file.type.startsWith('image/')) {
+        setAttachError('Only images are supported');
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setAttachError('Each image must be under 4 MB');
+        continue;
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const comma = dataUrl.indexOf(',');
+        if (comma < 0) continue;
+        next.push({
+          id: crypto.randomUUID(),
+          mimeType: file.type,
+          dataBase64: dataUrl.slice(comma + 1),
+          previewUrl: dataUrl,
+        });
+      } catch {
+        setAttachError('Could not read image');
+      }
+    }
+    setImages(next);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeImage = (id: string) => {
+    setImages((prev) => prev.filter((img) => img.id !== id));
+    setAttachError(null);
+  };
+
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '8px 10px',
         borderTop: '.5px solid var(--divider)',
         background: 'var(--bg-2)',
       }}
     >
-      <I.wand size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            send();
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setValue('');
-            (e.target as HTMLInputElement).blur();
-          }
-          // Stop propagation so the overlay's top-level keyboard handler
-          // doesn't see this Enter as "accept the result."
-          e.stopPropagation();
-        }}
-        placeholder="Tweak: make it shorter, more formal, …"
+      {images.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '8px 10px 0',
+            flexWrap: 'wrap',
+          }}
+        >
+          {images.map((img) => (
+            <div key={img.id} style={{ position: 'relative', flexShrink: 0 }}>
+              <img
+                src={img.previewUrl}
+                alt=""
+                style={{
+                  width: 44,
+                  height: 44,
+                  objectFit: 'cover',
+                  borderRadius: 6,
+                  border: '.5px solid var(--border)',
+                }}
+              />
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  removeImage(img.id);
+                }}
+                title="Remove image"
+                style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -4,
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  border: '.5px solid var(--border-strong)',
+                  background: 'var(--surface)',
+                  color: 'var(--fg)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <I.close size={8} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div
         style={{
-          flex: 1,
-          background: 'transparent',
-          border: 'none',
-          outline: 'none',
-          color: 'var(--fg)',
-          fontSize: 12.5,
-          fontFamily: 'var(--sans)',
-          padding: 0,
-          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '8px 10px',
         }}
-      />
-      {value.trim() && (
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            void onPickFiles(e.target.files);
+          }}
+        />
         <button
           type="button"
           onPointerDown={(e) => {
             e.preventDefault();
-            send();
+            fileInputRef.current?.click();
           }}
+          title="Attach image"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: 4,
-            padding: '3px 8px',
+            justifyContent: 'center',
+            width: 24,
+            height: 24,
             borderRadius: 5,
-            background: 'var(--accent)',
-            color: '#ffffff',
-            fontSize: 11,
-            fontWeight: 600,
-            border: '.5px solid transparent',
+            background: 'transparent',
+            border: '.5px solid var(--border)',
+            color: 'var(--fg-mute)',
             cursor: 'pointer',
+            flexShrink: 0,
           }}
-          title="Send follow-up (Enter)"
         >
-          Tweak
+          <I.image size={12} />
         </button>
+        <I.wand size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              setValue('');
+              setImages([]);
+              setAttachError(null);
+              (e.target as HTMLInputElement).blur();
+            }
+            // Stop propagation so the overlay's top-level keyboard handler
+            // doesn't see this Enter as "accept the result."
+            e.stopPropagation();
+          }}
+          placeholder="Tweak: make it shorter, more formal, …"
+          style={{
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            color: 'var(--fg)',
+            fontSize: 12.5,
+            fontFamily: 'var(--sans)',
+            padding: 0,
+            minWidth: 0,
+          }}
+        />
+        {value.trim() && (
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              send();
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '3px 8px',
+              borderRadius: 5,
+              background: 'var(--accent)',
+              color: '#ffffff',
+              fontSize: 11,
+              fontWeight: 600,
+              border: '.5px solid transparent',
+              cursor: 'pointer',
+            }}
+            title="Send follow-up (Enter)"
+          >
+            Tweak
+          </button>
+        )}
+      </div>
+      {attachError && (
+        <div
+          style={{
+            padding: '0 10px 8px',
+            fontSize: 10.5,
+            color: 'var(--danger)',
+          }}
+        >
+          {attachError}
+        </div>
       )}
     </div>
   );
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('read failed'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
 }
 
 /**

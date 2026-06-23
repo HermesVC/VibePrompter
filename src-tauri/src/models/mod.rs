@@ -12,7 +12,7 @@ pub use history::{HistoryItem, HistoryQuery, NewHistoryItem};
 pub use prompt_mode::PromptMode;
 pub use provider::ProviderInfo;
 pub use provider_connection::{
-    ChatMessage, CompletionParams, CompletionResult, ConnectionInfo, ConnectionInput,
+    ChatImage, ChatMessage, CompletionParams, CompletionResult, ConnectionInfo, ConnectionInput,
     ConnectionKind, TokenUsage,
 };
 pub use settings::Settings;

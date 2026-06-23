@@ -91,6 +91,14 @@ pub struct ConnectionInput {
     pub price_output_per_m: f64,
 }
 
+/// Base64 image attached to a user turn (vision / multimodal follow-ups).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatImage {
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
 /// A single message in a chat completion request — identical shape for both
 /// OpenAI-compatible and Anthropic kinds; the client maps it onto each
 /// vendor's wire format internally.
@@ -98,6 +106,10 @@ pub struct ConnectionInput {
 pub struct ChatMessage {
     pub role: String, // "system" | "user" | "assistant"
     pub content: String,
+    /// Optional images for multimodal turns. Mapped to vendor-specific
+    /// content blocks by the provider client.
+    #[serde(default)]
+    pub images: Vec<ChatImage>,
 }
 
 /// Params passed alongside messages to `complete`. All optional — sensible

@@ -34,7 +34,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use crate::models::{ChatMessage, CompletionParams};
+use crate::models::{ChatImage, ChatMessage, CompletionParams};
 use crate::utils::{AppError, AppResult};
 
 /// Which user-facing action launched the overlay. Determines the prompt, the
@@ -476,7 +476,11 @@ async fn run_stream(
             .ok_or_else(|| AppError::Validation("no default connection configured".into()))?,
     };
 
-    let messages = vec![ChatMessage { role: "user".into(), content: selection.clone() }];
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: selection.clone(),
+        images: vec![],
+    }];
     // Adaptive max_tokens: rewrite/grammar/tone modes produce output roughly
     // proportional to input length, so if the user selected 10 KB of text the
     // mode's static 1024 cap would truncate the response halfway through.
@@ -657,11 +661,13 @@ fn build_followup_user_turn(prior_instructions: &[String], new_instruction: &str
 /// Chains across multiple followups: each new result is written back to
 /// `session.last_result` and each instruction is appended to
 /// `session.instructions` so later tweaks carry the whole trajectory.
-pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
+/// Optional images on the follow-up turn are forwarded to vision-capable models.
+pub async fn followup(app: AppHandle, instruction: String, images: Vec<ChatImage>) -> AppResult<()> {
     let instruction = instruction.trim().to_string();
     if instruction.is_empty() {
         return Err(AppError::Validation("followup instruction is empty".into()));
     }
+    validate_followup_images(&images)?;
     let session = app
         .try_state::<RefineSession>()
         .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
@@ -695,7 +701,7 @@ pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) =
-            run_followup_stream(app_for_task.clone(), kind, mode_id, selection, prior, instruction, seq)
+            run_followup_stream(app_for_task.clone(), kind, mode_id, selection, prior, instruction, images, seq)
                 .await
         {
             if is_current_stream(&app_for_task, seq) {
@@ -706,6 +712,50 @@ pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
     Ok(())
 }
 
+const MAX_FOLLOWUP_IMAGES: usize = 4;
+/// Rough cap per image after base64 decode (~4 MiB raw).
+const MAX_FOLLOWUP_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+
+fn validate_followup_images(images: &[ChatImage]) -> AppResult<()> {
+    if images.len() > MAX_FOLLOWUP_IMAGES {
+        return Err(AppError::Validation(format!(
+            "at most {MAX_FOLLOWUP_IMAGES} images per tweak"
+        )));
+    }
+    for img in images {
+        let mime = img.mime_type.trim().to_ascii_lowercase();
+        if !mime.starts_with("image/") {
+            return Err(AppError::Validation("only image attachments are supported".into()));
+        }
+        let bytes = approx_base64_decoded_bytes(&img.data_base64)?;
+        if bytes == 0 {
+            return Err(AppError::Validation("image payload is empty".into()));
+        }
+        if bytes > MAX_FOLLOWUP_IMAGE_BYTES {
+            return Err(AppError::Validation(format!(
+                "image exceeds {} MiB limit",
+                MAX_FOLLOWUP_IMAGE_BYTES / (1024 * 1024)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn approx_base64_decoded_bytes(data: &str) -> AppResult<usize> {
+    let trimmed = data.trim();
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
+        return Err(AppError::Validation("invalid image data".into()));
+    }
+    let padding = trimmed.chars().rev().take_while(|&c| c == '=').count();
+    Ok(trimmed.len().saturating_mul(3) / 4 - padding)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_followup_stream(
     app: AppHandle,
@@ -714,6 +764,7 @@ async fn run_followup_stream(
     selection: String,
     prior_result: String,
     instruction: String,
+    images: Vec<ChatImage>,
     seq: u64,
 ) -> AppResult<()> {
     let state = app
@@ -757,9 +808,9 @@ async fn run_followup_stream(
         .unwrap_or_default();
     let user_turn = build_followup_user_turn(&prior_instructions, &instruction);
     let messages = vec![
-        ChatMessage { role: "user".into(), content: selection.clone() },
-        ChatMessage { role: "assistant".into(), content: prior_result },
-        ChatMessage { role: "user".into(), content: user_turn },
+        ChatMessage { role: "user".into(), content: selection.clone(), images: vec![] },
+        ChatMessage { role: "assistant".into(), content: prior_result, images: vec![] },
+        ChatMessage { role: "user".into(), content: user_turn, images },
     ];
     // Estimate based on selection + prior + instruction so followup output
     // has the same generous ceiling as the initial run.
