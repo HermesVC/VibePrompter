@@ -143,6 +143,12 @@ pub fn init(app: &AppHandle) {
     app.manage(RefineSession::default());
 }
 
+/// Read the focused app's text selection (UIA, then Ctrl+C fallback).
+/// Used by Refine and Chat snippet attach.
+pub fn capture_editor_selection(app: &AppHandle) -> AppResult<String> {
+    capture_selection(app)
+}
+
 fn capture_selection(app: &AppHandle) -> AppResult<String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 

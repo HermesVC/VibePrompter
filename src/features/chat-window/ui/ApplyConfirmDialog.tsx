@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { PolicyDecision } from '@shared/lib/workspaceApi';
 import { computeLineDiff, diffStats } from '@shared/lib/textDiff';
+import { errorMessage } from '@shared/lib/utils';
 
 interface ApplyConfirmDialogProps {
   open: boolean;
@@ -49,7 +50,7 @@ export function ApplyConfirmDialog({
       await onConfirm(remember);
       onCancel();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
       setApplying(false);
     }
   };
@@ -108,7 +109,9 @@ export function ApplyConfirmDialog({
             >
               <span style={{ color: '#22c55e' }}>+{stats.added} added</span>
               {stats.removed > 0 && <span style={{ color: '#ef4444' }}>−{stats.removed} removed</span>}
-              {stats.added === 0 && stats.removed === 0 && <span>No line changes</span>}
+              {stats.added === 0 && stats.removed === 0 && (
+                <span>No line changes — model may have replied without editing the snippet</span>
+              )}
             </div>
             <UnifiedDiffView lines={diffLines} />
           </>

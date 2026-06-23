@@ -23,7 +23,8 @@ import {
   MAX_CHAT_IMAGES,
   type ChatImageAttachment,
 } from '@shared/lib/chatAttachments';
-import { writeClipboardText } from '@shared/lib/clipboard';
+import { writeClipboardText, isApplyableScopedEdit } from '@shared/lib/clipboard';
+import { errorMessage } from '@shared/lib/utils';
 import {
   buildChatContextPayload,
   DEFAULT_CHAT_CONTEXT,
@@ -47,6 +48,7 @@ interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  scopedText?: string;
   images?: ChatImage[];
   streaming?: boolean;
   error?: string;
@@ -264,20 +266,13 @@ export function ChatWindow() {
     invoke('cancel_stream', { streamId }).catch(() => {});
   }, [streamId]);
 
-  const processScopedCompletion = useCallback((payload: { scopedText?: string; text: string }) => {
-    const scoped = (payload.scopedText ?? payload.text).trim();
-    if (!scoped) return;
-    setChatContext((prev) => {
-      if (prev.scope.kind === 'snippet') {
-        return { ...prev, scope: { ...prev.scope, working: scoped } };
-      }
-      return prev;
-    });
+  const processScopedCompletion = useCallback((_payload: { scopedText?: string; text: string }) => {
+    // Working snippet/file content updates only on explicit Apply — not on every reply.
   }, []);
 
-  const promptApplyScoped = useCallback(async (assistantText: string) => {
+  const promptApplyScoped = useCallback(async (assistantText: string, scopedText?: string) => {
     const scope = chatContextRef.current.scope;
-    const content = assistantText.trim();
+    const content = (scopedText ?? assistantText).trim();
     if (!content) return;
 
     if (scope.kind === 'snippet') {
@@ -329,7 +324,7 @@ export function ChatWindow() {
         onConfirm: doWrite,
       });
     } catch (e) {
-      setAttachError(e instanceof Error ? e.message : String(e));
+      setAttachError(errorMessage(e));
     }
   }, []);
 
@@ -392,6 +387,7 @@ export function ChatWindow() {
                 ? {
                     ...m,
                     content: e.payload.text,
+                    scopedText: e.payload.scopedText,
                     streaming: false,
                     meta: { model: e.payload.model, latencyMs: e.payload.latencyMs },
                   }
@@ -446,6 +442,7 @@ export function ChatWindow() {
             ? {
                 ...m,
                 content: result.text,
+                scopedText: result.scopedText,
                 streaming: false,
                 meta: { model: result.model, latencyMs: result.latencyMs },
               }
@@ -465,7 +462,7 @@ export function ChatWindow() {
       }
       processScopedCompletion(result);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId ? { ...m, streaming: false, error: msg } : m
@@ -860,9 +857,16 @@ export function ChatWindow() {
               key={m.id}
               message={m}
               scopeKind={chatContext.scope.kind}
+              scopeWorking={
+                chatContext.scope.kind === 'snippet'
+                  ? chatContext.scope.working
+                  : chatContext.scope.kind === 'file'
+                    ? chatContext.scope.content
+                    : undefined
+              }
               onApply={
                 m.role === 'assistant' && !m.streaming && !m.error && m.content
-                  ? () => void promptApplyScoped(m.content)
+                  ? () => void promptApplyScoped(m.content, m.scopedText)
                   : undefined
               }
             />
@@ -1083,13 +1087,22 @@ export function ChatWindow() {
 function MessageBubble({
   message: m,
   scopeKind,
+  scopeWorking,
   onApply,
 }: {
   message: ChatMessage;
   scopeKind?: string;
+  scopeWorking?: string;
   onApply?: () => void;
 }) {
   const isUser = m.role === 'user';
+  const applyCandidate = (m.scopedText ?? m.content).trim();
+  const showApply =
+    onApply &&
+    (scopeKind === 'snippet' || scopeKind === 'file') &&
+    !m.streaming &&
+    scopeWorking !== undefined &&
+    isApplyableScopedEdit(scopeWorking, applyCandidate);
   return (
     <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
       <div
@@ -1145,7 +1158,7 @@ function MessageBubble({
             {m.meta.model} · {m.meta.latencyMs}ms
           </div>
         )}
-        {onApply && (scopeKind === 'snippet' || scopeKind === 'file') && !m.streaming && (
+        {showApply && (
           <button
             type="button"
             onClick={onApply}

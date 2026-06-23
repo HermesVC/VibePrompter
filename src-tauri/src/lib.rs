@@ -166,6 +166,7 @@ pub fn run() {
             commands::chat_complete_stream,
             commands::write_clipboard_text,
             commands::read_clipboard_text,
+            commands::capture_editor_selection,
             commands::read_chat_attachment_paths,
             commands::get_workspace_settings,
             commands::save_workspace_settings,
