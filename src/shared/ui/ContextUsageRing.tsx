@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   contextFillPercent,
+  contextTokensRemaining,
   formatTokenCount,
   type TokenUsage,
 } from '@shared/lib/contextUsage';
@@ -55,6 +56,10 @@ export function ContextUsageRing({
     tooltip = `~${percent}% · ~${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindowSize)} context (estimated)`;
   } else {
     tooltip = `${percent}% · ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindowSize)} context`;
+    const remaining = contextTokensRemaining(usedTokens, contextWindowSize);
+    if (remaining !== null) {
+      tooltip += ` · ${formatTokenCount(remaining)} left`;
+    }
   }
   if (limitInferred && hasLimit) {
     tooltip += ' · default for this provider';

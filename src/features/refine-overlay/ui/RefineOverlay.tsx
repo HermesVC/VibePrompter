@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { I, ContextUsageRing, type IconName } from '@shared/ui';
 import {
+  applyCompletionContextUpdate,
   effectiveContextLimit,
   estimateTokensFromChars,
   isContextLimitInferred,
@@ -43,6 +44,7 @@ interface DonePayload {
   model: string;
   latencyMs: number;
   usage?: TokenUsage;
+  contextWindowSize?: number;
 }
 
 export function RefineOverlay() {
@@ -65,6 +67,7 @@ export function RefineOverlay() {
   const [activeConnId, setActiveConnId] = useState<string>('');
   const [sessionConnectionId, setSessionConnectionId] = useState('');
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
+  const effectiveConnectionIdRef = useRef('');
   const bufRef = useRef('');
   const flushPendingRef = useRef(false);
   // Set true while we're in the Accept handoff so the blur-to-dismiss
@@ -186,6 +189,15 @@ export function RefineOverlay() {
           const usage = normalizeTokenUsage(e.payload.usage);
           if (usage) setTokenUsage(usage);
         }
+        if (e.payload.contextWindowSize) {
+          setConns((prev) =>
+            applyCompletionContextUpdate(
+              prev,
+              effectiveConnectionIdRef.current,
+              e.payload.contextWindowSize
+            )
+          );
+        }
       }),
       listen<string>('refine:error', (e) => {
         setError(e.payload);
@@ -304,6 +316,7 @@ export function RefineOverlay() {
     () => resolveActiveConnection(conns, effectiveConnectionId),
     [conns, effectiveConnectionId]
   );
+  effectiveConnectionIdRef.current = effectiveConnectionId || activeConn?.id || '';
   const contextLimit = effectiveContextLimit(activeConn);
   const contextLimitInferred = isContextLimitInferred(activeConn);
   const contextEstimate = useMemo(

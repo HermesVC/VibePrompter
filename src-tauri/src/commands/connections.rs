@@ -203,7 +203,8 @@ pub async fn run_prompt_stream(
     let was_cancelled = cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
 
     match result {
-        Ok(r) => {
+        Ok(mut r) => {
+            state.connections.enrich_completion_context(&row, &mut r).await;
             if was_cancelled {
                 // Distinct event so the UI can render "Cancelled" instead of
                 // a fake success — but still persist the partial result so

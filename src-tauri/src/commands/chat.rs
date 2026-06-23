@@ -147,7 +147,8 @@ pub async fn chat_complete_stream(
     };
 
     match result {
-        Ok(r) => {
+        Ok(mut r) => {
+            state.connections.enrich_completion_context(&row, &mut r).await;
             if was_cancelled {
                 let _ = app.emit(&err_event, "cancelled");
             } else {

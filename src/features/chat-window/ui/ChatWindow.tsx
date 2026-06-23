@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { I, ContextUsageRing, type IconName } from '@shared/ui';
 import {
+  applyCompletionContextUpdate,
   effectiveContextLimit,
   estimateTokensFromChars,
   isContextLimitInferred,
@@ -42,6 +43,7 @@ interface DonePayload {
   model: string;
   latencyMs: number;
   usage?: TokenUsage;
+  contextWindowSize?: number;
 }
 
 /** Persists the chat window's mode choice — independent of tray/global active mode. */
@@ -94,6 +96,7 @@ export function ChatWindow() {
   const flushPendingRef = useRef(false);
   const assistantIdRef = useRef<string | null>(null);
   const modeConnSyncedRef = useRef(false);
+  const activeConnIdRef = useRef('');
 
   const scheduleFlush = useCallback((assistantId: string) => {
     if (flushPendingRef.current) return;
@@ -301,6 +304,15 @@ export function ChatWindow() {
           );
           const usage = normalizeTokenUsage(e.payload.usage);
           if (usage) setTokenUsage(usage);
+          if (e.payload.contextWindowSize) {
+            setConns((prev) =>
+              applyCompletionContextUpdate(
+                prev,
+                activeConnIdRef.current,
+                e.payload.contextWindowSize
+              )
+            );
+          }
         }),
         listen<string>(errEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
@@ -344,6 +356,15 @@ export function ChatWindow() {
       );
       const usage = normalizeTokenUsage(result.usage);
       if (usage) setTokenUsage(usage);
+      if (result.contextWindowSize) {
+        setConns((prev) =>
+          applyCompletionContextUpdate(
+            prev,
+            activeConnIdRef.current,
+            result.contextWindowSize
+          )
+        );
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages((prev) =>
@@ -466,6 +487,7 @@ export function ChatWindow() {
     () => resolveActiveConnection(conns, effectiveConnectionId),
     [conns, effectiveConnectionId]
   );
+  activeConnIdRef.current = connectionId || activeConn?.id || '';
   const contextLimit = effectiveContextLimit(activeConn);
   const contextLimitInferred = isContextLimitInferred(activeConn);
   const contextEstimate = useMemo(() => {

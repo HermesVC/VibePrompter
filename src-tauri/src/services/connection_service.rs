@@ -420,13 +420,14 @@ impl ConnectionService {
         let row = self.hydrate(self.repo.get(id).await?);
         let cfg = self.http_config().await;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
-        let result = providers::complete(&row, messages, params, &cfg).await;
-        if result.is_ok() {
-            // Stamp recency only on success — a 401 shouldn't bump the
-            // connection above working ones in the sort order.
-            let _ = self.repo.touch_last_used(id).await;
+        match providers::complete(&row, messages, params, &cfg).await {
+            Ok(mut result) => {
+                self.enrich_completion_context(&row, &mut result).await;
+                let _ = self.repo.touch_last_used(id).await;
+                Ok(result)
+            }
+            Err(e) => Err(e),
         }
-        result
     }
 
     /// Raw row access for callers (streaming commands) that need to drive the
@@ -456,11 +457,14 @@ impl ConnectionService {
         let row = self.hydrate(row);
         let cfg = self.http_config().await;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
-        let result = providers::complete(&row, messages, params, &cfg).await;
-        if result.is_ok() {
-            let _ = self.repo.touch_last_used(&id).await;
+        match providers::complete(&row, messages, params, &cfg).await {
+            Ok(mut result) => {
+                self.enrich_completion_context(&row, &mut result).await;
+                let _ = self.repo.touch_last_used(&id).await;
+                Ok(result)
+            }
+            Err(e) => Err(e),
         }
-        result
     }
 
     /// Exposed for streaming paths that drive the HTTP layer directly so
@@ -478,6 +482,32 @@ impl ConnectionService {
             .acquire_owned()
             .await
             .expect("semaphore closed")
+    }
+
+    /// Attach resolved context-window metadata to a completion. Probes LM
+    /// Studio's native API when the connection has no manual limit; cloud
+    /// providers are unchanged when nothing is known.
+    pub async fn enrich_completion_context(
+        &self,
+        row: &ConnectionRow,
+        result: &mut CompletionResult,
+    ) {
+        let mut limit = row.context_window_size;
+        if limit <= 0 && providers::lmstudio::is_lm_studio_url(&row.base_url) {
+            let cfg = self.http_config().await;
+            if let Some(probed) =
+                providers::lmstudio::probe_context_length(&row.base_url, &cfg).await
+            {
+                limit = probed;
+                let _ = self
+                    .repo
+                    .update_context_window_if_unset(&row.id, probed)
+                    .await;
+            }
+        }
+        if limit > 0 {
+            result.context_window_size = Some(limit);
+        }
     }
 }
 

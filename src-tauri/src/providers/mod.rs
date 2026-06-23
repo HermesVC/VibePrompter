@@ -16,10 +16,14 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
+pub mod lmstudio;
+
 use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
     TokenUsage,
 };
+use crate::storage::repositories::ConnectionRow;
+
 fn openai_message_content(msg: &ChatMessage) -> serde_json::Value {
     if msg.images.is_empty() {
         return json!(msg.content);
@@ -93,7 +97,6 @@ mod content_tests {
     }
 }
 
-use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
 /// Tuneable HTTP-client knobs sourced from `Settings`. Pulled into a small
@@ -136,7 +139,7 @@ impl Default for HttpConfig {
     }
 }
 
-fn http(cfg: &HttpConfig) -> AppResult<reqwest::Client> {
+pub(crate) fn http(cfg: &HttpConfig) -> AppResult<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent("VibePrompter/0.1")
         .timeout(cfg.timeout);
@@ -323,6 +326,7 @@ pub async fn complete(
         model,
         latency_ms: started.elapsed().as_millis() as u64,
         usage,
+        context_window_size: None,
     })
 }
 
@@ -599,6 +603,7 @@ where
                 model,
                 latency_ms: started.elapsed().as_millis() as u64,
                 usage,
+                context_window_size: None,
             });
         }
         let event = match event {
@@ -682,6 +687,7 @@ where
         model,
         latency_ms: started.elapsed().as_millis() as u64,
         usage,
+        context_window_size: None,
     })
 }
 

@@ -152,4 +152,8 @@ pub struct CompletionResult {
     /// was cancelled before usage arrived.
     #[serde(default)]
     pub usage: TokenUsage,
+    /// Resolved context window for this connection, when known. Omitted for
+    /// providers that don't expose a limit (most cloud APIs).
+    #[serde(rename = "contextWindowSize", default, skip_serializing_if = "Option::is_none")]
+    pub context_window_size: Option<i64>,
 }

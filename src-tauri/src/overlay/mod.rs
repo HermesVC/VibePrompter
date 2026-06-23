@@ -572,7 +572,7 @@ async fn run_stream(
         .await
         .map(|s| s.stream_response)
         .unwrap_or(true);
-    let result = if stream_pref {
+    let mut result = if stream_pref {
         let app_for_tokens = app.clone();
         let app_for_cancel = app.clone();
         crate::providers::complete_stream(
@@ -599,6 +599,10 @@ async fn run_stream(
         }
         r
     };
+    state
+        .connections
+        .enrich_completion_context(&row, &mut result)
+        .await;
 
     if !is_current_stream(&app, seq) {
         // We got back the final response from a stale stream — discard it
@@ -867,7 +871,7 @@ async fn run_followup_stream(
         .await
         .map(|s| s.stream_response)
         .unwrap_or(true);
-    let result = if stream_pref {
+    let mut result = if stream_pref {
         let app_for_tokens = app.clone();
         let app_for_cancel = app.clone();
         crate::providers::complete_stream(
@@ -890,6 +894,10 @@ async fn run_followup_stream(
         }
         r
     };
+    state
+        .connections
+        .enrich_completion_context(&row, &mut result)
+        .await;
 
     state.connections.mark_used(&row.id).await;
     let cost_micros = crate::services::pricing::cost_micros(

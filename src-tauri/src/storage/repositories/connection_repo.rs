@@ -153,6 +153,26 @@ impl ConnectionRepo {
         Ok(())
     }
 
+    /// Persist a probed context limit only when the user has not set one.
+    /// Returns `true` when the row was updated.
+    pub async fn update_context_window_if_unset(&self, id: &str, size: i64) -> AppResult<bool> {
+        if size <= 0 {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE provider_connections
+             SET context_window_size = ?1, updated_at = ?2
+             WHERE id = ?3 AND context_window_size = 0",
+        )
+        .bind(size)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Stamp the connection as used "now". Called after every successful
     /// completion so the providers list can sort by recency.
     pub async fn touch_last_used(&self, id: &str) -> AppResult<()> {

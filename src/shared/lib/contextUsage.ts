@@ -66,6 +66,23 @@ export function normalizeTokenUsage(raw: unknown): TokenUsage | null {
   };
 }
 
+export function contextTokensRemaining(used: number, limit: number): number | null {
+  if (limit <= 0 || used < 0) return null;
+  return Math.max(0, limit - used);
+}
+
+/** Merge a probed context limit from a completion into the local connection list. */
+export function applyCompletionContextUpdate<T extends ConnContextInfo>(
+  conns: T[],
+  connectionId: string,
+  contextWindowSize?: number
+): T[] {
+  if (!connectionId || !contextWindowSize || contextWindowSize <= 0) return conns;
+  return conns.map((c) =>
+    c.id === connectionId ? { ...c, contextWindowSize } : c
+  );
+}
+
 export function contextFillPercent(used: number, limit: number): number | null {
   if (limit <= 0 || used < 0) return null;
   return Math.min(100, Math.round((used / limit) * 100));
