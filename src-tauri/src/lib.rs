@@ -165,6 +165,7 @@ pub fn run() {
             commands::chat_toggle,
             commands::chat_hide,
             commands::chat_complete_stream,
+            commands::chat_clear_session_memory,
             commands::write_clipboard_text,
             commands::read_clipboard_text,
             commands::capture_editor_selection,

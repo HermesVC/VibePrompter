@@ -117,6 +117,8 @@ mod tests {
             stream_incomplete: incomplete,
             finish_reason: None,
             output_truncated: false,
+            retrieved_memory: None,
+            vector_chunks_used: None,
         }
     }
 

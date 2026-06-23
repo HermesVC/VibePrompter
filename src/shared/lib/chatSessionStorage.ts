@@ -5,6 +5,10 @@ import { DEFAULT_CHAT_CONTEXT } from './chatContext';
 
 const STORAGE_KEY = 'vp_chat_window_session';
 
+export function createChatSessionId(): string {
+  return crypto.randomUUID();
+}
+
 export interface PersistedChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -17,6 +21,7 @@ export interface PersistedChatMessage {
 export interface PersistedChatSession {
   version: 1;
   savedAt: string;
+  sessionId: string;
   messages: PersistedChatMessage[];
   chatContext: ChatContextState;
   connectionId: string;
@@ -32,6 +37,10 @@ export function loadChatSession(): PersistedChatSession | null {
     return {
       version: 1,
       savedAt: parsed.savedAt ?? '',
+      sessionId:
+        typeof parsed.sessionId === 'string' && parsed.sessionId.trim()
+          ? parsed.sessionId
+          : createChatSessionId(),
       messages: parsed.messages.filter(
         (m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'
       ),
@@ -52,6 +61,7 @@ export function saveChatSession(
     const payload: PersistedChatSession = {
       version: 1,
       savedAt: new Date().toISOString(),
+      sessionId: session.sessionId,
       messages: session.messages,
       chatContext: session.chatContext,
       connectionId: session.connectionId,

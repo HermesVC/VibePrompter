@@ -190,4 +190,10 @@ pub struct CompletionResult {
     /// Output hit `max_tokens` / `finish_reason: length` — not the same as context overflow.
     #[serde(rename = "outputTruncated", default, skip_serializing_if = "std::ops::Not::not")]
     pub output_truncated: bool,
+    /// Semantic excerpts injected for this reply (compact preview for UI).
+    #[serde(rename = "retrievedMemory", default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_memory: Option<String>,
+    /// Number of vector chunks used in retrieval for this reply.
+    #[serde(rename = "vectorChunksUsed", default, skip_serializing_if = "Option::is_none")]
+    pub vector_chunks_used: Option<u32>,
 }

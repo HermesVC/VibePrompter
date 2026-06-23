@@ -86,3 +86,4 @@ TAURI_SIGNING_PRIVATE_KEY*
 build-msix.ps1
 /.claude
 VibePrompter-sign.pfx
+/target/debug/

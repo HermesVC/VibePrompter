@@ -32,6 +32,7 @@ pub async fn chat_complete_stream(
     connection_id: Option<String>,
     chat_context: Option<crate::workspace::ChatContextPayload>,
     session_summary: Option<String>,
+    session_id: Option<String>,
 ) -> Result<CompletionResult, AppError> {
     let mut chat_context = chat_context;
     if let Some(ctx) = chat_context.as_mut() {
@@ -133,6 +134,21 @@ pub async fn chat_complete_stream(
     let mut memory_compressed = false;
     let mut evicted_count = 0u32;
     let mut stream_generation = 0u32;
+    let session_id = session_id.unwrap_or_default();
+    let mut retrieved_preview: Option<String> = None;
+    let mut vector_chunks_used: Option<u32> = None;
+    let mut indexed_chunk_hashes: std::collections::HashSet<String> = if session_id.trim().is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        state
+            .chat_memory
+            .list_content_hashes(&session_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
+    let mut query_emb_cache: Option<Vec<f32>> = None;
 
     let token_event = format!("chat:{stream_id}:token");
     let done_event = format!("chat:{stream_id}:done");
@@ -208,11 +224,55 @@ pub async fn chat_complete_stream(
             emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
         }
 
+        if !window_plan.evicted.is_empty() && !session_id.trim().is_empty() {
+            crate::chat::index_evicted_messages(
+                &state.chat_memory,
+                &row,
+                &cfg,
+                &session_id,
+                &window_plan.evicted,
+                &mut indexed_chunk_hashes,
+            )
+            .await;
+        }
+
         let api_messages = window_plan.active;
+        let query_text = messages
+            .last()
+            .filter(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        let retrieved = if session_id.trim().is_empty() {
+            Vec::new()
+        } else {
+            crate::chat::retrieve_relevant(
+                &state.chat_memory,
+                &row,
+                &cfg,
+                &session_id,
+                query_text,
+                context_limit,
+                &mut query_emb_cache,
+            )
+            .await
+        };
+        let retrieved_block = crate::chat::format_retrieved_for_system(&retrieved);
+        retrieved_preview = if retrieved.is_empty() {
+            None
+        } else {
+            Some(retrieved_block.clone())
+        };
+        vector_chunks_used = if retrieved.is_empty() {
+            None
+        } else {
+            Some(retrieved.len() as u32)
+        };
+
         let input_estimate = estimate_chat_input_tokens(
             &api_messages,
             system_prompt.as_deref(),
             &memory,
+            &retrieved_block,
         );
         let effective_max_tokens =
             effective_chat_max_tokens(max_tokens, input_estimate, context_limit);
@@ -220,9 +280,11 @@ pub async fn chat_complete_stream(
         let mut request_system = system_prompt.clone();
         if let Some(sys) = request_system.as_mut() {
             crate::chat::append_memory_to_system(sys, Some(&memory), context_limit);
+            crate::chat::append_retrieved_to_system(sys, &retrieved_block);
         } else {
             let mut sys = String::new();
             crate::chat::append_memory_to_system(&mut sys, Some(&memory), context_limit);
+            crate::chat::append_retrieved_to_system(&mut sys, &retrieved_block);
             request_system = Some(sys);
         }
 
@@ -312,6 +374,8 @@ pub async fn chat_complete_stream(
                 r.evicted_turns = Some(evicted_count);
             }
             r.context_recovered = context_recovered;
+            r.retrieved_memory = retrieved_preview.clone();
+            r.vector_chunks_used = vector_chunks_used;
             if let Some(ctx) = chat_context.as_ref() {
                 use crate::workspace::ChatScope;
                 let user_edit_intent = messages
@@ -374,6 +438,17 @@ pub async fn chat_complete_stream(
 
 fn is_cancelled_err(e: &AppError) -> bool {
     matches!(e, AppError::Validation(msg) if msg == "cancelled")
+}
+
+#[tauri::command]
+pub async fn chat_clear_session_memory(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), AppError> {
+    if session_id.trim().is_empty() {
+        return Ok(());
+    }
+    state.chat_memory.clear_session(&session_id).await
 }
 
 /// Read files dropped onto the chat window from OS paths (Tauri drag-drop).
@@ -586,12 +661,13 @@ fn estimate_chat_input_tokens(
     messages: &[ChatMessage],
     base_system: Option<&str>,
     memory: &str,
+    retrieved: &str,
 ) -> u32 {
     let msg_tokens: u32 = messages
         .iter()
         .map(crate::chat::estimate_message_tokens)
         .sum();
-    let mut sys_chars = memory.chars().count();
+    let mut sys_chars = memory.chars().count() + retrieved.chars().count();
     if let Some(s) = base_system {
         sys_chars += s.chars().count();
     }

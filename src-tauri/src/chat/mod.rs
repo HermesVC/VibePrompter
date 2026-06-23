@@ -7,12 +7,17 @@
 mod context_recovery;
 mod session_summary;
 mod sliding_window;
+mod vector_memory;
 
 pub use context_recovery::should_retry_for_context;
 pub use session_summary::append_memory_to_system;
 pub use sliding_window::{
     compress_evicted_turns, estimate_message_tokens, fallback_merge_memory,
     plan_sliding_window_with_aggression, WindowAggression,
+};
+pub use vector_memory::{
+    append_retrieved_to_system, format_retrieved_for_system, index_evicted_messages,
+    retrieve_relevant,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

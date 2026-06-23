@@ -15,6 +15,7 @@ import {
 } from '@shared/lib/contextUsage';
 import {
   clearChatSession,
+  createChatSessionId,
   loadChatSession,
   saveChatSession,
   type PersistedChatMessage,
@@ -80,6 +81,8 @@ interface DonePayload {
   contextRecovered?: boolean;
   outputTruncated?: boolean;
   finishReason?: string;
+  retrievedMemory?: string;
+  vectorChunksUsed?: number;
 }
 
 interface StatusPayload {
@@ -160,6 +163,10 @@ export function ChatWindow() {
   const [sessionSummary, setSessionSummary] = useState(
     () => initialSession?.sessionSummary ?? ''
   );
+  const [sessionId, setSessionId] = useState(
+    () => initialSession?.sessionId ?? createChatSessionId()
+  );
+  const [retrievedMemory, setRetrievedMemory] = useState<string | null>(null);
   const [applyDialog, setApplyDialog] = useState<{
     title: string;
     path?: string;
@@ -172,6 +179,8 @@ export function ChatWindow() {
   chatContextRef.current = chatContext;
   const sessionSummaryRef = useRef(sessionSummary);
   sessionSummaryRef.current = sessionSummary;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   // Scope tabs only attach context — they do not override the user's chosen chat mode.
   // (snippet-editor / file-assistant modes force code-only output and break Q&A.)
@@ -204,6 +213,7 @@ export function ChatWindow() {
       }));
     const t = window.setTimeout(() => {
       saveChatSession({
+        sessionId,
         messages: persistable,
         chatContext,
         connectionId,
@@ -211,7 +221,7 @@ export function ChatWindow() {
       });
     }, 400);
     return () => window.clearTimeout(t);
-  }, [messages, chatContext, connectionId, sessionSummary]);
+  }, [messages, chatContext, connectionId, sessionSummary, sessionId]);
 
   const scheduleFlush = useCallback((assistantId: string) => {
     if (flushPendingRef.current) return;
@@ -360,11 +370,20 @@ export function ChatWindow() {
     []
   );
 
+  const applyRetrievedMemoryFromPayload = useCallback((preview: string | undefined) => {
+    const trimmed = preview?.trim();
+    setRetrievedMemory(trimmed || null);
+  }, []);
+
   const applyContextNotice = useCallback(
     (
       payload: Pick<
         DonePayload,
-        'memoryCompressed' | 'evictedTurns' | 'contextRecovered' | 'outputTruncated'
+        | 'memoryCompressed'
+        | 'evictedTurns'
+        | 'contextRecovered'
+        | 'outputTruncated'
+        | 'vectorChunksUsed'
       >,
       contextLimit: number
     ) => {
@@ -380,6 +399,11 @@ export function ChatWindow() {
       }
       if (payload.memoryCompressed && payload.evictedTurns) {
         parts.push(`${payload.evictedTurns} старых сообщений сохранены в память диалога`);
+      }
+      if (payload.vectorChunksUsed && payload.vectorChunksUsed > 0) {
+        parts.push(
+          `подтянуто ${payload.vectorChunksUsed} фрагм. из семантической памяти сессии`
+        );
       }
       if (!parts.length) {
         setContextTrimNotice(null);
@@ -596,6 +620,7 @@ export function ChatWindow() {
             e.payload.sessionSummary,
             e.payload.contextWindowSize ?? contextLimit
           );
+          applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
           applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
           processScopedCompletion(e.payload);
         }),
@@ -629,6 +654,7 @@ export function ChatWindow() {
         connectionId: connectionId || undefined,
         chatContext: buildChatContextPayload(chatContextRef.current),
         sessionSummary: sessionSummaryRef.current.trim() || undefined,
+        sessionId: sessionIdRef.current,
       });
 
       if (cancelledRef.current) return;
@@ -663,6 +689,7 @@ export function ChatWindow() {
         result.sessionSummary,
         result.contextWindowSize ?? contextLimit
       );
+      applyRetrievedMemoryFromPayload(result.retrievedMemory);
       applyContextNotice(result, result.contextWindowSize ?? contextLimit);
       processScopedCompletion(result);
     } catch (e) {
@@ -697,6 +724,7 @@ export function ChatWindow() {
     voice,
     processScopedCompletion,
     applySessionSummaryFromPayload,
+    applyRetrievedMemoryFromPayload,
     applyContextNotice,
   ]);
 
@@ -785,6 +813,11 @@ export function ChatWindow() {
   const clearChat = () => {
     if (streaming) cancelStream();
     voice.stop();
+    const oldSessionId = sessionIdRef.current;
+    if (oldSessionId) {
+      void invoke('chat_clear_session_memory', { sessionId: oldSessionId }).catch(() => {});
+    }
+    setSessionId(createChatSessionId());
     setMessages([]);
     setDraft('');
     setPendingImages([]);
@@ -792,6 +825,7 @@ export function ChatWindow() {
     setTokenUsage(null);
     setContextTrimNotice(null);
     setSessionSummary('');
+    setRetrievedMemory(null);
     setChatContext(DEFAULT_CHAT_CONTEXT);
     clearChatSession();
   };
@@ -1065,6 +1099,36 @@ export function ChatWindow() {
               }}
             >
               {sessionSummary}
+            </pre>
+          </details>
+        )}
+
+        {retrievedMemory && (
+          <details
+            data-no-drag
+            style={{
+              margin: '0 12px',
+              fontSize: 10.5,
+              color: 'var(--fg-dim)',
+              border: '.5px solid var(--border)',
+              borderRadius: 8,
+              padding: '4px 8px',
+              background: 'color-mix(in srgb, var(--accent) 6%, var(--surface-2))',
+            }}
+          >
+            <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+              Семантическая память (~{estimateTokensFromChars(retrievedMemory.length)} tok)
+            </summary>
+            <pre
+              style={{
+                margin: '6px 0 0',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: 10,
+                color: 'var(--fg-mute)',
+              }}
+            >
+              {retrievedMemory}
             </pre>
           </details>
         )}

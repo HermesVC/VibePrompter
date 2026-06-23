@@ -17,7 +17,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 pub mod lmstudio;
+pub mod embeddings;
 pub mod prompt_format;
+
+pub use embeddings::{embed_texts, resolve_embed_model};
 
 use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
@@ -336,6 +339,8 @@ pub async fn complete(
         stream_incomplete: false,
         finish_reason: None,
         output_truncated: false,
+        retrieved_memory: None,
+        vector_chunks_used: None,
     })
 }
 
@@ -624,6 +629,8 @@ where
                 stream_incomplete: false,
                 finish_reason: None,
                 output_truncated: false,
+                retrieved_memory: None,
+                vector_chunks_used: None,
             });
         }
         let event = match event {
@@ -742,6 +749,8 @@ where
         stream_incomplete,
         finish_reason,
         output_truncated,
+        retrieved_memory: None,
+        vector_chunks_used: None,
     })
 }
 

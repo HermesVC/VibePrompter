@@ -3,6 +3,7 @@
 pub mod analytics_repo;
 pub mod connection_repo;
 pub mod history_repo;
+pub mod memory_repo;
 pub mod mode_repo;
 pub mod provider_repo;
 pub mod settings_repo;
@@ -11,6 +12,7 @@ pub mod shortcut_repo;
 pub use analytics_repo::AnalyticsRepo;
 pub use connection_repo::{ConnectionRepo, ConnectionRow};
 pub use history_repo::HistoryRepo;
+pub use memory_repo::{cosine_similarity, MemoryChunkRow, MemoryRepo};
 pub use mode_repo::ModeRepo;
 pub use provider_repo::ProviderRepo;
 pub use settings_repo::SettingsRepo;
