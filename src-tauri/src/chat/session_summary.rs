@@ -31,11 +31,19 @@ pub fn trim_summary_to_budget(summary: &str, context_limit_tokens: i64) -> Strin
 
 fn trim_chars(s: &str, max: usize) -> String {
     let t = s.trim();
-    if t.len() <= max {
+    if t.chars().count() <= max {
         return t.to_string();
     }
     let keep = max.saturating_sub(1);
-    format!("…{}", &t[t.len().saturating_sub(keep)..])
+    let tail: String = t
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{tail}")
 }
 
 #[cfg(test)]
@@ -48,5 +56,13 @@ mod tests {
         let out = trim_summary_to_budget(&long, 8192);
         assert!(out.len() <= 8192 * 3 / 10 * 4 + 2);
         assert!(out.starts_with('…'));
+    }
+
+    #[test]
+    fn trims_unicode_without_slicing_panic() {
+        let long = "привет🙂".repeat(2000);
+        let out = trim_summary_to_budget(&long, 128);
+        assert!(out.starts_with('…'));
+        assert!(out.contains('🙂') || out.contains('т'));
     }
 }

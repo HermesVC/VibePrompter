@@ -25,7 +25,11 @@ impl Config {
             log_dir,
             app_data_dir: app_data_dir.to_path_buf(),
             debug_mode,
-            log_level: if debug_mode { "debug".into() } else { "info".into() },
+            log_level: if debug_mode {
+                "debug".into()
+            } else {
+                "info".into()
+            },
         })
     }
 }

@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::models::ChatMessage;
 use crate::providers::prompt_format::{
-    self, build_context, resolve, ToolDefinition, PromptFormatInfo,
+    self, build_context, resolve, PromptFormatInfo, ToolDefinition,
 };
 
 #[tauri::command]
@@ -60,6 +60,9 @@ pub fn render_prompt_format(input: RenderPromptFormatInput) -> RenderPromptForma
 
 /// Parse tool calls from a model output string (Gemma 4 `<|tool_call|>` blocks).
 #[tauri::command]
-pub fn parse_prompt_tool_calls(format_id: String, text: String) -> Vec<prompt_format::ParsedToolCall> {
+pub fn parse_prompt_tool_calls(
+    format_id: String,
+    text: String,
+) -> Vec<prompt_format::ParsedToolCall> {
     resolve(&format_id).parse_tool_calls(&text)
 }

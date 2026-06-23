@@ -37,7 +37,10 @@ impl ShortcutRepo {
         .fetch_optional(&self.pool)
         .await?;
         item.map(ShortcutItem::with_keys)
-            .ok_or_else(|| AppError::NotFound { entity: "shortcut", id: id.to_string() })
+            .ok_or_else(|| AppError::NotFound {
+                entity: "shortcut",
+                id: id.to_string(),
+            })
     }
 
     /// Insert or update a shortcut.
@@ -73,7 +76,10 @@ impl ShortcutRepo {
             .await?
             .rows_affected();
         if affected == 0 {
-            return Err(AppError::NotFound { entity: "shortcut", id: id.to_string() });
+            return Err(AppError::NotFound {
+                entity: "shortcut",
+                id: id.to_string(),
+            });
         }
         Ok(())
     }
@@ -119,6 +125,12 @@ mod tests {
     async fn delete_missing_returns_not_found() {
         let repo = ShortcutRepo::new(test_pool().await);
         let err = repo.delete("does-not-exist").await.unwrap_err();
-        assert!(matches!(err, AppError::NotFound { entity: "shortcut", .. }));
+        assert!(matches!(
+            err,
+            AppError::NotFound {
+                entity: "shortcut",
+                ..
+            }
+        ));
     }
 }

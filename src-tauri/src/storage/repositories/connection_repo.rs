@@ -131,11 +131,10 @@ impl ConnectionRepo {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(row_from_tuple)
-            .ok_or_else(|| AppError::NotFound {
-                entity: "provider_connection",
-                id: id.to_string(),
-            })
+        row.map(row_from_tuple).ok_or_else(|| AppError::NotFound {
+            entity: "provider_connection",
+            id: id.to_string(),
+        })
     }
 
     pub async fn upsert(&self, row: &ConnectionRow) -> AppResult<()> {

@@ -12,10 +12,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, AppErr
 }
 
 #[tauri::command]
-pub async fn save_settings(
-    state: State<'_, AppState>,
-    settings: Settings,
-) -> Result<(), AppError> {
+pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), AppError> {
     state.settings.save(&settings).await
 }
 
@@ -88,9 +85,7 @@ pub async fn set_kv(
 /// Export the user's full Settings aggregate as JSON. Wraps it with a schema
 /// tag so the import side can refuse files from other apps.
 #[tauri::command]
-pub async fn export_settings(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, AppError> {
+pub async fn export_settings(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     let settings = state.settings.get().await?;
     Ok(serde_json::json!({
         "schema": "vibeprompter-settings-v1",
@@ -118,7 +113,9 @@ pub async fn import_settings(
         .cloned()
         .ok_or_else(|| AppError::Validation("payload missing `settings` object".into()))?;
     let settings: crate::models::Settings = serde_json::from_value(value).map_err(|e| {
-        AppError::Validation(format!("settings payload doesn't match expected shape: {e}"))
+        AppError::Validation(format!(
+            "settings payload doesn't match expected shape: {e}"
+        ))
     })?;
     state.settings.save(&settings).await
 }

@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app::AppState;
-use crate::models::{ProviderInfo, PromptMode};
+use crate::models::{PromptMode, ProviderInfo};
 use crate::utils::AppError;
 
 #[tauri::command]

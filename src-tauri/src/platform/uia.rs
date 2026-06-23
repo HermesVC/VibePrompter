@@ -34,8 +34,7 @@ unsafe fn try_get() -> windows::core::Result<Option<String>> {
     // cross-process marshaling works from either apartment.
     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-    let automation: IUIAutomation =
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+    let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
 
     let element = automation.GetFocusedElement()?;
 
@@ -53,5 +52,9 @@ unsafe fn try_get() -> windows::core::Result<Option<String>> {
     // GetText(-1) returns the full text of the range with no length cap.
     let text = ranges.GetElement(0)?.GetText(-1)?.to_string();
 
-    Ok(if text.trim().is_empty() { None } else { Some(text) })
+    Ok(if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    })
 }

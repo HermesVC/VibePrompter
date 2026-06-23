@@ -2,7 +2,7 @@
 //! Lets the frontend's mode/provider lists be backed by real data now; write
 //! paths and dedicated services arrive in sub-project 2.
 
-use crate::models::{ProviderInfo, PromptMode};
+use crate::models::{PromptMode, ProviderInfo};
 use crate::storage::repositories::{ModeRepo, ProviderRepo};
 use crate::utils::AppResult;
 

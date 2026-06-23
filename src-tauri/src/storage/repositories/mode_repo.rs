@@ -45,7 +45,10 @@ impl ModeRepo {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        mode.ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: id.to_string() })
+        mode.ok_or_else(|| AppError::NotFound {
+            entity: "prompt_mode",
+            id: id.to_string(),
+        })
     }
 
     pub async fn upsert(&self, mode: &PromptMode, sort_order: i64) -> AppResult<()> {
@@ -62,9 +65,7 @@ impl ModeRepo {
         .fetch_optional(&self.pool)
         .await?;
         let (name, description, icon_name) = match &existing {
-            Some((n, d, i, is_sys)) if *is_sys != 0 => {
-                (n.clone(), d.clone(), i.clone())
-            }
+            Some((n, d, i, is_sys)) if *is_sys != 0 => (n.clone(), d.clone(), i.clone()),
             _ => (
                 mode.name.clone(),
                 mode.description.clone(),
@@ -131,16 +132,14 @@ impl ModeRepo {
     /// neighbor — the affordance is hidden at list boundaries).
     pub async fn swap_sort_order(&self, id_a: &str, id_b: &str) -> AppResult<()> {
         let mut tx = self.pool.begin().await?;
-        let a: Option<(i64,)> =
-            sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
-                .bind(id_a)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let b: Option<(i64,)> =
-            sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
-                .bind(id_b)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let a: Option<(i64,)> = sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
+            .bind(id_a)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let b: Option<(i64,)> = sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
+            .bind(id_b)
+            .fetch_optional(&mut *tx)
+            .await?;
         let (Some((sa,)), Some((sb,))) = (a, b) else {
             tx.rollback().await.ok();
             return Ok(());
@@ -166,10 +165,9 @@ impl ModeRepo {
     /// Highest current sort_order. Used when inserting a new mode so it lands
     /// at the bottom of the list by default.
     pub async fn max_sort_order(&self) -> AppResult<i64> {
-        let row: (Option<i64>,) =
-            sqlx::query_as("SELECT MAX(sort_order) FROM prompt_modes")
-                .fetch_one(&self.pool)
-                .await?;
+        let row: (Option<i64>,) = sqlx::query_as("SELECT MAX(sort_order) FROM prompt_modes")
+            .fetch_one(&self.pool)
+            .await?;
         Ok(row.0.unwrap_or(0))
     }
 }
@@ -204,6 +202,12 @@ mod tests {
     async fn get_missing_returns_not_found() {
         let repo = ModeRepo::new(test_pool().await);
         let err = repo.get("nope").await.unwrap_err();
-        assert!(matches!(err, AppError::NotFound { entity: "prompt_mode", .. }));
+        assert!(matches!(
+            err,
+            AppError::NotFound {
+                entity: "prompt_mode",
+                ..
+            }
+        ));
     }
 }

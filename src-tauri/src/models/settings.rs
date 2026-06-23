@@ -45,13 +45,27 @@ pub struct Settings {
     pub log_raw_responses: bool,
 }
 
-fn yes() -> bool { true }
-fn no() -> bool { false }
-fn default_timeout() -> u32 { 30 }
-fn default_theme() -> String { "system".into() }
-fn default_accent() -> String { "violet".into() }
-fn default_density() -> String { "regular".into() }
-fn default_retention() -> String { "30d".into() }
+fn yes() -> bool {
+    true
+}
+fn no() -> bool {
+    false
+}
+fn default_timeout() -> u32 {
+    30
+}
+fn default_theme() -> String {
+    "system".into()
+}
+fn default_accent() -> String {
+    "violet".into()
+}
+fn default_density() -> String {
+    "regular".into()
+}
+fn default_retention() -> String {
+    "30d".into()
+}
 
 impl Default for Settings {
     fn default() -> Self {

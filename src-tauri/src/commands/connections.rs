@@ -10,9 +10,7 @@ use crate::models::{
 use crate::utils::AppError;
 
 #[tauri::command]
-pub async fn list_connections(
-    state: State<'_, AppState>,
-) -> Result<Vec<ConnectionInfo>, AppError> {
+pub async fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionInfo>, AppError> {
     state.connections.list().await
 }
 
@@ -25,10 +23,7 @@ pub async fn save_connection(
 }
 
 #[tauri::command]
-pub async fn delete_connection(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.connections.delete(&id).await
 }
 
@@ -144,7 +139,10 @@ pub async fn run_prompt_stream(
     let mode = modes
         .iter()
         .find(|m| m.id == mode_id)
-        .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
+        .ok_or_else(|| AppError::NotFound {
+            entity: "prompt_mode",
+            id: mode_id.clone(),
+        })?
         .clone();
 
     let resolved = connection_id
@@ -204,7 +202,10 @@ pub async fn run_prompt_stream(
 
     match result {
         Ok(mut r) => {
-            state.connections.enrich_completion_context(&row, &mut r).await;
+            state
+                .connections
+                .enrich_completion_context(&row, &mut r)
+                .await;
             if was_cancelled {
                 // Distinct event so the UI can render "Cancelled" instead of
                 // a fake success — but still persist the partial result so
@@ -249,9 +250,7 @@ pub async fn run_prompt_stream(
 }
 
 #[tauri::command]
-pub async fn export_connections(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, AppError> {
+pub async fn export_connections(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     state.connections.export_all().await
 }
 

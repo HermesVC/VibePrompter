@@ -108,7 +108,11 @@ pub async fn get_cost_breakdown(
         .cost_by_connection(days)
         .await?
         .into_iter()
-        .map(|(label, micros, runs)| CostByConnection { label, micros, runs })
+        .map(|(label, micros, runs)| CostByConnection {
+            label,
+            micros,
+            runs,
+        })
         .collect();
     Ok(CostBreakdown {
         by_day,
@@ -118,9 +122,7 @@ pub async fn get_cost_breakdown(
 }
 
 #[tauri::command]
-pub async fn get_cost_summary(
-    state: State<'_, AppState>,
-) -> Result<CostSummary, AppError> {
+pub async fn get_cost_summary(state: State<'_, AppState>) -> Result<CostSummary, AppError> {
     let (month_micros, week_micros, total_micros, priced, unpriced) =
         state.history.cost_summary().await?;
     Ok(CostSummary {
@@ -135,12 +137,13 @@ pub async fn get_cost_summary(
 /// Export the entire history as JSON. Returned as a serde value the frontend
 /// stringifies and writes to disk via the browser's download API.
 #[tauri::command]
-pub async fn export_history(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, AppError> {
+pub async fn export_history(state: State<'_, AppState>) -> Result<serde_json::Value, AppError> {
     let items = state
         .history
-        .list_all(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
+        .list_all(crate::models::HistoryQuery {
+            limit: 100_000,
+            offset: 0,
+        })
         .await?;
     Ok(serde_json::json!({
         "schema": "vibeprompter-history-v1",
@@ -176,14 +179,19 @@ pub async fn export_history_to_file(
             let _ = tx.send(path);
         });
 
-    let path = rx.await.map_err(|_| AppError::Config("dialog closed".into()))?;
+    let path = rx
+        .await
+        .map_err(|_| AppError::Config("dialog closed".into()))?;
     let Some(file_path) = path else {
         return Ok(None); // user cancelled
     };
 
     let items = state
         .history
-        .list_all(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
+        .list_all(crate::models::HistoryQuery {
+            limit: 100_000,
+            offset: 0,
+        })
         .await?;
     let payload = serde_json::json!({
         "schema": "vibeprompter-history-v1",
@@ -194,7 +202,8 @@ pub async fn export_history_to_file(
     let json = serde_json::to_string_pretty(&payload)
         .map_err(|e| AppError::Config(format!("serialise: {e}")))?;
 
-    let dest = file_path.as_path()
+    let dest = file_path
+        .as_path()
         .ok_or_else(|| AppError::Config("invalid path".into()))?;
     std::fs::write(dest, json.as_bytes())
         .map_err(|e| AppError::Config(format!("write {}: {e}", dest.display())))?;

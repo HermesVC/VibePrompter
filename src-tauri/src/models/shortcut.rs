@@ -22,7 +22,11 @@ pub struct ShortcutItem {
 impl ShortcutItem {
     /// Populate the derived `keys` field from `accelerator`.
     pub fn with_keys(mut self) -> Self {
-        self.keys = self.accelerator.split('+').map(|s| s.trim().to_string()).collect();
+        self.keys = self
+            .accelerator
+            .split('+')
+            .map(|s| s.trim().to_string())
+            .collect();
         self
     }
 }
@@ -43,4 +47,6 @@ pub struct ShortcutConfig {
     pub sort_order: i64,
 }
 
-fn default_enabled() -> bool { true }
+fn default_enabled() -> bool {
+    true
+}

@@ -114,10 +114,7 @@ pub fn hints_for(id: &str) -> &'static str {
 }
 
 pub fn list_profiles() -> Vec<(&'static str, &'static [&'static str])> {
-    PROFILES
-        .iter()
-        .map(|p| (p.id, p.extensions))
-        .collect()
+    PROFILES.iter().map(|p| (p.id, p.extensions)).collect()
 }
 
 #[cfg(test)]

@@ -26,9 +26,8 @@ pub fn resolve_under_root(workspace_root: &Path, rel: &str) -> AppResult<PathBuf
             "workspace root is not configured — set it in Settings → Workspace".into(),
         ));
     }
-    let root = fs::canonicalize(workspace_root).map_err(|e| {
-        AppError::Validation(format!("workspace root is not accessible: {e}"))
-    })?;
+    let root = fs::canonicalize(workspace_root)
+        .map_err(|e| AppError::Validation(format!("workspace root is not accessible: {e}")))?;
     let rel_path = Path::new(rel);
     if rel_path.is_absolute() {
         let canon = fs::canonicalize(rel_path)
@@ -89,7 +88,9 @@ pub fn read_absolute_file_for_context(abs: &Path) -> AppResult<FileContentDto> {
         return Err(AppError::Validation("empty file path".into()));
     }
     if abs.is_dir() {
-        return Err(AppError::Validation("expected a file, got a directory".into()));
+        return Err(AppError::Validation(
+            "expected a file, got a directory".into(),
+        ));
     }
     let bytes = fs::read(abs).map_err(|e| AppError::Validation(format!("read failed: {e}")))?;
     if bytes.len() > MAX_READ_BYTES {
@@ -123,7 +124,9 @@ pub fn read_file_range(
 ) -> AppResult<FileContentDto> {
     let abs = resolve_under_root(workspace_root, rel)?;
     if abs.is_dir() {
-        return Err(AppError::Validation("expected a file, got a directory".into()));
+        return Err(AppError::Validation(
+            "expected a file, got a directory".into(),
+        ));
     }
     let bytes = fs::read(&abs).map_err(|e| AppError::Validation(format!("read failed: {e}")))?;
     if bytes.len() > MAX_READ_BYTES {
@@ -166,7 +169,9 @@ pub fn write_file_checked(
 ) -> AppResult<String> {
     let abs = resolve_under_root(workspace_root, rel)?;
     if abs.is_dir() {
-        return Err(AppError::Validation("expected a file, got a directory".into()));
+        return Err(AppError::Validation(
+            "expected a file, got a directory".into(),
+        ));
     }
     if let Some(expected) = expected_hash.filter(|s| !s.is_empty()) {
         if abs.exists() {
@@ -198,9 +203,8 @@ pub fn list_dir_recursive(
     if !base.is_dir() {
         return Err(AppError::Validation("not a directory".into()));
     }
-    let root = fs::canonicalize(workspace_root).map_err(|e| {
-        AppError::Validation(format!("workspace root invalid: {e}"))
-    })?;
+    let root = fs::canonicalize(workspace_root)
+        .map_err(|e| AppError::Validation(format!("workspace root invalid: {e}")))?;
     let mut out = Vec::new();
     walk_dir(&root, &base, 0, max_depth, max_entries, &mut out)?;
     out.sort();

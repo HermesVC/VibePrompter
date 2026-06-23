@@ -23,8 +23,8 @@ impl SettingsService {
         let rows = self.repo.get_all().await?;
         let mut map = serde_json::Map::new();
         for (key, json_value) in rows {
-            let value: serde_json::Value = serde_json::from_str(&json_value)
-                .map_err(AppError::Serialization)?;
+            let value: serde_json::Value =
+                serde_json::from_str(&json_value).map_err(AppError::Serialization)?;
             map.insert(key, value);
         }
         let settings: Settings = serde_json::from_value(serde_json::Value::Object(map))
@@ -84,8 +84,7 @@ mod tests {
         for (k, v) in rows {
             map.insert(k, serde_json::from_str(&v).unwrap());
         }
-        let settings: Settings =
-            serde_json::from_value(serde_json::Value::Object(map)).unwrap();
+        let settings: Settings = serde_json::from_value(serde_json::Value::Object(map)).unwrap();
         assert!(settings.boot_start);
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.response_timeout, 30);
@@ -101,7 +100,9 @@ mod tests {
         // Reproduces SettingsService::save without the bus.
         let value = serde_json::to_value(&settings).unwrap();
         for (k, fv) in value.as_object().unwrap() {
-            repo.upsert(k, &serde_json::to_string(fv).unwrap()).await.unwrap();
+            repo.upsert(k, &serde_json::to_string(fv).unwrap())
+                .await
+                .unwrap();
         }
 
         let rows = repo.get_all().await.unwrap();
@@ -109,8 +110,7 @@ mod tests {
         for (k, v) in rows {
             map.insert(k, serde_json::from_str(&v).unwrap());
         }
-        let loaded: Settings =
-            serde_json::from_value(serde_json::Value::Object(map)).unwrap();
+        let loaded: Settings = serde_json::from_value(serde_json::Value::Object(map)).unwrap();
         assert_eq!(loaded.theme, "light");
         assert_eq!(loaded.response_timeout, 60);
     }

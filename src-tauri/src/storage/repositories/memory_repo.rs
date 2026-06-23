@@ -82,25 +82,46 @@ impl MemoryRepo {
         Ok(())
     }
 
-    pub async fn chunk_count(&self, session_id: &str) -> AppResult<i64> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM chat_memory_chunks WHERE session_id = ?1",
+    pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
+        if keep_latest <= 0 {
+            return self.delete_session(session_id).await;
+        }
+        sqlx::query(
+            "DELETE FROM chat_memory_chunks
+             WHERE session_id = ?1
+               AND id NOT IN (
+                   SELECT id FROM chat_memory_chunks
+                   WHERE session_id = ?2
+                   ORDER BY id DESC
+                   LIMIT ?3
+               )",
         )
         .bind(session_id)
-        .fetch_one(&self.pool)
+        .bind(session_id)
+        .bind(keep_latest)
+        .execute(&self.pool)
         .await
         .map_err(|e| AppError::Database(e))?;
+        Ok(())
+    }
+
+    pub async fn chunk_count(&self, session_id: &str) -> AppResult<i64> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM chat_memory_chunks WHERE session_id = ?1")
+                .bind(session_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| AppError::Database(e))?;
         Ok(row.0)
     }
 
     pub async fn list_content_hashes(&self, session_id: &str) -> AppResult<Vec<String>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT content_hash FROM chat_memory_chunks WHERE session_id = ?1",
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT content_hash FROM chat_memory_chunks WHERE session_id = ?1")
+                .bind(session_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| AppError::Database(e))?;
         Ok(rows.into_iter().map(|(h,)| h).collect())
     }
 }

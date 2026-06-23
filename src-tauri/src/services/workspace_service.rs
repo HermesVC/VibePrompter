@@ -6,9 +6,9 @@ use crate::storage::repositories::SettingsRepo;
 use crate::utils::{AppError, AppResult};
 use crate::workspace::{
     compose_system_prompt, content_hash, extract_snippet_output, list_dir_recursive,
-    list_modifiers, read_file_range, write_file_checked, PolicyDecision, PolicyEngine,
-    ChatContextPayload, ChatModifierInfo, FileContentDto, PolicyDecisionDto, WritePreviewDto,
-    WriteResultDto, WorkspaceSettings, WORKSPACE_SETTINGS_KEY,
+    list_modifiers, read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo,
+    FileContentDto, PolicyDecision, PolicyDecisionDto, PolicyEngine, WorkspaceSettings,
+    WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
 
 #[derive(Clone)]
@@ -24,9 +24,8 @@ impl WorkspaceService {
     pub async fn get_settings(&self) -> AppResult<WorkspaceSettings> {
         let raw = self.settings_repo.get_one(WORKSPACE_SETTINGS_KEY).await?;
         match raw {
-            Some(json) => serde_json::from_str(&json).map_err(|e| {
-                AppError::Validation(format!("workspace settings corrupt: {e}"))
-            }),
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| AppError::Validation(format!("workspace settings corrupt: {e}"))),
             None => Ok(WorkspaceSettings::default()),
         }
     }
@@ -89,11 +88,7 @@ impl WorkspaceService {
         let settings = self.get_settings().await?;
         let decision = PolicyEngine::evaluate_write(&settings, path);
         let root = self.workspace_path(&settings);
-        let hash_before = if expected_hash
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .is_some()
-        {
+        let hash_before = if expected_hash.as_deref().filter(|s| !s.is_empty()).is_some() {
             expected_hash.clone()
         } else if let Ok(existing) = read_file_range(&root, path, None, None) {
             Some(existing.content_hash)
@@ -138,12 +133,7 @@ impl WorkspaceService {
             ));
         }
         let root = self.workspace_path(&settings);
-        let hash = write_file_checked(
-            &root,
-            path,
-            new_content,
-            expected_hash.as_deref(),
-        )?;
+        let hash = write_file_checked(&root, path, new_content, expected_hash.as_deref())?;
         Ok(WriteResultDto {
             path: path.to_string(),
             content_hash: hash,

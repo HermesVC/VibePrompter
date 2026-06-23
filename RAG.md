@@ -92,7 +92,7 @@ Sliding window **учитывает summary** при выборе active turns. 
 
 LM Studio в интерфейсе обычно держит **одну активную chat-модель**. Отдельно «запустить вторую модель для embed» в UI нельзя.
 
-VibePrompter для памяти вызывает **`POST {base_url}/embeddings`** с моделью `text-embedding-nomic-embed-text-v1.5` (fallback в коде), пока chat идёт через тот же `base_url`.
+VibePrompter для памяти вызывает **`POST {base_url}/embeddings`** с моделью `nomic-embed-text` (fallback в коде), пока chat идёт через тот же `base_url`.
 
 **Практика:** LM Studio — только для Qwen → vector layer **не заводится** без отдельного embed-сервера. Нужен **Ollama для nomic** или доработка «Embedding connection» в VibePrompter (пока не реализовано).
 
@@ -166,9 +166,9 @@ Ollama **подгружает модель по запросу**: Qwen для ch
 Для embeddings код вызывает `resolve_embed_model()`:
 
 - если в default model есть `embed`, `nomic` или `bge` — использует его;
-- иначе fallback: `text-embedding-nomic-embed-text-v1.5` (для Ollama обычно нужен **`nomic-embed-text`** — см. ниже).
+- иначе fallback: `nomic-embed-text`.
 
-> **Имя модели:** Ollama использует `nomic-embed-text`, в коде fallback — `text-embedding-nomic-embed-text-v1.5`. Если embed падает с `model not found`, задай в default model connection строку с **`nomic-embed-text`**, либо дождись настройки embed model в Settings (TODO).
+> **Имя модели:** Ollama использует `nomic-embed-text`, и это же имя сейчас fallback в коде. Если embed падает с `model not found`, задай в default model connection строку из `ollama list` / `GET /v1/models`, либо дождись настройки embed model в Settings (TODO).
 
 ---
 
@@ -253,7 +253,7 @@ Ollama **подгружает модель по запросу**: Qwen для ch
 | `POST /v1/chat/completions` | Ответ модели |
 | `POST /v1/embeddings` | Векторизация для index/retrieve |
 
-Default embed model в коде: `text-embedding-nomic-embed-text-v1.5` (`src-tauri/src/providers/embeddings.rs`).
+Default embed model в коде: `nomic-embed-text` (`src-tauri/src/providers/embeddings.rs`).
 
 ---
 

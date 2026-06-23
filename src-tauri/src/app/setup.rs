@@ -44,8 +44,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     let shortcuts = ShortcutService::new(ShortcutRepo::new(pool.clone()), events.clone());
     let catalog = CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
     let keyring_available = crate::security::KeyringStore::new().is_available();
-    let secrets: std::sync::Arc<dyn crate::security::SecretStore> =
-        crate::security::init().into();
+    let secrets: std::sync::Arc<dyn crate::security::SecretStore> = crate::security::init().into();
     // Concurrent outbound-LLM-call cap. Used to be user-tunable but the
     // realistic max in any UI flow is ~3 (overlay stream + a Settings Test
     // + a Fetch models). A fixed 4 is enough headroom for the legitimate
@@ -278,7 +277,10 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         if let Ok(s) = state_clone.settings.get().await {
             apply_autostart(&handle_for_boot, s.boot_start);
             apply_devtools(&handle_for_boot, s.dev_tools);
-            let _ = state_clone.history.enforce_retention(&s.history_retention).await;
+            let _ = state_clone
+                .history
+                .enforce_retention(&s.history_retention)
+                .await;
         }
     });
 
@@ -386,8 +388,8 @@ fn apply_devtools(app: &AppHandle, want_open: bool) {
 /// unavailable, etc.), so non-MSIX builds fall back to the `--autostart` check.
 #[cfg(target_os = "windows")]
 fn launched_via_msix_startup() -> bool {
-    use windows::ApplicationModel::AppInstance;
     use windows::ApplicationModel::Activation::ActivationKind;
+    use windows::ApplicationModel::AppInstance;
     match AppInstance::GetActivatedEventArgs().and_then(|args| args.Kind()) {
         Ok(kind) => kind == ActivationKind::StartupTask,
         Err(_) => false,
@@ -401,8 +403,8 @@ fn launched_via_msix_startup() -> bool {
 /// TaskId must match Package.appxmanifest / AppxManifest.xml.
 #[cfg(target_os = "windows")]
 fn msix_startup_set(enabled: bool) -> anyhow::Result<()> {
-    use windows::ApplicationModel::{StartupTask, StartupTaskState};
     use windows::core::HSTRING;
+    use windows::ApplicationModel::{StartupTask, StartupTaskState};
     let task = StartupTask::GetAsync(&HSTRING::from("VibePrompterStartup"))?.get()?;
     if enabled {
         let state = task.State()?;

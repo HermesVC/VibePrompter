@@ -32,10 +32,7 @@ pub async fn register_shortcut(
 }
 
 #[tauri::command]
-pub async fn unregister_shortcut(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn unregister_shortcut(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     state.shortcuts.unregister(&id).await
 }
 

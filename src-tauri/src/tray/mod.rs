@@ -35,7 +35,11 @@ struct TrayModeItems(Vec<MenuItem<Wry>>);
 impl TrayState {
     fn new_with_cursor(modes: Vec<TrayMode>, start: usize) -> Self {
         debug_assert!(!modes.is_empty(), "TrayState requires at least one mode");
-        let cursor = if modes.is_empty() { 0 } else { start % modes.len() };
+        let cursor = if modes.is_empty() {
+            0
+        } else {
+            start % modes.len()
+        };
         Self {
             modes: Mutex::new(modes),
             cursor: Mutex::new(cursor),
@@ -77,10 +81,7 @@ impl TrayState {
             return None;
         }
         let prior_id = self.current().id;
-        let new_pos = new_modes
-            .iter()
-            .position(|m| m.id == prior_id)
-            .unwrap_or(0);
+        let new_pos = new_modes.iter().position(|m| m.id == prior_id).unwrap_or(0);
         *self.modes.lock().unwrap() = new_modes.clone();
         *self.cursor.lock().unwrap() = new_pos;
         Some(new_modes[new_pos].clone())
@@ -131,14 +132,8 @@ pub fn init(
         accels.palette.as_deref(),
     )
     .map_err(|e| AppError::Config(format!("tray menu palette: {e}")))?;
-    let chat_item = MenuItem::with_id(
-        app,
-        "tray.chat",
-        "Open chat",
-        true,
-        accels.chat.as_deref(),
-    )
-    .map_err(|e| AppError::Config(format!("tray menu chat: {e}")))?;
+    let chat_item = MenuItem::with_id(app, "tray.chat", "Open chat", true, accels.chat.as_deref())
+        .map_err(|e| AppError::Config(format!("tray menu chat: {e}")))?;
     let cycle_item = MenuItem::with_id(
         app,
         "tray.cycle",
@@ -170,22 +165,18 @@ pub fn init(
         mode_items.push(item);
     }
     let mode_refs: Vec<&MenuItem<Wry>> = mode_items.iter().collect();
-    let mode_dyn_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
-        mode_refs.iter().map(|m| *m as &dyn tauri::menu::IsMenuItem<Wry>).collect();
-    let modes_submenu = Submenu::with_id_and_items(
-        app,
-        "tray.modes_submenu",
-        "Set mode",
-        true,
-        &mode_dyn_refs,
-    )
-    .map_err(|e| AppError::Config(format!("tray modes submenu: {e}")))?;
+    let mode_dyn_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = mode_refs
+        .iter()
+        .map(|m| *m as &dyn tauri::menu::IsMenuItem<Wry>)
+        .collect();
+    let modes_submenu =
+        Submenu::with_id_and_items(app, "tray.modes_submenu", "Set mode", true, &mode_dyn_refs)
+            .map_err(|e| AppError::Config(format!("tray modes submenu: {e}")))?;
     app.manage(TrayModeItems(mode_items));
     let sep = PredefinedMenuItem::separator(app)
         .map_err(|e| AppError::Config(format!("tray menu sep: {e}")))?;
-    let settings_item =
-        MenuItem::with_id(app, "tray.settings", "Settings…", true, None::<&str>)
-            .map_err(|e| AppError::Config(format!("tray menu settings: {e}")))?;
+    let settings_item = MenuItem::with_id(app, "tray.settings", "Settings…", true, None::<&str>)
+        .map_err(|e| AppError::Config(format!("tray menu settings: {e}")))?;
     let sep2 = PredefinedMenuItem::separator(app)
         .map_err(|e| AppError::Config(format!("tray menu sep2: {e}")))?;
     let quit_item = MenuItem::with_id(app, "tray.quit", "Quit", true, None::<&str>)
@@ -240,7 +231,11 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
     let tray_modes: Vec<TrayMode> = modes
         .into_iter()
         .filter(|m| m.enabled && !m.is_system)
-        .map(|m| TrayMode { id: m.id, name: m.name, icon_name: Some(m.icon_name) })
+        .map(|m| TrayMode {
+            id: m.id,
+            name: m.name,
+            icon_name: Some(m.icon_name),
+        })
         .collect();
     if tray_modes.is_empty() {
         tracing::warn!("rebuild_modes: catalog empty, skipping");
@@ -260,9 +255,8 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         .unwrap_or_default();
 
     // Build the new menu pieces. Same layout as `init` — keep them in sync.
-    let show_item =
-        MenuItem::with_id(app, "tray.show", "Show VibePrompter", true, None::<&str>)
-            .map_err(|e| AppError::Config(format!("rebuild show: {e}")))?;
+    let show_item = MenuItem::with_id(app, "tray.show", "Show VibePrompter", true, None::<&str>)
+        .map_err(|e| AppError::Config(format!("rebuild show: {e}")))?;
     let palette_item = MenuItem::with_id(
         app,
         "tray.palette",
@@ -271,14 +265,8 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         accels.palette.as_deref(),
     )
     .map_err(|e| AppError::Config(format!("rebuild palette: {e}")))?;
-    let chat_item = MenuItem::with_id(
-        app,
-        "tray.chat",
-        "Open chat",
-        true,
-        accels.chat.as_deref(),
-    )
-    .map_err(|e| AppError::Config(format!("rebuild chat: {e}")))?;
+    let chat_item = MenuItem::with_id(app, "tray.chat", "Open chat", true, accels.chat.as_deref())
+        .map_err(|e| AppError::Config(format!("rebuild chat: {e}")))?;
     let cycle_item = MenuItem::with_id(
         app,
         "tray.cycle",
@@ -295,29 +283,28 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         } else {
             format!("   {}", m.name)
         };
-        let item =
-            MenuItem::with_id(app, format!("tray.mode:{}", m.id), &label, true, None::<&str>)
-                .map_err(|e| AppError::Config(format!("rebuild mode item: {e}")))?;
+        let item = MenuItem::with_id(
+            app,
+            format!("tray.mode:{}", m.id),
+            &label,
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| AppError::Config(format!("rebuild mode item: {e}")))?;
         mode_items.push(item);
     }
     let mode_dyn_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = mode_items
         .iter()
         .map(|m| m as &dyn tauri::menu::IsMenuItem<Wry>)
         .collect();
-    let modes_submenu = Submenu::with_id_and_items(
-        app,
-        "tray.modes_submenu",
-        "Set mode",
-        true,
-        &mode_dyn_refs,
-    )
-    .map_err(|e| AppError::Config(format!("rebuild modes submenu: {e}")))?;
+    let modes_submenu =
+        Submenu::with_id_and_items(app, "tray.modes_submenu", "Set mode", true, &mode_dyn_refs)
+            .map_err(|e| AppError::Config(format!("rebuild modes submenu: {e}")))?;
 
     let sep = PredefinedMenuItem::separator(app)
         .map_err(|e| AppError::Config(format!("rebuild sep: {e}")))?;
-    let settings_item =
-        MenuItem::with_id(app, "tray.settings", "Settings…", true, None::<&str>)
-            .map_err(|e| AppError::Config(format!("rebuild settings: {e}")))?;
+    let settings_item = MenuItem::with_id(app, "tray.settings", "Settings…", true, None::<&str>)
+        .map_err(|e| AppError::Config(format!("rebuild settings: {e}")))?;
     let sep2 = PredefinedMenuItem::separator(app)
         .map_err(|e| AppError::Config(format!("rebuild sep2: {e}")))?;
     let quit_item = MenuItem::with_id(app, "tray.quit", "Quit", true, None::<&str>)
@@ -384,7 +371,9 @@ pub fn set_active_mode_by_id(app: &AppHandle, id: &str) -> AppResult<()> {
 /// tray labels, persist the new id, fire `mode_changed`, and show the HUD.
 fn apply_active_mode(app: &AppHandle, next: TrayMode) -> AppResult<()> {
     if let Some(item) = app.try_state::<TrayCycleItem>() {
-        let _ = item.0.set_text(format!("Switch mode — currently {}", next.name));
+        let _ = item
+            .0
+            .set_text(format!("Switch mode — currently {}", next.name));
     }
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_tooltip(Some(format!("VibePrompter — mode: {}", next.name)));
@@ -488,9 +477,21 @@ mod tests {
 
     fn mk_modes() -> Vec<TrayMode> {
         vec![
-            TrayMode { id: "developer".into(), name: "Developer".into(), icon_name: None },
-            TrayMode { id: "email".into(), name: "Email".into(), icon_name: None },
-            TrayMode { id: "friendly".into(), name: "Friendly".into(), icon_name: None },
+            TrayMode {
+                id: "developer".into(),
+                name: "Developer".into(),
+                icon_name: None,
+            },
+            TrayMode {
+                id: "email".into(),
+                name: "Email".into(),
+                icon_name: None,
+            },
+            TrayMode {
+                id: "friendly".into(),
+                name: "Friendly".into(),
+                icon_name: None,
+            },
         ]
     }
 

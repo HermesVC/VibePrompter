@@ -122,7 +122,10 @@ mod tests {
 
     #[test]
     fn missing_vars_become_empty() {
-        let out = render("Tone: {{tone}}, audience: {{audience}}.", r#"{"tone": "x"}"#);
+        let out = render(
+            "Tone: {{tone}}, audience: {{audience}}.",
+            r#"{"tone": "x"}"#,
+        );
         assert_eq!(out, "Tone: x, audience: .");
     }
 

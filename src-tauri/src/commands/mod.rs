@@ -15,7 +15,6 @@ pub mod workspace;
 
 pub use agent_tools::*;
 pub use catalog::*;
-pub use workspace::*;
 pub use chat::*;
 pub use clipboard::*;
 pub use connections::*;
@@ -25,3 +24,4 @@ pub use overlay::*;
 pub use prompt_format::*;
 pub use settings::*;
 pub use shortcuts::*;
+pub use workspace::*;

@@ -164,36 +164,76 @@ pub struct CompletionResult {
     pub usage: TokenUsage,
     /// Resolved context window for this connection, when known. Omitted for
     /// providers that don't expose a limit (most cloud APIs).
-    #[serde(rename = "contextWindowSize", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contextWindowSize",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub context_window_size: Option<i64>,
     /// Extracted snippet/file body when a scoped chat session is active.
-    #[serde(rename = "scopedText", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "scopedText",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub scoped_text: Option<String>,
     /// Rolling dialogue memory (LLM-compressed earlier turns).
-    #[serde(rename = "sessionSummary", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "sessionSummary",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub session_summary: Option<String>,
     /// True when older turns were compressed into memory before this reply.
-    #[serde(rename = "memoryCompressed", default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "memoryCompressed",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub memory_compressed: bool,
     /// Number of messages removed from the active window (compressed into memory).
-    #[serde(rename = "evictedTurns", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "evictedTurns",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub evicted_turns: Option<u32>,
     /// True when a context overflow was detected and the request was retried with tighter compression.
-    #[serde(rename = "contextRecovered", default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "contextRecovered",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub context_recovered: bool,
     /// Stream ended without a clean `[DONE]` / terminal chunk (used for recovery heuristics).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stream_incomplete: bool,
     /// Vendor finish reason when reported (`stop`, `length`, …).
-    #[serde(rename = "finishReason", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "finishReason",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub finish_reason: Option<String>,
     /// Output hit `max_tokens` / `finish_reason: length` — not the same as context overflow.
-    #[serde(rename = "outputTruncated", default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "outputTruncated",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub output_truncated: bool,
     /// Semantic excerpts injected for this reply (compact preview for UI).
-    #[serde(rename = "retrievedMemory", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "retrievedMemory",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub retrieved_memory: Option<String>,
     /// Number of vector chunks used in retrieval for this reply.
-    #[serde(rename = "vectorChunksUsed", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "vectorChunksUsed",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub vector_chunks_used: Option<u32>,
 }

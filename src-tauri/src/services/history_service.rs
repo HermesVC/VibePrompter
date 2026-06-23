@@ -17,7 +17,10 @@ impl HistoryService {
     /// Wires the EventBus so every successful `record()` fires a
     /// `history_changed` event the frontend can invalidate caches on.
     pub fn with_events(repo: HistoryRepo, events: EventBus) -> Self {
-        Self { repo, events: Some(events) }
+        Self {
+            repo,
+            events: Some(events),
+        }
     }
 
     fn emit(&self, event: AppEvent) {
@@ -107,7 +110,9 @@ impl HistoryService {
                 match stripped.parse::<i64>() {
                     Ok(d) if d > 0 => d,
                     _ => {
-                        tracing::warn!("unrecognized history_retention '{retention}' — treating as forever");
+                        tracing::warn!(
+                            "unrecognized history_retention '{retention}' — treating as forever"
+                        );
                         return Ok(0);
                     }
                 }
@@ -162,9 +167,15 @@ mod tests {
         // Both "forever" and unrecognized strings must keep data — this is
         // the safety guarantee that a typo can't wipe history.
         assert_eq!(service.enforce_retention("forever").await.unwrap(), 0);
-        assert_eq!(service.enforce_retention("not-a-duration").await.unwrap(), 0);
+        assert_eq!(
+            service.enforce_retention("not-a-duration").await.unwrap(),
+            0
+        );
         assert_eq!(service.enforce_retention("").await.unwrap(), 0);
-        assert_eq!(service.list(HistoryQuery::default()).await.unwrap().len(), 1);
+        assert_eq!(
+            service.list(HistoryQuery::default()).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -175,7 +186,10 @@ mod tests {
         // A 1-day window starting today still includes the just-inserted row,
         // so nothing should be removed.
         assert_eq!(service.enforce_retention("1d").await.unwrap(), 0);
-        assert_eq!(service.list(HistoryQuery::default()).await.unwrap().len(), 1);
+        assert_eq!(
+            service.list(HistoryQuery::default()).await.unwrap().len(),
+            1
+        );
     }
 
     fn sample() -> NewHistoryItem {
@@ -213,6 +227,10 @@ mod tests {
             .unwrap();
         let removed = service.clear().await.unwrap();
         assert_eq!(removed, 1);
-        assert!(service.list(HistoryQuery::default()).await.unwrap().is_empty());
+        assert!(service
+            .list(HistoryQuery::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

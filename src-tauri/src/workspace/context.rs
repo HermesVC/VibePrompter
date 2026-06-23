@@ -96,11 +96,19 @@ pub fn list_modifiers() -> Vec<ChatModifierInfo> {
 
 fn modifier_block(id: &str) -> Option<&'static str> {
     match id {
-        "translate_en" => Some("Translate the result into English. Keep code identifiers unchanged."),
-        "translate_ru" => Some("Translate the result into Russian. Keep code identifiers unchanged."),
-        "formal_tone" => Some("Use a formal, professional tone suitable for business communication."),
+        "translate_en" => {
+            Some("Translate the result into English. Keep code identifiers unchanged.")
+        }
+        "translate_ru" => {
+            Some("Translate the result into Russian. Keep code identifiers unchanged.")
+        }
+        "formal_tone" => {
+            Some("Use a formal, professional tone suitable for business communication.")
+        }
         "concise" => Some("Be as concise as possible without losing required information."),
-        "add_docs" => Some("Add clear comments or documentation blocks appropriate to the language."),
+        "add_docs" => {
+            Some("Add clear comments or documentation blocks appropriate to the language.")
+        }
         _ => None,
     }
 }
@@ -119,10 +127,7 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
         .or_else(|| scope_language(&ctx.scope));
 
     if let Some(ref lang) = lang_id {
-        parts.push(format!(
-            "Language context: {lang}\n{}",
-            hints_for(lang)
-        ));
+        parts.push(format!("Language context: {lang}\n{}", hints_for(lang)));
     }
 
     match &ctx.scope {
@@ -208,14 +213,14 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
 
 fn scope_language(scope: &ChatScope) -> Option<String> {
     match scope {
-        ChatScope::Snippet { language_id, path, working, .. } => {
-            language_id.clone().or_else(|| {
-                Some(detect_language(
-                    path.as_deref(),
-                    Some(working.as_str()),
-                ))
-            })
-        }
+        ChatScope::Snippet {
+            language_id,
+            path,
+            working,
+            ..
+        } => language_id
+            .clone()
+            .or_else(|| Some(detect_language(path.as_deref(), Some(working.as_str())))),
         ChatScope::File {
             language_id,
             path,
@@ -266,9 +271,7 @@ fn extract_fenced_code_block(text: &str) -> Option<String> {
             break;
         };
         let body = tail[..close_rel].trim_end();
-        if !body.is_empty()
-            && body.len() > best.as_ref().map(|s| s.len()).unwrap_or(0)
-        {
+        if !body.is_empty() && body.len() > best.as_ref().map(|s| s.len()).unwrap_or(0) {
             best = Some(body.to_string());
         }
         pos = body_start + close_rel + 3;
@@ -286,8 +289,8 @@ fn extract_tag(text: &str, tag: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::workspace::types::{ChatContextPayload, ChatScope};
     use super::*;
+    use crate::workspace::types::{ChatContextPayload, ChatScope};
 
     #[test]
     fn extracts_snippet_tag() {
@@ -297,7 +300,8 @@ mod tests {
 
     #[test]
     fn strips_prose_before_fenced_code() {
-        let input = "Для рефакторирования можно улучшить структуру:\n\n```php\n<?php\necho 1;\n```\n";
+        let input =
+            "Для рефакторирования можно улучшить структуру:\n\n```php\n<?php\necho 1;\n```\n";
         let out = extract_scoped_code_output(input);
         assert_eq!(out, "<?php\necho 1;");
     }

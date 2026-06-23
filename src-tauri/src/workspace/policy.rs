@@ -53,9 +53,7 @@ impl PolicyEngine {
 }
 
 fn normalize_rel(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
-        .to_string()
+    path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
 fn matches_deny(patterns: &[String], path: &str) -> bool {
@@ -63,7 +61,11 @@ fn matches_deny(patterns: &[String], path: &str) -> bool {
 }
 
 fn matches_allow(settings: &WorkspaceSettings, path: &str) -> bool {
-    if settings.allow_paths.iter().any(|p| normalize_rel(p) == path) {
+    if settings
+        .allow_paths
+        .iter()
+        .any(|p| normalize_rel(p) == path)
+    {
         return true;
     }
     if settings
@@ -75,19 +77,13 @@ fn matches_allow(settings: &WorkspaceSettings, path: &str) -> bool {
     }
     if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
         let ext = format!(".{}", ext.to_ascii_lowercase());
-        if settings
-            .allow_extensions
-            .iter()
-            .any(|e| e.eq_ignore_ascii_case(&ext) || e.eq_ignore_ascii_case(ext.trim_start_matches('.')))
-        {
+        if settings.allow_extensions.iter().any(|e| {
+            e.eq_ignore_ascii_case(&ext) || e.eq_ignore_ascii_case(ext.trim_start_matches('.'))
+        }) {
             return true;
         }
     }
-    if settings
-        .allow_globs
-        .iter()
-        .any(|g| glob_match(g, path))
-    {
+    if settings.allow_globs.iter().any(|g| glob_match(g, path)) {
         return true;
     }
     false
@@ -95,9 +91,7 @@ fn matches_allow(settings: &WorkspaceSettings, path: &str) -> bool {
 
 fn glob_match(pattern: &str, path: &str) -> bool {
     let pat = pattern.replace('\\', "/");
-    Pattern::new(&pat)
-        .map(|p| p.matches(path))
-        .unwrap_or(false)
+    Pattern::new(&pat).map(|p| p.matches(path)).unwrap_or(false)
 }
 
 #[cfg(test)]

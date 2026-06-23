@@ -1,5 +1,6 @@
 //! Chat window commands — toggle visibility and stream multi-turn completions.
 
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app::AppState;
@@ -47,7 +48,9 @@ pub async fn chat_complete_stream(
             .last()
             .ok_or_else(|| AppError::Validation("messages is empty".into()))?;
         if last.role != "user" {
-            return Err(AppError::Validation("last message must be from the user".into()));
+            return Err(AppError::Validation(
+                "last message must be from the user".into(),
+            ));
         }
         if last.content.trim().is_empty() && last.images.is_empty() {
             return Err(AppError::Validation("last user message is empty".into()));
@@ -95,31 +98,27 @@ pub async fn chat_complete_stream(
         None => {
             if let Some(mid) = mode_id.as_deref().filter(|s| !s.trim().is_empty()) {
                 let modes = state.catalog.list_modes().await?;
-                let mode = modes
-                    .iter()
-                    .find(|m| m.id == mid)
-                    .ok_or_else(|| AppError::NotFound {
-                        entity: "prompt_mode",
-                        id: mid.to_string(),
-                    })?;
-                if let Some(override_id) = mode.provider_override.as_deref().filter(|s| !s.is_empty())
+                let mode =
+                    modes
+                        .iter()
+                        .find(|m| m.id == mid)
+                        .ok_or_else(|| AppError::NotFound {
+                            entity: "prompt_mode",
+                            id: mid.to_string(),
+                        })?;
+                if let Some(override_id) =
+                    mode.provider_override.as_deref().filter(|s| !s.is_empty())
                 {
                     state.connections.get_row(override_id).await?
                 } else {
-                    state
-                        .connections
-                        .get_default_row()
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::Validation("no default connection configured".into())
-                        })?
+                    state.connections.get_default_row().await?.ok_or_else(|| {
+                        AppError::Validation("no default connection configured".into())
+                    })?
                 }
             } else {
-                state
-                    .connections
-                    .get_default_row()
-                    .await?
-                    .ok_or_else(|| AppError::Validation("no default connection configured".into()))?
+                state.connections.get_default_row().await?.ok_or_else(|| {
+                    AppError::Validation("no default connection configured".into())
+                })?
             }
         }
     };
@@ -137,17 +136,20 @@ pub async fn chat_complete_stream(
     let session_id = session_id.unwrap_or_default();
     let mut retrieved_preview: Option<String> = None;
     let mut vector_chunks_used: Option<u32> = None;
-    let mut indexed_chunk_hashes: std::collections::HashSet<String> = if session_id.trim().is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        state
-            .chat_memory
-            .list_content_hashes(&session_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
-    };
+    let mut indexed_chunk_hashes: std::collections::HashSet<String> =
+        if session_id.trim().is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            state
+                .chat_memory
+                .list_content_hashes(&session_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
+    let mut compressed_evicted_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let mut query_emb_cache: Option<Vec<f32>> = None;
 
     let token_event = format!("chat:{stream_id}:token");
@@ -197,12 +199,19 @@ pub async fn chat_complete_stream(
         );
         evicted_count = window_plan.evicted.len() as u32;
 
-        if !window_plan.evicted.is_empty() {
+        let evicted_for_compression: Vec<ChatMessage> = window_plan
+            .evicted
+            .iter()
+            .filter(|m| !compressed_evicted_keys.contains(&message_memory_key(m)))
+            .cloned()
+            .collect();
+
+        if !evicted_for_compression.is_empty() {
             match crate::chat::compress_evicted_turns(
                 &row,
                 &cfg,
                 &memory,
-                &window_plan.evicted,
+                &evicted_for_compression,
                 context_limit,
             )
             .await
@@ -215,11 +224,14 @@ pub async fn chat_complete_stream(
                     tracing::warn!("memory compression failed: {e}, using truncated fallback");
                     memory = crate::chat::fallback_merge_memory(
                         &memory,
-                        &window_plan.evicted,
+                        &evicted_for_compression,
                         context_limit,
                     );
                     memory_compressed = true;
                 }
+            }
+            for m in &evicted_for_compression {
+                compressed_evicted_keys.insert(message_memory_key(m));
             }
             emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
         }
@@ -362,7 +374,10 @@ pub async fn chat_complete_stream(
 
     match result {
         Ok(mut r) => {
-            state.connections.enrich_completion_context(&row, &mut r).await;
+            state
+                .connections
+                .enrich_completion_context(&row, &mut r)
+                .await;
             if context_limit > 0 {
                 r.context_window_size = Some(context_limit);
             }
@@ -440,6 +455,14 @@ fn is_cancelled_err(e: &AppError) -> bool {
     matches!(e, AppError::Validation(msg) if msg == "cancelled")
 }
 
+fn message_memory_key(message: &ChatMessage) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(message.role.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(message.content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 #[tauri::command]
 pub async fn chat_clear_session_memory(
     state: State<'_, AppState>,
@@ -471,8 +494,8 @@ pub fn read_chat_attachment_paths(paths: Vec<String>) -> Result<Vec<ChatDroppedF
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        let meta = std::fs::metadata(p)
-            .map_err(|e| AppError::Validation(format!("{name}: {e}")))?;
+        let meta =
+            std::fs::metadata(p).map_err(|e| AppError::Validation(format!("{name}: {e}")))?;
         if meta.is_dir() {
             continue;
         }
@@ -533,7 +556,8 @@ fn is_image_ext(ext: &str) -> bool {
 fn is_text_ext(ext: &str) -> bool {
     matches!(
         ext,
-        "txt" | "md"
+        "txt"
+            | "md"
             | "markdown"
             | "json"
             | "csv"
@@ -571,7 +595,10 @@ fn image_mime(ext: &str) -> String {
     .into()
 }
 
-fn augment_messages_with_scope(messages: &mut Vec<ChatMessage>, ctx: &crate::workspace::ChatContextPayload) {
+fn augment_messages_with_scope(
+    messages: &mut Vec<ChatMessage>,
+    ctx: &crate::workspace::ChatContextPayload,
+) {
     let block = scope_user_context_block(&ctx.scope);
     if block.is_empty() {
         return;
@@ -608,9 +635,9 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
             line_start,
             line_end,
             ..
-        } => format!(
-            "[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```"
-        ),
+        } => {
+            format!("[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```")
+        }
         ChatScope::Workspace { tree_summary } => tree_summary
             .as_deref()
             .filter(|s| !s.is_empty())
@@ -619,12 +646,7 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
     }
 }
 
-fn emit_chat_memory_update(
-    app: &AppHandle,
-    memory_event: &str,
-    memory: &str,
-    context_limit: i64,
-) {
+fn emit_chat_memory_update(app: &AppHandle, memory_event: &str, memory: &str, context_limit: i64) {
     if memory.trim().is_empty() {
         return;
     }
@@ -643,8 +665,7 @@ async fn resolve_context_limit(
 ) -> i64 {
     let configured = row.context_window_size;
     let fallback = if configured > 0 { configured } else { 8192 };
-    if let Some(probed) =
-        crate::providers::lmstudio::probe_context_length(&row.base_url, cfg).await
+    if let Some(probed) = crate::providers::lmstudio::probe_context_length(&row.base_url, cfg).await
     {
         tracing::debug!("context probe: {probed} (configured {configured})");
         if configured > 0 {
@@ -682,11 +703,7 @@ fn effective_chat_max_tokens(mode_floor: i64, input_estimate: u32, context_limit
     let remaining = (ctx - input - margin).max(512);
     let scaled = ((f64::from(input_estimate)) * 1.25).ceil() as i64;
     let floor = mode_floor.max(512);
-    floor
-        .max(scaled)
-        .min(remaining)
-        .min(16_000)
-        .max(256) as u32
+    floor.max(scaled).min(remaining).min(16_000).max(256) as u32
 }
 
 fn apply_output_truncation(result: &mut CompletionResult, max_output: u32) {

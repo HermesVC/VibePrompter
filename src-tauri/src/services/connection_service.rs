@@ -143,7 +143,11 @@ impl ConnectionService {
     pub async fn save(&self, input: ConnectionInput) -> AppResult<ConnectionInfo> {
         validate(&input)?;
 
-        let id = input.id.clone().filter(|s| !s.is_empty()).unwrap_or_else(new_id);
+        let id = input
+            .id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(new_id);
         let account = connection_account(&id);
 
         // Resolve which key to persist to the keyring:
@@ -242,13 +246,8 @@ impl ConnectionService {
             .and_then(|v| v.as_array())
             .ok_or_else(|| AppError::Validation("payload missing `connections` array".into()))?;
 
-        let existing_ids: std::collections::HashSet<String> = self
-            .repo
-            .list()
-            .await?
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
+        let existing_ids: std::collections::HashSet<String> =
+            self.repo.list().await?.into_iter().map(|r| r.id).collect();
 
         let mut imported = 0usize;
         for item in connections {
@@ -322,7 +321,9 @@ impl ConnectionService {
                     .get("promptFormat")
                     .and_then(|v| v.as_str())
                     .map(|s| normalize_prompt_format(s))
-                    .unwrap_or_else(|| crate::providers::prompt_format::default_format_id().to_string()),
+                    .unwrap_or_else(|| {
+                        crate::providers::prompt_format::default_format_id().to_string()
+                    }),
             };
 
             if ConnectionKind::from_db(&row.kind).is_none() || row.base_url.is_empty() {
@@ -378,7 +379,9 @@ impl ConnectionService {
             .ok_or_else(|| AppError::Validation(format!("unknown kind: {}", input.kind)))?;
         let _ = kind; // unused locally; provider helper re-parses from `row.kind`
         if input.base_url.trim().is_empty() {
-            return Err(AppError::Validation("base URL is required to fetch models".into()));
+            return Err(AppError::Validation(
+                "base URL is required to fetch models".into(),
+            ));
         }
         // If the draft has no inline api_key, fall back to the saved keyring
         // entry for this id — covers the "Edit an existing connection,
@@ -527,7 +530,9 @@ fn validate(input: &ConnectionInput) -> AppResult<()> {
         return Err(AppError::Validation("base URL is required".into()));
     }
     if !input.base_url.starts_with("http://") && !input.base_url.starts_with("https://") {
-        return Err(AppError::Validation("base URL must start with http(s)://".into()));
+        return Err(AppError::Validation(
+            "base URL must start with http(s)://".into(),
+        ));
     }
     if ConnectionKind::from_db(&input.kind).is_none() {
         return Err(AppError::Validation(format!(
@@ -547,7 +552,9 @@ fn validate(input: &ConnectionInput) -> AppResult<()> {
             .ok_or_else(|| AppError::Validation("extra headers must be a JSON object".into()))?;
         for (name, value) in obj {
             if name.trim().is_empty() {
-                return Err(AppError::Validation("extra header name cannot be empty".into()));
+                return Err(AppError::Validation(
+                    "extra header name cannot be empty".into(),
+                ));
             }
             if !value.is_string() {
                 return Err(AppError::Validation(format!(
@@ -593,7 +600,9 @@ fn normalize_prompt_format(raw: &str) -> String {
     if id.is_empty() {
         return crate::providers::prompt_format::default_format_id().to_string();
     }
-    crate::providers::prompt_format::resolve(id).id().to_string()
+    crate::providers::prompt_format::resolve(id)
+        .id()
+        .to_string()
 }
 
 fn new_id() -> String {

@@ -61,10 +61,15 @@ pub struct HistoryQuery {
     pub offset: i64,
 }
 
-fn default_limit() -> i64 { 100 }
+fn default_limit() -> i64 {
+    100
+}
 
 impl Default for HistoryQuery {
     fn default() -> Self {
-        Self { limit: default_limit(), offset: 0 }
+        Self {
+            limit: default_limit(),
+            offset: 0,
+        }
     }
 }

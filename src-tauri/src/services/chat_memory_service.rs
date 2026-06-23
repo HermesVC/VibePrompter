@@ -34,6 +34,10 @@ impl ChatMemoryService {
         self.repo.delete_session(session_id).await
     }
 
+    pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
+        self.repo.prune_session(session_id, keep_latest).await
+    }
+
     pub async fn chunk_count(&self, session_id: &str) -> AppResult<i64> {
         self.repo.chunk_count(session_id).await
     }

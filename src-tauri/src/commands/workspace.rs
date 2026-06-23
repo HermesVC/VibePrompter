@@ -8,8 +8,8 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use crate::app::AppState;
 use crate::utils::AppError;
 use crate::workspace::{
-    ChatContextPayload, ChatModifierInfo, FileContentDto, WritePreviewDto, WriteResultDto,
-    WorkspaceSettings,
+    ChatContextPayload, ChatModifierInfo, FileContentDto, WorkspaceSettings, WritePreviewDto,
+    WriteResultDto,
 };
 
 #[tauri::command]

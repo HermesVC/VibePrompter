@@ -73,8 +73,7 @@ pub fn show_mode_hud_internal(app: AppHandle, args: ModeHudArgs) -> AppResult<()
     // Prefer the monitor the cursor is currently on (the user's active screen)
     // over the HUD window's last-seen monitor — global hotkeys fire from
     // anywhere, so "last-seen" is meaningless on a multi-monitor setup.
-    let monitor = monitor_under_cursor(&app)
-        .or_else(|| window.current_monitor().ok().flatten());
+    let monitor = monitor_under_cursor(&app).or_else(|| window.current_monitor().ok().flatten());
 
     if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
@@ -222,7 +221,11 @@ pub async fn get_active_mode(app: AppHandle) -> AppResult<ActiveMode> {
         .try_state::<crate::tray::TrayState>()
         .ok_or_else(|| AppError::Config("TrayState not initialized".into()))?;
     let m = state.current();
-    Ok(ActiveMode { id: m.id, name: m.name, icon_name: m.icon_name })
+    Ok(ActiveMode {
+        id: m.id,
+        name: m.name,
+        icon_name: m.icon_name,
+    })
 }
 
 /// Find the monitor whose bounds contain the current cursor position.

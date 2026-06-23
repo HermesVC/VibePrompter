@@ -81,7 +81,9 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     pub fn new() -> Self {
-        Self { map: Mutex::new(HashMap::new()) }
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -90,7 +92,10 @@ impl SecretStore for MemoryStore {
         self.map.lock().unwrap().get(account).cloned()
     }
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
-        self.map.lock().unwrap().insert(account.into(), value.into());
+        self.map
+            .lock()
+            .unwrap()
+            .insert(account.into(), value.into());
         Ok(())
     }
     fn delete(&self, account: &str) -> Result<(), String> {

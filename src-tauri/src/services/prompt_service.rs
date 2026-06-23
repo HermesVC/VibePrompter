@@ -24,7 +24,12 @@ impl PromptService {
         connections: ConnectionService,
         history: HistoryService,
     ) -> Self {
-        Self { catalog, connections, history, analytics: None }
+        Self {
+            catalog,
+            connections,
+            history,
+            analytics: None,
+        }
     }
 
     pub fn with_analytics(mut self, a: AnalyticsService) -> Self {

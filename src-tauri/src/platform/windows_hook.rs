@@ -28,9 +28,9 @@ use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10,
-    VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME,
-    VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN,
-    VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT,
+    VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE,
+    VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -93,8 +93,7 @@ pub fn install(app: &tauri::AppHandle, shortcut_list: Vec<(String, String)>) {
     std::thread::Builder::new()
         .name("vp-hook".into())
         .spawn(|| unsafe {
-            let hook =
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
+            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
             if hook.is_null() {
                 tracing::warn!(
                     "priority_hook: SetWindowsHookExW failed — hotkey priority not active"
@@ -140,7 +139,10 @@ fn set_entries(shortcut_list: Vec<(String, String)>) {
             None => tracing::warn!("priority_hook: cannot parse accelerator '{accel}'"),
         }
     }
-    tracing::debug!("priority_hook: {} combo(s) loaded into hook table", entries.len());
+    tracing::debug!(
+        "priority_hook: {} combo(s) loaded into hook table",
+        entries.len()
+    );
 }
 
 unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
@@ -200,7 +202,14 @@ fn parse_accel(accel: &str) -> Option<HookEntry> {
         }
     }
 
-    Some(HookEntry { vk: vk?, ctrl, alt, shift, win_key, action: String::new() })
+    Some(HookEntry {
+        vk: vk?,
+        ctrl,
+        alt,
+        shift,
+        win_key,
+        action: String::new(),
+    })
 }
 
 fn key_to_vk(key: &str) -> Option<u16> {

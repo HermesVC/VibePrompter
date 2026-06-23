@@ -157,7 +157,10 @@ fn capture_selection(app: &AppHandle) -> AppResult<String> {
     // Falls back to Ctrl+C when UIA is unavailable or unsupported by the
     // focused app (games, some Electron apps, custom renderers).
     if let Some(text) = crate::platform::get_selected_text_uia() {
-        tracing::debug!("capture_selection: UIA ({} chars, zero clipboard touch)", text.len());
+        tracing::debug!(
+            "capture_selection: UIA ({} chars, zero clipboard touch)",
+            text.len()
+        );
         return Ok(text);
     }
     tracing::debug!("capture_selection: UIA unavailable or no selection — falling back to Ctrl+C");
@@ -266,7 +269,11 @@ fn position_near_cursor(app: &AppHandle) -> AppResult<()> {
     let monitor = win
         .current_monitor()
         .map_err(|e| AppError::Config(format!("current_monitor: {e}")))?
-        .or_else(|| app.available_monitors().ok().and_then(|m| m.into_iter().next()));
+        .or_else(|| {
+            app.available_monitors()
+                .ok()
+                .and_then(|m| m.into_iter().next())
+        });
 
     let (mon_pos, mon_size, scale) = match monitor {
         Some(m) => (*m.position(), *m.size(), m.scale_factor()),
@@ -309,7 +316,8 @@ pub async fn begin(app: AppHandle, kind: RefineKind) -> AppResult<()> {
         if win.is_visible().unwrap_or(false) {
             let _ = win.hide();
             return Err(AppError::Validation(
-                "overlay dismissed — re-select text in your source app and press the hotkey again".into(),
+                "overlay dismissed — re-select text in your source app and press the hotkey again"
+                    .into(),
             ));
         }
     }
@@ -414,8 +422,8 @@ async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
         let session_override = app
             .try_state::<RefineSession>()
             .and_then(|s| s.connection_override.lock().unwrap().clone());
-        let resolved = session_override
-            .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+        let resolved =
+            session_override.or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
         match resolved.as_deref() {
             Some(id) => id.to_string(),
             None => state
@@ -481,7 +489,10 @@ async fn run_stream(
     let mode = modes
         .iter()
         .find(|m| m.id == mode_id)
-        .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
+        .ok_or_else(|| AppError::NotFound {
+            entity: "prompt_mode",
+            id: mode_id.clone(),
+        })?
         .clone();
 
     // `mode` is the dedicated grammar/summarize built-in for those actions
@@ -500,8 +511,8 @@ async fn run_stream(
     let session_override = app
         .try_state::<RefineSession>()
         .and_then(|s| s.connection_override.lock().unwrap().clone());
-    let resolved = session_override
-        .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+    let resolved =
+        session_override.or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
     let row = match resolved.as_deref() {
         Some(id) => state.connections.get_row(id).await?,
         None => state
@@ -701,7 +712,11 @@ fn build_followup_user_turn(prior_instructions: &[String], new_instruction: &str
 /// `session.last_result` and each instruction is appended to
 /// `session.instructions` so later tweaks carry the whole trajectory.
 /// Optional images on the follow-up turn are forwarded to vision-capable models.
-pub async fn followup(app: AppHandle, instruction: String, images: Vec<ChatImage>) -> AppResult<()> {
+pub async fn followup(
+    app: AppHandle,
+    instruction: String,
+    images: Vec<ChatImage>,
+) -> AppResult<()> {
     let instruction = instruction.trim().to_string();
     if instruction.is_empty() {
         return Err(AppError::Validation("followup instruction is empty".into()));
@@ -722,11 +737,7 @@ pub async fn followup(app: AppHandle, instruction: String, images: Vec<ChatImage
         .unwrap()
         .clone()
         .ok_or_else(|| AppError::Validation("no active refine session".into()))?;
-    let kind = session
-        .kind
-        .lock()
-        .unwrap()
-        .unwrap_or(RefineKind::Rewrite);
+    let kind = session.kind.lock().unwrap().unwrap_or(RefineKind::Rewrite);
     let prior = session
         .last_result
         .lock()
@@ -739,9 +750,17 @@ pub async fn followup(app: AppHandle, instruction: String, images: Vec<ChatImage
 
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) =
-            run_followup_stream(app_for_task.clone(), kind, mode_id, selection, prior, instruction, images, seq)
-                .await
+        if let Err(e) = run_followup_stream(
+            app_for_task.clone(),
+            kind,
+            mode_id,
+            selection,
+            prior,
+            instruction,
+            images,
+            seq,
+        )
+        .await
         {
             if is_current_stream(&app_for_task, seq) {
                 let _ = app_for_task.emit("refine:error", e.safe_message());
@@ -764,7 +783,9 @@ fn validate_followup_images(images: &[ChatImage]) -> AppResult<()> {
     for img in images {
         let mime = img.mime_type.trim().to_ascii_lowercase();
         if !mime.starts_with("image/") {
-            return Err(AppError::Validation("only image attachments are supported".into()));
+            return Err(AppError::Validation(
+                "only image attachments are supported".into(),
+            ));
         }
         let bytes = approx_base64_decoded_bytes(&img.data_base64)?;
         if bytes == 0 {
@@ -813,7 +834,10 @@ async fn run_followup_stream(
     let mode = modes
         .iter()
         .find(|m| m.id == mode_id)
-        .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
+        .ok_or_else(|| AppError::NotFound {
+            entity: "prompt_mode",
+            id: mode_id.clone(),
+        })?
         .clone();
     let system_prompt = mode.system_prompt.clone();
     // Substitute `{{var}}` placeholders with values from the mode's saved
@@ -827,8 +851,8 @@ async fn run_followup_stream(
     let session_override = app
         .try_state::<RefineSession>()
         .and_then(|s| s.connection_override.lock().unwrap().clone());
-    let resolved = session_override
-        .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+    let resolved =
+        session_override.or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
     let row = match resolved.as_deref() {
         Some(id) => state.connections.get_row(id).await?,
         None => state
@@ -847,9 +871,21 @@ async fn run_followup_stream(
         .unwrap_or_default();
     let user_turn = build_followup_user_turn(&prior_instructions, &instruction);
     let messages = vec![
-        ChatMessage { role: "user".into(), content: selection.clone(), images: vec![] },
-        ChatMessage { role: "assistant".into(), content: prior_result, images: vec![] },
-        ChatMessage { role: "user".into(), content: user_turn, images },
+        ChatMessage {
+            role: "user".into(),
+            content: selection.clone(),
+            images: vec![],
+        },
+        ChatMessage {
+            role: "assistant".into(),
+            content: prior_result,
+            images: vec![],
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: user_turn,
+            images,
+        },
     ];
     // Estimate based on selection + prior + instruction so followup output
     // has the same generous ceiling as the initial run.
@@ -993,11 +1029,7 @@ pub async fn retry(app: AppHandle) -> AppResult<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| AppError::Validation("no active refine session".into()))?;
-    let kind = session
-        .kind
-        .lock()
-        .unwrap()
-        .unwrap_or(RefineKind::Rewrite);
+    let kind = session.kind.lock().unwrap().unwrap_or(RefineKind::Rewrite);
 
     let seq = session.stream_seq.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -1265,7 +1297,10 @@ mod tests {
 
     #[test]
     fn followup_turn_lists_prior_instructions_in_order() {
-        let prior = vec!["make it formal".to_string(), "shorten the intro".to_string()];
+        let prior = vec![
+            "make it formal".to_string(),
+            "shorten the intro".to_string(),
+        ];
         let turn = build_followup_user_turn(&prior, "translate to Spanish");
         assert_eq!(
             turn,

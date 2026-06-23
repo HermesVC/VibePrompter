@@ -17,10 +17,9 @@ impl SettingsRepo {
 
     /// All settings rows as `(key, json_value)` pairs.
     pub async fn get_all(&self) -> AppResult<Vec<(String, String)>> {
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM settings")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 

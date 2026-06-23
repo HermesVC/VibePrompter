@@ -20,7 +20,10 @@ impl CancelRegistry {
     /// code should check on every chunk.
     pub fn register(&self, id: &str) -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(false));
-        self.inner.lock().unwrap().insert(id.to_string(), flag.clone());
+        self.inner
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), flag.clone());
         flag
     }
 

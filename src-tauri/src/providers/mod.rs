@@ -16,15 +16,14 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
-pub mod lmstudio;
 pub mod embeddings;
+pub mod lmstudio;
 pub mod prompt_format;
 
 pub use embeddings::{embed_texts, resolve_embed_model};
 
 use crate::models::{
-    ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings,
-    TokenUsage,
+    ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings, TokenUsage,
 };
 use crate::storage::repositories::ConnectionRow;
 
@@ -264,10 +263,10 @@ fn extract_vendor_error(status: reqwest::StatusCode, raw: &str) -> String {
             .and_then(|m| m.as_str())
         {
             // Many vendors include a typed error code — include when present.
-            let code = v
-                .get("error")
-                .and_then(|e| e.get("code"))
-                .and_then(|c| c.as_str().or_else(|| c.as_i64().map(|_| "").map(|_| "code").into()));
+            let code = v.get("error").and_then(|e| e.get("code")).and_then(|c| {
+                c.as_str()
+                    .or_else(|| c.as_i64().map(|_| "").map(|_| "code").into())
+            });
             return match code {
                 Some(c) if !c.is_empty() => format!("{status} · {msg} [{c}]"),
                 _ => format!("{status} · {msg}"),
@@ -320,7 +319,9 @@ pub async fn complete(
     let (text, usage) = with_retry(|| async {
         match kind {
             ConnectionKind::Openai => openai_chat(conn, &model, &messages, &params, cfg).await,
-            ConnectionKind::Anthropic => anthropic_chat(conn, &model, &messages, &params, cfg).await,
+            ConnectionKind::Anthropic => {
+                anthropic_chat(conn, &model, &messages, &params, cfg).await
+            }
         }
     })
     .await?;
@@ -390,9 +391,8 @@ where
                         (nanos as i64 % (spread * 2 + 1)) - spread
                     }
                 };
-                let backoff = base.saturating_add(std::time::Duration::from_millis(
-                    jitter_ms.max(0) as u64,
-                ));
+                let backoff =
+                    base.saturating_add(std::time::Duration::from_millis(jitter_ms.max(0) as u64));
                 let delay = parse_retry_after(&e.to_string())
                     .map(|d| d.min(std::time::Duration::from_secs(30)))
                     .unwrap_or(backoff);
@@ -461,7 +461,9 @@ fn is_transient(e: &AppError) -> bool {
         .take(3)
         .collect::<String>()
         .parse::<u16>()
-        .map(|code| code == 408 || code == 425 || code == 429 || code == 529 || (500..=599).contains(&code))
+        .map(|code| {
+            code == 408 || code == 425 || code == 429 || code == 529 || (500..=599).contains(&code)
+        })
         .unwrap_or(false)
 }
 
@@ -522,7 +524,9 @@ where
                 payload_messages.push(serde_json::json!({ "role": "system", "content": sys }));
             }
             for m in &messages {
-                payload_messages.push(serde_json::json!({ "role": m.role, "content": openai_message_content(m) }));
+                payload_messages.push(
+                    serde_json::json!({ "role": m.role, "content": openai_message_content(m) }),
+                );
             }
             let mut body = serde_json::json!({
                 "model": model,
@@ -590,10 +594,7 @@ where
                     conn,
                 ),
             };
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| classify_send_error(&url, e))?;
+            let resp = req.send().await.map_err(|e| classify_send_error(&url, e))?;
             if !resp.status().is_success() {
                 let status = resp.status();
                 let raw = resp.text().await.unwrap_or_default();
@@ -818,7 +819,10 @@ pub async fn ping_with_result(
             content: "ping".into(),
             images: vec![],
         }],
-        CompletionParams { max_tokens: Some(4), ..Default::default() },
+        CompletionParams {
+            max_tokens: Some(4),
+            ..Default::default()
+        },
         cfg,
     )
     .await
@@ -827,9 +831,7 @@ pub async fn ping_with_result(
 // ─────────────────────────────────────────────────────────── OpenAI-compatible
 
 fn apply_openai_usage(u: &serde_json::Value, usage: &mut TokenUsage) {
-    let prompt = u
-        .get("prompt_tokens")
-        .or_else(|| u.get("input_tokens"));
+    let prompt = u.get("prompt_tokens").or_else(|| u.get("input_tokens"));
     let completion = u
         .get("completion_tokens")
         .or_else(|| u.get("output_tokens"));
@@ -842,7 +844,8 @@ fn apply_openai_usage(u: &serde_json::Value, usage: &mut TokenUsage) {
 }
 
 fn json_u64(v: &serde_json::Value) -> Option<u64> {
-    v.as_u64().or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+    v.as_u64()
+        .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -902,10 +905,7 @@ async fn openai_chat(
     }
 
     log_raw_req(cfg, "POST", &url, &body);
-    let req = http(cfg)?
-        .post(&url)
-        .bearer_auth(&conn.api_key)
-        .json(&body);
+    let req = http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body);
     let resp = apply_extra_headers(req, conn)
         .send()
         .await
@@ -934,10 +934,13 @@ async fn openai_chat(
         .next()
         .and_then(|c| c.message.content)
         .unwrap_or_default();
-    let usage = parsed.usage.map(|u| TokenUsage {
-        input_tokens: u.prompt_tokens,
-        output_tokens: u.completion_tokens,
-    }).unwrap_or_default();
+    let usage = parsed
+        .usage
+        .map(|u| TokenUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+        })
+        .unwrap_or_default();
     Ok((text, usage))
 }
 
@@ -1070,9 +1073,12 @@ async fn anthropic_chat(
         .filter_map(|b| b.text)
         .collect::<Vec<_>>()
         .join("");
-    let usage = parsed.usage.map(|u| TokenUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-    }).unwrap_or_default();
+    let usage = parsed
+        .usage
+        .map(|u| TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        })
+        .unwrap_or_default();
     Ok((text, usage))
 }

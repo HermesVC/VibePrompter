@@ -133,10 +133,7 @@ impl HistoryRepo {
     /// Days with zero activity in the window are NOT in the result — the
     /// frontend is responsible for filling gaps (clearer than dumping a
     /// dense vector of mostly-zero rows across the wire).
-    pub async fn cost_by_day(
-        &self,
-        since_rfc3339: &str,
-    ) -> AppResult<Vec<(String, i64, i64)>> {
+    pub async fn cost_by_day(&self, since_rfc3339: &str) -> AppResult<Vec<(String, i64, i64)>> {
         let rows: Vec<(String, i64, i64)> = sqlx::query_as(
             "SELECT substr(created_at, 1, 10) AS day,
                     COALESCE(SUM(cost_micros), 0) AS micros,
@@ -268,7 +265,11 @@ mod tests {
         repo.insert(&sample()).await.unwrap();
         let removed = repo.clear().await.unwrap();
         assert_eq!(removed, 2);
-        assert!(repo.list(&HistoryQuery::default()).await.unwrap().is_empty());
+        assert!(repo
+            .list(&HistoryQuery::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -277,7 +278,10 @@ mod tests {
         for _ in 0..5 {
             repo.insert(&sample()).await.unwrap();
         }
-        let q = HistoryQuery { limit: 2, offset: 0 };
+        let q = HistoryQuery {
+            limit: 2,
+            offset: 0,
+        };
         assert_eq!(repo.list(&q).await.unwrap().len(), 2);
     }
 
@@ -296,7 +300,10 @@ mod tests {
 
         // children_of returns the tweaks oldest-first.
         let children = repo.children_of(root).await.unwrap();
-        assert_eq!(children.iter().map(|c| c.id).collect::<Vec<_>>(), vec![c1, c2]);
+        assert_eq!(
+            children.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![c1, c2]
+        );
         assert!(children.iter().all(|c| c.parent_id == Some(root)));
     }
 
@@ -322,6 +329,10 @@ mod tests {
         // A timestamp in the far future — everything is "older than" this.
         let removed = repo.purge_older_than("2099-01-01T00:00:00Z").await.unwrap();
         assert_eq!(removed, 1);
-        assert!(repo.list(&HistoryQuery::default()).await.unwrap().is_empty());
+        assert!(repo
+            .list(&HistoryQuery::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

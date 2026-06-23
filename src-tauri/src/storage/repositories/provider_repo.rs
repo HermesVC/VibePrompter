@@ -38,19 +38,29 @@ impl ProviderRepo {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let row_id = row.id.clone();
-            let extra: serde_json::Value = serde_json::from_str(&row.extra)
-                .unwrap_or_else(|e| {
-                    tracing::warn!("provider `{}` has malformed extra JSON: {e}", row_id);
-                    serde_json::Value::Null
-                });
+            let extra: serde_json::Value = serde_json::from_str(&row.extra).unwrap_or_else(|e| {
+                tracing::warn!("provider `{}` has malformed extra JSON: {e}", row_id);
+                serde_json::Value::Null
+            });
             out.push(ProviderInfo {
                 id: row.id,
                 name: row.display_name,
-                accent: extra.get("accent").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                status: if row.enabled { "ok".into() } else { "idle".into() },
+                accent: extra
+                    .get("accent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: if row.enabled {
+                    "ok".into()
+                } else {
+                    "idle".into()
+                },
                 model: row.default_model,
                 usage: 0,
-                local: extra.get("local").and_then(|v| v.as_bool()).unwrap_or(false),
+                local: extra
+                    .get("local")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             });
         }
         Ok(out)

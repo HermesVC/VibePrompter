@@ -23,8 +23,7 @@ pub fn init(config: &Config) -> WorkerGuard {
         "{lvl},sqlx=warn,sqlx_core=warn,hyper=warn,reqwest=warn,tao=warn,wry=warn",
         lvl = config.log_level
     );
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&resolved));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&resolved));
 
     let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
 

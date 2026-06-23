@@ -148,10 +148,7 @@ pub fn plan_sliding_window_with_aggression(
     }
     active_rev.reverse();
 
-    let min_keep = messages
-        .len()
-        .min(aggression.min_active_turns())
-        .max(1);
+    let min_keep = messages.len().min(aggression.min_active_turns()).max(1);
     if active_rev.len() < min_keep {
         let candidate = messages[messages.len() - min_keep..].to_vec();
         let candidate_tokens: u32 = candidate.iter().map(estimate_message_tokens).sum();
@@ -294,9 +291,8 @@ mod tests {
 
     #[test]
     fn evicts_oldest_when_over_budget() {
-        let messages: Vec<ChatMessage> = (0..8)
-            .map(|i| msg("user", &"word ".repeat(400)))
-            .collect();
+        let messages: Vec<ChatMessage> =
+            (0..8).map(|i| msg("user", &"word ".repeat(400))).collect();
         let plan = plan_sliding_window(messages, 8192, "", 1024);
         assert!(!plan.evicted.is_empty());
         assert!(!plan.active.is_empty());

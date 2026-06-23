@@ -15,7 +15,8 @@ pub const NAME: &str = "launch_chrome";
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Open Google Chrome with an optional URL. Use for web lookups or testing.".into(),
+        description: "Open Google Chrome with an optional URL. Use for web lookups or testing."
+            .into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -74,9 +75,7 @@ fn launch_chrome_process(url: &str, new_window: bool) -> AppResult<String> {
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".into(),
         ];
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            candidates.push(format!(
-                r"{local}\Google\Chrome\Application\chrome.exe"
-            ));
+            candidates.push(format!(r"{local}\Google\Chrome\Application\chrome.exe"));
         }
         for path in &candidates {
             if Path::new(path).is_file() {
@@ -108,23 +107,24 @@ fn launch_chrome_process(url: &str, new_window: bool) -> AppResult<String> {
 
     #[cfg(target_os = "linux")]
     {
-        for bin in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] {
-            if Command::new(bin)
-                .arg(url)
-                .spawn()
-                .is_ok()
-            {
+        for bin in [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        ] {
+            if Command::new(bin).arg(url).spawn().is_ok() {
                 return Ok(format!("{bin} started → {url}"));
             }
         }
-        return Err(AppError::Config(
-            "Chrome/Chromium not found on PATH".into(),
-        ));
+        return Err(AppError::Config("Chrome/Chromium not found on PATH".into()));
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (url, new_window);
-        Err(AppError::Config("launch_chrome unsupported on this OS".into()))
+        Err(AppError::Config(
+            "launch_chrome unsupported on this OS".into(),
+        ))
     }
 }

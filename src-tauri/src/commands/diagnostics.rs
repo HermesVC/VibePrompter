@@ -25,9 +25,7 @@ pub struct AppDiagnostics {
 }
 
 #[tauri::command]
-pub async fn get_diagnostics(
-    state: State<'_, AppState>,
-) -> Result<AppDiagnostics, AppError> {
+pub async fn get_diagnostics(state: State<'_, AppState>) -> Result<AppDiagnostics, AppError> {
     Ok(AppDiagnostics {
         version: env!("CARGO_PKG_VERSION"),
         build_target: std::env::consts::OS,
@@ -100,7 +98,10 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
         issues.push(HealthIssue {
             severity: "warn",
             code: "log_dir_missing",
-            message: format!("Log directory does not exist: {}", state.config.log_dir.display()),
+            message: format!(
+                "Log directory does not exist: {}",
+                state.config.log_dir.display()
+            ),
         });
     }
 
@@ -109,9 +110,8 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
         issues.push(HealthIssue {
             severity: "warn",
             code: "keyring_unavailable",
-            message:
-                "OS keyring unavailable — saved API keys won't persist across restarts."
-                    .into(),
+            message: "OS keyring unavailable — saved API keys won't persist across restarts."
+                .into(),
         });
     }
 
@@ -121,8 +121,7 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
         issues.push(HealthIssue {
             severity: "error",
             code: "no_connections",
-            message: "No provider connections configured. Add one in Settings → Providers."
-                .into(),
+            message: "No provider connections configured. Add one in Settings → Providers.".into(),
         });
     } else {
         // 4) Default connection has a key?
@@ -131,9 +130,8 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
             issues.push(HealthIssue {
                 severity: "warn",
                 code: "no_default_connection",
-                message:
-                    "No default connection — set one so prompts know which provider to use."
-                        .into(),
+                message: "No default connection — set one so prompts know which provider to use."
+                    .into(),
             });
         }
         let default_missing_key = connections.iter().any(|c| c.is_default && !c.has_key);
@@ -141,9 +139,8 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
             issues.push(HealthIssue {
                 severity: "error",
                 code: "default_missing_key",
-                message:
-                    "Your default connection has no API key. Add it in Settings → Providers."
-                        .into(),
+                message: "Your default connection has no API key. Add it in Settings → Providers."
+                    .into(),
             });
         }
     }
@@ -154,8 +151,7 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
         issues.push(HealthIssue {
             severity: "error",
             code: "no_modes",
-            message: "No prompt modes available. Restore defaults or create one in Modes."
-                .into(),
+            message: "No prompt modes available. Restore defaults or create one in Modes.".into(),
         });
     }
 
@@ -169,7 +165,9 @@ pub async fn run_health_check(state: State<'_, AppState>) -> Result<HealthReport
 pub async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
     use tauri_plugin_opener::OpenerExt;
     if !url.starts_with("https://") {
-        return Err(AppError::Validation("only https:// URLs are allowed".into()));
+        return Err(AppError::Validation(
+            "only https:// URLs are allowed".into(),
+        ));
     }
     app.opener()
         .open_url(&url, None::<&str>)
@@ -201,6 +199,11 @@ pub async fn get_recent_logs(
     };
     let body = std::fs::read_to_string(&latest)
         .map_err(|e| AppError::Config(format!("read {}: {e}", latest.display())))?;
-    let lines: Vec<String> = body.lines().rev().take(cap).map(|s| s.to_string()).collect();
+    let lines: Vec<String> = body
+        .lines()
+        .rev()
+        .take(cap)
+        .map(|s| s.to_string())
+        .collect();
     Ok(lines.into_iter().rev().collect())
 }

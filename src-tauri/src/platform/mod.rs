@@ -4,9 +4,9 @@
 //! RegisterHotKey or WH_KEYBOARD_LL hooks.
 
 #[cfg(target_os = "windows")]
-mod windows_hook;
-#[cfg(target_os = "windows")]
 mod uia;
+#[cfg(target_os = "windows")]
+mod windows_hook;
 
 /// Install the platform keyboard priority hook and register the given
 /// (accelerator, action) pairs. Safe to call multiple times — the hook is

@@ -6,7 +6,7 @@ use super::{apply_extra_headers, http, normalize_base, HttpConfig};
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
-const DEFAULT_EMBED_MODEL: &str = "text-embedding-nomic-embed-text-v1.5";
+const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
 /// Best-effort embedding model: connection default if it looks like an embed model, else fallback.
 pub fn resolve_embed_model(connection_default: &str) -> &str {
@@ -44,10 +44,7 @@ pub async fn embed_texts(
     });
 
     let resp = apply_extra_headers(
-        http(cfg)?
-            .post(&url)
-            .bearer_auth(&conn.api_key)
-            .json(&body),
+        http(cfg)?.post(&url).bearer_auth(&conn.api_key).json(&body),
         conn,
     )
     .send()
@@ -130,4 +127,19 @@ fn parse_embedding_vector(item: &serde_json::Value) -> AppResult<Vec<f32>> {
         return Err(AppError::Validation("empty embedding vector".into()));
     }
     Ok(vec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_model_uses_ollama_nomic_fallback() {
+        assert_eq!(resolve_embed_model("qwen2.5"), "nomic-embed-text");
+    }
+
+    #[test]
+    fn embed_model_keeps_explicit_embedding_model() {
+        assert_eq!(resolve_embed_model("bge-m3"), "bge-m3");
+    }
 }

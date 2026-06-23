@@ -6,8 +6,8 @@ mod types;
 
 pub use types::*;
 
-use openai_messages::OpenAiMessagesFormat;
 use gemma4::Gemma4Format;
+use openai_messages::OpenAiMessagesFormat;
 
 use crate::models::ChatMessage;
 

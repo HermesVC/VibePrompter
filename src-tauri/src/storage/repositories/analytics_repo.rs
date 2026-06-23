@@ -20,14 +20,12 @@ impl AnalyticsRepo {
     /// build it via `serde_json::json!{...}.to_string()`.
     pub async fn record(&self, event_type: &str, payload_json: &str) -> AppResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO analytics (event_type, payload, created_at) VALUES (?1, ?2, ?3)",
-        )
-        .bind(event_type)
-        .bind(payload_json)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO analytics (event_type, payload, created_at) VALUES (?1, ?2, ?3)")
+            .bind(event_type)
+            .bind(payload_json)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -86,12 +84,11 @@ impl AnalyticsRepo {
         .await
         .unwrap_or((0,));
 
-        let last_event: Option<(String, String)> = sqlx::query_as(
-            "SELECT event_type, created_at FROM analytics ORDER BY id DESC LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
+        let last_event: Option<(String, String)> =
+            sqlx::query_as("SELECT event_type, created_at FROM analytics ORDER BY id DESC LIMIT 1")
+                .fetch_optional(&self.pool)
+                .await
+                .unwrap_or(None);
 
         Ok(AnalyticsSummary {
             runs_24h,

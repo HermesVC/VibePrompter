@@ -30,18 +30,20 @@ impl ShortcutService {
             return Err(AppError::Validation("accelerator must not be empty".into()));
         }
         self.repo.upsert(&config).await?;
-        self.events.emit(AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
-            shortcut_id: config.id,
-        }));
+        self.events
+            .emit(AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
+                shortcut_id: config.id,
+            }));
         Ok(())
     }
 
     /// Delete a shortcut config, then emit `shortcut_updated`.
     pub async fn unregister(&self, id: &str) -> AppResult<()> {
         self.repo.delete(id).await?;
-        self.events.emit(AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
-            shortcut_id: id.to_string(),
-        }));
+        self.events
+            .emit(AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
+                shortcut_id: id.to_string(),
+            }));
         Ok(())
     }
 }

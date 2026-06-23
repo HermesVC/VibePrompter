@@ -103,9 +103,9 @@ impl AppEvent {
     /// The JSON payload for this event (`null` for payload-less events).
     pub fn payload(&self) -> serde_json::Value {
         match self {
-            AppEvent::AppReady
-            | AppEvent::SettingsChanged
-            | AppEvent::HistoryChanged => serde_json::Value::Null,
+            AppEvent::AppReady | AppEvent::SettingsChanged | AppEvent::HistoryChanged => {
+                serde_json::Value::Null
+            }
             AppEvent::ShortcutUpdated(p) => serde_json::to_value(p).unwrap_or_default(),
             AppEvent::ShortcutTriggered(p) => serde_json::to_value(p).unwrap_or_default(),
             AppEvent::AiRequestStarted(p) | AppEvent::AiRequestCompleted(p) => {
@@ -130,14 +130,19 @@ mod tests {
         assert_eq!(AppEvent::AppReady.name(), "app_ready");
         assert_eq!(AppEvent::SettingsChanged.name(), "settings_changed");
         assert_eq!(
-            AppEvent::ShortcutUpdated(ShortcutUpdatedPayload { shortcut_id: "x".into() }).name(),
+            AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
+                shortcut_id: "x".into()
+            })
+            .name(),
             "shortcut_updated"
         );
     }
 
     #[test]
     fn payload_carries_struct_fields() {
-        let ev = AppEvent::ShortcutUpdated(ShortcutUpdatedPayload { shortcut_id: "palette".into() });
+        let ev = AppEvent::ShortcutUpdated(ShortcutUpdatedPayload {
+            shortcut_id: "palette".into(),
+        });
         assert_eq!(ev.payload()["shortcut_id"], "palette");
     }
 }

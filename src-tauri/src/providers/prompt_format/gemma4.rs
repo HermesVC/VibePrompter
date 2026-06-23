@@ -4,9 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::types::{
-    CanonicalRole, ParsedToolCall, PromptFormatContext, ToolDefinition,
-};
+use super::types::{CanonicalRole, ParsedToolCall, PromptFormatContext, ToolDefinition};
 use super::ChatPromptFormat;
 
 pub struct Gemma4Format;
@@ -107,13 +105,13 @@ fn format_tool_declaration(tool: &ToolDefinition) -> String {
 }
 
 fn encode_tool_schema(tool: &ToolDefinition) -> String {
-    let mut parts = vec![format!(
-        "description:{}",
-        gemma_quote(&tool.description)
-    )];
+    let mut parts = vec![format!("description:{}", gemma_quote(&tool.description))];
 
     if tool.parameters.is_object() {
-        parts.push(format!("parameters:{}", encode_schema_object(&tool.parameters)));
+        parts.push(format!(
+            "parameters:{}",
+            encode_schema_object(&tool.parameters)
+        ));
     } else {
         parts.push("parameters:{type:<|\"|>OBJECT<|\"|>}".to_string());
     }
@@ -416,7 +414,8 @@ mod tests {
 
     #[test]
     fn parses_tool_call_output() {
-        let text = r#"<|tool_call>call:get_current_weather{location:<|"|>Tokyo, JP<|"|>}<|tool_call|>"#;
+        let text =
+            r#"<|tool_call>call:get_current_weather{location:<|"|>Tokyo, JP<|"|>}<|tool_call|>"#;
         let calls = parse_gemma4_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "get_current_weather");

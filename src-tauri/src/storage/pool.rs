@@ -50,8 +50,7 @@ pub async fn backup_before_migrations(pool: &SqlitePool, db_path: &Path) -> AppR
         .fetch_all(pool)
         .await
         .unwrap_or_default();
-    let applied_set: std::collections::HashSet<i64> =
-        applied.into_iter().map(|(v,)| v).collect();
+    let applied_set: std::collections::HashSet<i64> = applied.into_iter().map(|(v,)| v).collect();
     let pending = MIGRATOR
         .migrations
         .iter()
@@ -61,9 +60,7 @@ pub async fn backup_before_migrations(pool: &SqlitePool, db_path: &Path) -> AppR
     }
 
     let backup_path = db_path.with_extension("db.bak");
-    let db_mtime = std::fs::metadata(db_path)
-        .and_then(|m| m.modified())
-        .ok();
+    let db_mtime = std::fs::metadata(db_path).and_then(|m| m.modified()).ok();
     let backup_mtime = std::fs::metadata(&backup_path)
         .and_then(|m| m.modified())
         .ok();
@@ -142,14 +139,22 @@ mod tests {
     #[tokio::test]
     async fn seed_data_is_present() {
         let pool = test_pool().await;
-        let (providers,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM providers").fetch_one(&pool).await.unwrap();
-        let (modes,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM prompt_modes").fetch_one(&pool).await.unwrap();
-        let (shortcuts,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM shortcuts").fetch_one(&pool).await.unwrap();
-        let (settings,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM settings").fetch_one(&pool).await.unwrap();
+        let (providers,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM providers")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (modes,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM prompt_modes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (shortcuts,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM shortcuts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (settings,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(providers, 4);
         // 6 original seeded modes + 2 system modes (grammar, summarize).
         assert_eq!(modes, 10);
