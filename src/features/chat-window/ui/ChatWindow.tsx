@@ -23,6 +23,7 @@ import {
   type ChatImageAttachment,
 } from '@shared/lib/chatAttachments';
 import { useChatNativeFileDrop } from '../hooks/useChatNativeFileDrop';
+import { useVoiceInput } from '../hooks/useVoiceInput';
 
 interface ChatImage extends ChatImageAttachment {}
 
@@ -80,6 +81,12 @@ export function ChatWindow() {
   const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  const voice = useVoiceInput({
+    value: draft,
+    onChange: setDraft,
+    disabled: streaming,
+  });
 
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -231,6 +238,8 @@ export function ChatWindow() {
     const text = draft.trim();
     if ((!text && pendingImages.length === 0) || streaming) return;
 
+    if (voice.isListening) voice.stop();
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -356,6 +365,7 @@ export function ChatWindow() {
     modeId,
     connectionId,
     scheduleFlush,
+    voice,
   ]);
 
   const applyIngestResult = useCallback(
@@ -442,6 +452,7 @@ export function ChatWindow() {
 
   const clearChat = () => {
     if (streaming) cancelStream();
+    voice.stop();
     setMessages([]);
     setDraft('');
     setPendingImages([]);
@@ -800,6 +811,39 @@ export function ChatWindow() {
             >
               <I.image size={13} />
             </button>
+            {voice.isSupported && (
+              <button
+                type="button"
+                data-no-drag
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  voice.toggle();
+                }}
+                disabled={streaming}
+                title={
+                  voice.isListening
+                    ? 'Stop voice input'
+                    : 'Voice input (browser speech recognition · needs mic)'
+                }
+                style={{
+                  ...iconBtnStyle(streaming),
+                  ...(voice.isListening
+                    ? {
+                        background: 'var(--accent-tint)',
+                        borderColor: 'var(--accent-tint-2)',
+                        color: 'var(--accent)',
+                        boxShadow: '0 0 0 2px var(--accent-tint)',
+                      }
+                    : {}),
+                }}
+              >
+                {voice.isListening ? (
+                  <I.micOff size={13} className="ph-pulse" />
+                ) : (
+                  <I.mic size={13} />
+                )}
+              </button>
+            )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -807,13 +851,19 @@ export function ChatWindow() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
+                  if (voice.isListening) voice.stop();
                   void send();
                 } else if (e.key === 'Escape') {
                   e.preventDefault();
-                  hide();
+                  if (voice.isListening) voice.stop();
+                  else hide();
                 }
               }}
-              placeholder="Message… (Enter send · Shift+Enter newline · Ctrl+V files)"
+              placeholder={
+                voice.isListening
+                  ? 'Listening… speak now'
+                  : 'Message… (Enter send · mic · Ctrl+V files)'
+              }
               rows={1}
               style={{
                 flex: 1,
@@ -858,9 +908,9 @@ export function ChatWindow() {
               </button>
             )}
           </div>
-          {attachError && (
+          {(attachError || voice.error) && (
             <div style={{ padding: '0 10px 8px', fontSize: 10.5, color: 'var(--danger)' }}>
-              {attachError}
+              {attachError || voice.error}
             </div>
           )}
         </div>

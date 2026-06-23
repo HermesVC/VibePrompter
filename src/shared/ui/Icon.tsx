@@ -76,6 +76,8 @@ export const I = {
   expand: mk(<path d="M3 12h18M3 12l4-4M3 12l4 4M21 12l-4-4M21 12l-4 4" />),
   return: mk(<><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 5 5v6" /></>),
   image: mk(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.5" /><path d="m21 16-5.5-5.5a2 2 0 0 0-2.8 0L3 18" /></>),
+  mic: mk(<><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><path d="M12 18v4M8 22h8" /></>),
+  micOff: mk(<><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><path d="M12 18v4M8 22h8" /><path d="m2 2 20 20" /></>),
   paperclip: mk(<path d="m16 6-8.5 8.5a3 3 0 1 0 4.2 4.2L20 10.5a5 5 0 0 0-7.1-7.1L4.5 11.8a7 7 0 1 0 9.9 9.9L20 10" />, 1.4),
 };
 
