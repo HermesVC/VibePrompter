@@ -664,6 +664,7 @@ where
             return Err(AppError::Validation(format!("stream · {msg}")));
         }
 
+        let mut terminal_chunk = false;
         if let Some(fr) = parsed
             .get("choices")
             .and_then(|c| c.get(0))
@@ -673,6 +674,7 @@ where
             finish_reason = Some(fr.to_string());
             if fr == "stop" || fr == "length" {
                 saw_done = true;
+                terminal_chunk = true;
             }
         }
 
@@ -725,6 +727,10 @@ where
                 }
             }
             _ => {}
+        }
+
+        if terminal_chunk {
+            break;
         }
     }
 
@@ -800,6 +806,16 @@ mod stream_complete_tests {
             false,
             true,
             "partial",
+            &TokenUsage::default()
+        ));
+    }
+
+    #[test]
+    fn terminal_finish_reason_counts_as_complete_without_done() {
+        assert!(stream_looks_complete(
+            true,
+            false,
+            "partial but terminal",
             &TokenUsage::default()
         ));
     }
