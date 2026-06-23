@@ -13,6 +13,16 @@ import {
   resolveContextUsed,
   type TokenUsage,
 } from '@shared/lib/contextUsage';
+import {
+  clearChatSession,
+  loadChatSession,
+  saveChatSession,
+  type PersistedChatMessage,
+} from '@shared/lib/chatSessionStorage';
+import {
+  stripVpSummaryForDisplay,
+  trimSummaryToBudget,
+} from '@shared/lib/chatSessionSummary';
 
 import {
   clipboardHasAttachableFiles,
@@ -64,10 +74,43 @@ interface DonePayload {
   usage?: TokenUsage;
   contextWindowSize?: number;
   scopedText?: string;
+  sessionSummary?: string;
+  memoryCompressed?: boolean;
+  evictedTurns?: number;
+  contextRecovered?: boolean;
+}
+
+interface StatusPayload {
+  phase: 'recovering';
+  generation?: number;
+}
+
+interface TokenPayload {
+  generation?: number;
+  delta?: string;
+}
+
+interface MemoryPayload {
+  sessionSummary?: string;
+  contextWindowSize?: number;
+}
+
+function parseTokenDelta(payload: string | TokenPayload): { generation: number; delta: string } {
+  if (typeof payload === 'string') {
+    return { generation: 0, delta: payload };
+  }
+  return {
+    generation: payload.generation ?? 0,
+    delta: payload.delta ?? '',
+  };
 }
 
 /** Persists the chat window's mode choice — independent of tray/global active mode. */
 const CHAT_MODE_STORAGE_KEY = 'vp_chat_window_mode_id';
+
+function readInitialChatSession() {
+  return loadChatSession();
+}
 
 interface ChatModeOption {
   id: string;
@@ -82,7 +125,10 @@ interface ChatModeOption {
  * the user explicitly hides it. No blur-dismiss, no selection capture.
  */
 export function ChatWindow() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const initialSession = useMemo(() => readInitialChatSession(), []);
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    () => (initialSession?.messages as ChatMessage[]) ?? []
+  );
   const [draft, setDraft] = useState('');
   const [pendingImages, setPendingImages] = useState<ChatImage[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -98,12 +144,20 @@ export function ChatWindow() {
       baseUrl: string;
     }>
   >([]);
-  const [connectionId, setConnectionId] = useState('');
+  const [connectionId, setConnectionId] = useState(initialSession?.connectionId ?? '');
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [chatContext, setChatContext] = useState<ChatContextState>(DEFAULT_CHAT_CONTEXT);
+  const [chatContext, setChatContext] = useState<ChatContextState>(
+    () => initialSession?.chatContext ?? DEFAULT_CHAT_CONTEXT
+  );
+  const [contextTrimNotice, setContextTrimNotice] = useState<string | null>(null);
+  const [contextNoticeKind, setContextNoticeKind] = useState<'info' | 'warn'>('info');
+  const [isRecoveringContext, setIsRecoveringContext] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState(
+    () => initialSession?.sessionSummary ?? ''
+  );
   const [applyDialog, setApplyDialog] = useState<{
     title: string;
     path?: string;
@@ -114,6 +168,8 @@ export function ChatWindow() {
   } | null>(null);
   const chatContextRef = useRef(chatContext);
   chatContextRef.current = chatContext;
+  const sessionSummaryRef = useRef(sessionSummary);
+  sessionSummaryRef.current = sessionSummary;
 
   // Scope tabs only attach context — they do not override the user's chosen chat mode.
   // (snippet-editor / file-assistant modes force code-only output and break Q&A.)
@@ -129,15 +185,38 @@ export function ChatWindow() {
   const bufRef = useRef('');
   const flushPendingRef = useRef(false);
   const assistantIdRef = useRef<string | null>(null);
+  const streamGenerationRef = useRef(0);
+  const cancelledRef = useRef(false);
   const modeConnSyncedRef = useRef(false);
   const activeConnIdRef = useRef('');
+
+  useEffect(() => {
+    const persistable: PersistedChatMessage[] = messages
+      .filter((m) => !m.streaming && !m.error)
+      .map(({ id, role, content, scopedText, meta }) => ({
+        id,
+        role,
+        content,
+        scopedText,
+        meta,
+      }));
+    const t = window.setTimeout(() => {
+      saveChatSession({
+        messages: persistable,
+        chatContext,
+        connectionId,
+        sessionSummary: sessionSummary.trim() || undefined,
+      });
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [messages, chatContext, connectionId, sessionSummary]);
 
   const scheduleFlush = useCallback((assistantId: string) => {
     if (flushPendingRef.current) return;
     flushPendingRef.current = true;
     requestAnimationFrame(() => {
       flushPendingRef.current = false;
-      const text = bufRef.current;
+      const text = stripVpSummaryForDisplay(bufRef.current);
       setMessages((prev) =>
         prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m))
       );
@@ -271,6 +350,38 @@ export function ChatWindow() {
     invoke('cancel_stream', { streamId }).catch(() => {});
   }, [streamId]);
 
+  const applySessionSummaryFromPayload = useCallback(
+    (summary: string | undefined, contextLimit: number) => {
+      if (!summary?.trim()) return;
+      setSessionSummary(trimSummaryToBudget(summary, contextLimit));
+    },
+    []
+  );
+
+  const applyContextNotice = useCallback(
+    (payload: Pick<DonePayload, 'memoryCompressed' | 'evictedTurns' | 'contextRecovered'>, contextLimit: number) => {
+      setIsRecoveringContext(false);
+      const parts: string[] = [];
+      if (payload.contextRecovered) {
+        parts.push('Контекст автоматически подстроен под лимит модели');
+      }
+      if (payload.memoryCompressed && payload.evictedTurns) {
+        parts.push(`${payload.evictedTurns} старых сообщений сохранены в память диалога`);
+      }
+      if (!parts.length) {
+        setContextTrimNotice(null);
+        return;
+      }
+      const limitHint =
+        contextLimit > 0 && !payload.contextRecovered
+          ? ` (лимит ${formatContextLimit(contextLimit)})`
+          : '';
+      setContextTrimNotice(`${parts.join('. ')}${limitHint}. В чате история целиком.`);
+      setContextNoticeKind(payload.contextRecovered ? 'info' : 'warn');
+    },
+    []
+  );
+
   const processScopedCompletion = useCallback((_payload: { scopedText?: string; text: string }) => {
     // Working snippet/file content updates only on explicit Apply — not on every reply.
   }, []);
@@ -358,6 +469,8 @@ export function ChatWindow() {
     };
     const assistantId = crypto.randomUUID();
     assistantIdRef.current = assistantId;
+    streamGenerationRef.current = 0;
+    cancelledRef.current = false;
     const sid = crypto.randomUUID();
     setStreamId(sid);
     bufRef.current = '';
@@ -373,6 +486,11 @@ export function ChatWindow() {
         })),
       }));
 
+    const connForSend = resolveActiveConnection(conns, connectionId || activeConnIdRef.current);
+    const contextLimit = effectiveContextLimit(connForSend);
+    setContextTrimNotice(null);
+    setIsRecoveringContext(false);
+
     setMessages((prev) => [
       ...prev,
       userMsg,
@@ -386,17 +504,55 @@ export function ChatWindow() {
     const tokenEvent = `chat:${sid}:token`;
     const doneEvent = `chat:${sid}:done`;
     const errEvent = `chat:${sid}:error`;
+    const statusEvent = `chat:${sid}:status`;
+    const memoryEvent = `chat:${sid}:memory`;
 
     const unlistens: Array<() => void> = [];
     try {
       const listeners = await Promise.all([
-        listen<string>(tokenEvent, (e) => {
+        listen<string | TokenPayload>(tokenEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
-          bufRef.current += e.payload;
+          const { generation, delta } = parseTokenDelta(e.payload);
+          if (generation !== streamGenerationRef.current || !delta) return;
+          bufRef.current += delta;
           scheduleFlush(assistantId);
+        }),
+        listen<StatusPayload>(statusEvent, (e) => {
+          if (assistantIdRef.current !== assistantId) return;
+          if (e.payload.phase !== 'recovering') return;
+          if (typeof e.payload.generation === 'number') {
+            streamGenerationRef.current = e.payload.generation;
+          } else {
+            streamGenerationRef.current += 1;
+          }
+          bufRef.current = '';
+          flushPendingRef.current = false;
+          setIsRecoveringContext(true);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: '', streaming: true } : m
+            )
+          );
+        }),
+        listen<MemoryPayload>(memoryEvent, (e) => {
+          if (assistantIdRef.current !== assistantId) return;
+          if (e.payload.contextWindowSize) {
+            setConns((prev) =>
+              applyCompletionContextUpdate(
+                prev,
+                activeConnIdRef.current,
+                e.payload.contextWindowSize
+              )
+            );
+          }
+          applySessionSummaryFromPayload(
+            e.payload.sessionSummary,
+            e.payload.contextWindowSize ?? contextLimit
+          );
         }),
         listen<DonePayload>(doneEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
+          if (cancelledRef.current) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -421,17 +577,26 @@ export function ChatWindow() {
               )
             );
           }
+          applySessionSummaryFromPayload(
+            e.payload.sessionSummary,
+            e.payload.contextWindowSize ?? contextLimit
+          );
+          applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
           processScopedCompletion(e.payload);
         }),
         listen<string>(errEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
+          setIsRecoveringContext(false);
           const cancelled = e.payload === 'cancelled';
+          if (cancelled) cancelledRef.current = true;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
                     ...m,
-                    content: cancelled ? bufRef.current : '',
+                    content: cancelled
+                      ? stripVpSummaryForDisplay(bufRef.current)
+                      : '',
                     streaming: false,
                     error: cancelled ? 'Cancelled' : e.payload,
                   }
@@ -448,7 +613,10 @@ export function ChatWindow() {
         modeId: modeId ?? undefined,
         connectionId: connectionId || undefined,
         chatContext: buildChatContextPayload(chatContextRef.current),
+        sessionSummary: sessionSummaryRef.current.trim() || undefined,
       });
+
+      if (cancelledRef.current) return;
 
       // Authoritative completion payload — the event listener can race with
       // cleanup in `finally` when Tauri delivers `done` after invoke resolves.
@@ -476,9 +644,20 @@ export function ChatWindow() {
           )
         );
       }
+      applySessionSummaryFromPayload(
+        result.sessionSummary,
+        result.contextWindowSize ?? contextLimit
+      );
+      applyContextNotice(result, result.contextWindowSize ?? contextLimit);
       processScopedCompletion(result);
     } catch (e) {
+      setIsRecoveringContext(false);
+      if (cancelledRef.current) return;
       const msg = errorMessage(e);
+      if (msg.toLowerCase().includes('cancelled')) {
+        cancelledRef.current = true;
+        return;
+      }
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId ? { ...m, streaming: false, error: msg } : m
@@ -487,6 +666,7 @@ export function ChatWindow() {
     } finally {
       unlistens.forEach((u) => u());
       setStreaming(false);
+      setIsRecoveringContext(false);
       setStreamId(null);
       assistantIdRef.current = null;
     }
@@ -497,9 +677,12 @@ export function ChatWindow() {
     messages,
     modeId,
     connectionId,
+    conns,
     scheduleFlush,
     voice,
     processScopedCompletion,
+    applySessionSummaryFromPayload,
+    applyContextNotice,
   ]);
 
   const applyIngestResult = useCallback(
@@ -592,7 +775,10 @@ export function ChatWindow() {
     setPendingImages([]);
     setAttachError(null);
     setTokenUsage(null);
+    setContextTrimNotice(null);
+    setSessionSummary('');
     setChatContext(DEFAULT_CHAT_CONTEXT);
+    clearChatSession();
   };
 
   const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
@@ -740,7 +926,11 @@ export function ChatWindow() {
               </div>
             )}
             <div style={{ fontSize: 10.5, color: 'var(--fg-dim)', pointerEvents: 'none' }}>
-              {streaming ? 'Thinking…' : 'Local mode · stays open'}
+              {isRecoveringContext
+                ? 'Подстраиваем контекст…'
+                : streaming
+                  ? 'Thinking…'
+                  : 'Local mode · stays open'}
             </div>
           </div>
           <ContextUsageRing
@@ -809,6 +999,60 @@ export function ChatWindow() {
           onChange={setChatContext}
           onError={setAttachError}
         />
+
+        {contextTrimNotice && (
+          <div
+            data-no-drag
+            style={{
+              margin: '0 12px',
+              padding: '6px 10px',
+              fontSize: 10.5,
+              lineHeight: 1.4,
+              color: contextNoticeKind === 'info' ? 'var(--accent)' : 'var(--warn)',
+              background:
+                contextNoticeKind === 'info'
+                  ? 'color-mix(in srgb, var(--accent) 10%, transparent)'
+                  : 'color-mix(in srgb, var(--warn) 12%, transparent)',
+              border:
+                contextNoticeKind === 'info'
+                  ? '.5px solid color-mix(in srgb, var(--accent) 28%, transparent)'
+                  : '.5px solid color-mix(in srgb, var(--warn) 35%, transparent)',
+              borderRadius: 8,
+            }}
+          >
+            {contextTrimNotice}
+          </div>
+        )}
+
+        {sessionSummary.trim() && (
+          <details
+            data-no-drag
+            style={{
+              margin: '0 12px',
+              fontSize: 10.5,
+              color: 'var(--fg-dim)',
+              border: '.5px solid var(--border)',
+              borderRadius: 8,
+              padding: '4px 8px',
+              background: 'var(--surface-2)',
+            }}
+          >
+            <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+              Память диалога (~{estimateTokensFromChars(sessionSummary.length)} tok)
+            </summary>
+            <pre
+              style={{
+                margin: '6px 0 0',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: 10,
+                color: 'var(--fg-mute)',
+              }}
+            >
+              {sessionSummary}
+            </pre>
+          </details>
+        )}
 
         {/* Messages */}
         <div
@@ -1098,6 +1342,11 @@ export function ChatWindow() {
       />
     </div>
   );
+}
+
+function formatContextLimit(n: number): string {
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
 }
 
 function UserMessageBody({ content }: { content: string }) {

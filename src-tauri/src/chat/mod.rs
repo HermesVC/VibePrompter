@@ -4,6 +4,17 @@
 //! capture, no blur-to-dismiss, no clipboard handoff. The frontend owns the
 //! message history; the backend only streams completions.
 
+mod context_recovery;
+mod session_summary;
+mod sliding_window;
+
+pub use context_recovery::should_retry_for_context;
+pub use session_summary::append_memory_to_system;
+pub use sliding_window::{
+    compress_evicted_turns, estimate_message_tokens, fallback_merge_memory,
+    plan_sliding_window_with_aggression, WindowAggression,
+};
+
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::utils::AppResult;

@@ -27,6 +27,53 @@ export function estimateTokensFromChars(charCount: number, imageCount = 0): numb
   return Math.ceil(charCount / 4) + imageCount * 500;
 }
 
+export function estimateMessageTokens(message: {
+  content: string;
+  images?: readonly unknown[] | null;
+}): number {
+  return estimateTokensFromChars(message.content.length, message.images?.length ?? 0);
+}
+
+/** Drop oldest turns so the next request fits the model context (keeps recent history). */
+export function trimMessagesToTokenBudget<T extends { role: string; content: string; images?: readonly unknown[] | null }>(
+  messages: T[],
+  contextLimit: number,
+  reserveOutputTokens = 1536
+): { messages: T[]; droppedCount: number } {
+  if (contextLimit <= 0 || messages.length === 0) {
+    return { messages, droppedCount: 0 };
+  }
+
+  const inputBudget = Math.max(512, contextLimit - reserveOutputTokens);
+  const tokenCount = (list: T[]) =>
+    list.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+
+  let working = [...messages];
+  let droppedCount = 0;
+  const initialLen = working.length;
+
+  while (working.length > 1 && tokenCount(working) > inputBudget) {
+    if (
+      working.length >= 2 &&
+      working[0].role === 'user' &&
+      working[1].role === 'assistant'
+    ) {
+      working.splice(0, 2);
+      droppedCount += 2;
+    } else {
+      working.shift();
+      droppedCount += 1;
+    }
+  }
+
+  if (working.length === 0 && messages.length > 0) {
+    working = [messages[messages.length - 1]];
+    droppedCount = initialLen - 1;
+  }
+
+  return { messages: working, droppedCount };
+}
+
 export function resolveContextUsed(
   usage: TokenUsage | null | undefined,
   fallbackEstimate: number

@@ -31,6 +31,7 @@ pub async fn chat_complete_stream(
     mode_id: Option<String>,
     connection_id: Option<String>,
     chat_context: Option<crate::workspace::ChatContextPayload>,
+    session_summary: Option<String>,
 ) -> Result<CompletionResult, AppError> {
     let mut chat_context = chat_context;
     if let Some(ctx) = chat_context.as_mut() {
@@ -122,37 +123,162 @@ pub async fn chat_complete_stream(
         }
     };
 
-    let params = CompletionParams {
-        model: None,
-        temperature: Some(temperature),
-        max_tokens: Some(max_tokens as u32),
-        system: system_prompt.filter(|s| !s.trim().is_empty()),
-    };
+    let cfg = state.connections.http_config().await;
+    let context_limit = resolve_context_limit(&row, &cfg).await;
+
+    let mut memory = session_summary.unwrap_or_default();
+    let initial_memory = memory.clone();
+    let reserve_output = max_tokens.max(256) as u32;
+    let mut aggression = crate::chat::WindowAggression::Normal;
+    let mut memory_compressed = false;
+    let mut evicted_count = 0u32;
+    let mut stream_generation = 0u32;
 
     let token_event = format!("chat:{stream_id}:token");
     let done_event = format!("chat:{stream_id}:done");
     let err_event = format!("chat:{stream_id}:error");
+    let status_event = format!("chat:{stream_id}:status");
+    let memory_event = format!("chat:{stream_id}:memory");
 
     let registry = tauri::Manager::state::<crate::app::cancel::CancelRegistry>(&app);
     let cancel_flag = registry.register(&stream_id);
     let cancel_check = cancel_flag.clone();
 
-    let cfg = state.connections.http_config().await;
     let _permit = state.connections.acquire_permit().await;
-    let app_for_tokens = app.clone();
-    let result = crate::providers::complete_stream(
-        &row,
-        messages.clone(),
-        params,
-        &cfg,
-        move |delta| {
-            let _ = app_for_tokens.emit(&token_event, delta);
-        },
-        move || cancel_check.load(std::sync::atomic::Ordering::SeqCst),
-    )
-    .await;
+
+    const MAX_CONTEXT_RETRIES: usize = 2;
+    let mut result: Result<CompletionResult, AppError> =
+        Err(AppError::Validation("chat stream did not run".into()));
+    let mut successful_attempt = 0usize;
+
+    for attempt in 0..=MAX_CONTEXT_RETRIES {
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            result = Err(AppError::Validation("cancelled".into()));
+            break;
+        }
+
+        if attempt > 0 {
+            stream_generation += 1;
+            aggression = aggression.next();
+            let _ = app.emit(
+                &status_event,
+                serde_json::json!({
+                    "phase": "recovering",
+                    "generation": stream_generation,
+                }),
+            );
+            tracing::warn!(
+                "context recovery attempt {attempt}/{MAX_CONTEXT_RETRIES} (aggression={aggression:?})"
+            );
+        }
+
+        let window_plan = crate::chat::plan_sliding_window_with_aggression(
+            messages.clone(),
+            context_limit,
+            &memory,
+            reserve_output,
+            aggression,
+        );
+        evicted_count = window_plan.evicted.len() as u32;
+
+        if !window_plan.evicted.is_empty() {
+            match crate::chat::compress_evicted_turns(
+                &row,
+                &cfg,
+                &memory,
+                &window_plan.evicted,
+                context_limit,
+            )
+            .await
+            {
+                Ok(merged) => {
+                    memory = merged;
+                    memory_compressed = true;
+                }
+                Err(e) => {
+                    tracing::warn!("memory compression failed: {e}, using truncated fallback");
+                    memory = crate::chat::fallback_merge_memory(
+                        &memory,
+                        &window_plan.evicted,
+                        context_limit,
+                    );
+                    memory_compressed = true;
+                }
+            }
+            emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
+        }
+
+        let api_messages = window_plan.active;
+        let input_estimate = estimate_chat_input_tokens(
+            &api_messages,
+            system_prompt.as_deref(),
+            &memory,
+        );
+
+        let mut request_system = system_prompt.clone();
+        if let Some(sys) = request_system.as_mut() {
+            crate::chat::append_memory_to_system(sys, Some(&memory), context_limit);
+        } else {
+            let mut sys = String::new();
+            crate::chat::append_memory_to_system(&mut sys, Some(&memory), context_limit);
+            request_system = Some(sys);
+        }
+
+        let params = CompletionParams {
+            model: None,
+            temperature: Some(temperature),
+            max_tokens: Some(max_tokens as u32),
+            system: request_system.filter(|s| !s.trim().is_empty()),
+        };
+
+        let app_for_tokens = app.clone();
+        let tokens_for_stream = token_event.clone();
+        let cancel_for_stream = cancel_check.clone();
+        let gen_for_stream = stream_generation;
+        let stream_out = crate::providers::complete_stream(
+            &row,
+            api_messages,
+            params,
+            &cfg,
+            move |delta| {
+                let _ = app_for_tokens.emit(
+                    &tokens_for_stream,
+                    serde_json::json!({
+                        "generation": gen_for_stream,
+                        "delta": delta,
+                    }),
+                );
+            },
+            move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
+        )
+        .await;
+
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            result = Err(AppError::Validation("cancelled".into()));
+            break;
+        }
+
+        let retry = attempt < MAX_CONTEXT_RETRIES
+            && crate::chat::should_retry_for_context(
+                stream_out.as_ref().map_err(|e| e),
+                input_estimate,
+                context_limit,
+            );
+
+        if retry {
+            continue;
+        }
+
+        result = stream_out;
+        successful_attempt = attempt;
+        break;
+    }
+
+    let context_recovered = successful_attempt > 0 && result.is_ok();
+
     tauri::Manager::state::<crate::app::cancel::CancelRegistry>(&app).forget(&stream_id);
-    let was_cancelled = cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
+    let was_cancelled = cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
+        || result.as_ref().err().is_some_and(is_cancelled_err);
 
     let source_label = {
         let last = messages.last().expect("validated non-empty messages");
@@ -168,6 +294,17 @@ pub async fn chat_complete_stream(
     match result {
         Ok(mut r) => {
             state.connections.enrich_completion_context(&row, &mut r).await;
+            if context_limit > 0 {
+                r.context_window_size = Some(context_limit);
+            }
+            if !memory.trim().is_empty() {
+                r.session_summary = Some(memory.clone());
+            }
+            r.memory_compressed = memory_compressed;
+            if memory_compressed && evicted_count > 0 {
+                r.evicted_turns = Some(evicted_count);
+            }
+            r.context_recovered = context_recovered;
             if let Some(ctx) = chat_context.as_ref() {
                 use crate::workspace::ChatScope;
                 let user_edit_intent = messages
@@ -184,6 +321,7 @@ pub async fn chat_complete_stream(
             }
             if was_cancelled {
                 let _ = app.emit(&err_event, "cancelled");
+                return Err(AppError::Validation("cancelled".into()));
             } else {
                 let _ = app.emit(&done_event, &r);
                 state.connections.mark_used(&row.id).await;
@@ -214,10 +352,21 @@ pub async fn chat_complete_stream(
             Ok(r)
         }
         Err(e) => {
-            let _ = app.emit(&err_event, e.to_string());
+            if memory.trim() != initial_memory.trim() && !memory.trim().is_empty() {
+                emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
+            }
+            if is_cancelled_err(&e) {
+                let _ = app.emit(&err_event, "cancelled");
+            } else {
+                let _ = app.emit(&err_event, e.to_string());
+            }
             Err(e)
         }
     }
+}
+
+fn is_cancelled_err(e: &AppError) -> bool {
+    matches!(e, AppError::Validation(msg) if msg == "cancelled")
 }
 
 /// Read files dropped onto the chat window from OS paths (Tauri drag-drop).
@@ -386,4 +535,58 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
             .map(|tree| format!("[Workspace tree]\n{tree}"))
             .unwrap_or_default(),
     }
+}
+
+fn emit_chat_memory_update(
+    app: &AppHandle,
+    memory_event: &str,
+    memory: &str,
+    context_limit: i64,
+) {
+    if memory.trim().is_empty() {
+        return;
+    }
+    let _ = app.emit(
+        memory_event,
+        serde_json::json!({
+            "sessionSummary": memory,
+            "contextWindowSize": context_limit,
+        }),
+    );
+}
+
+async fn resolve_context_limit(
+    row: &crate::storage::repositories::ConnectionRow,
+    cfg: &crate::providers::HttpConfig,
+) -> i64 {
+    let configured = row.context_window_size;
+    let fallback = if configured > 0 { configured } else { 8192 };
+    if let Some(probed) =
+        crate::providers::lmstudio::probe_context_length(&row.base_url, cfg).await
+    {
+        tracing::debug!("context probe: {probed} (configured {configured})");
+        if configured > 0 {
+            probed.min(configured)
+        } else {
+            probed
+        }
+    } else {
+        fallback
+    }
+}
+
+fn estimate_chat_input_tokens(
+    messages: &[ChatMessage],
+    base_system: Option<&str>,
+    memory: &str,
+) -> u32 {
+    let msg_tokens: u32 = messages
+        .iter()
+        .map(crate::chat::estimate_message_tokens)
+        .sum();
+    let mut sys_chars = memory.chars().count();
+    if let Some(s) = base_system {
+        sys_chars += s.chars().count();
+    }
+    msg_tokens + ((sys_chars + 3) / 4) as u32
 }

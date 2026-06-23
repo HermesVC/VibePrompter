@@ -329,6 +329,11 @@ pub async fn complete(
         usage,
         context_window_size: None,
         scoped_text: None,
+        session_summary: None,
+        memory_compressed: false,
+        evicted_turns: None,
+        context_recovered: false,
+        stream_incomplete: false,
     })
 }
 
@@ -597,6 +602,8 @@ where
 
     let mut text = String::new();
     let mut usage = TokenUsage::default();
+    let mut saw_done = false;
+    let mut stream_broken = false;
     let mut stream = resp.bytes_stream().eventsource();
     while let Some(event) = stream.next().await {
         if should_cancel() {
@@ -607,17 +614,24 @@ where
                 usage,
                 context_window_size: None,
                 scoped_text: None,
+                session_summary: None,
+                memory_compressed: false,
+                evicted_turns: None,
+                context_recovered: false,
+                stream_incomplete: false,
             });
         }
         let event = match event {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!("stream parse: {e}");
-                continue;
+                stream_broken = true;
+                break;
             }
         };
         let data = event.data;
         if data == "[DONE]" {
+            saw_done = true;
             break;
         }
         if data.trim().is_empty() {
@@ -627,6 +641,26 @@ where
             Ok(v) => v,
             Err(_) => continue,
         };
+
+        if let Some(err) = parsed.get("error") {
+            let msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .or_else(|| err.as_str())
+                .unwrap_or("stream error");
+            return Err(AppError::Validation(format!("stream · {msg}")));
+        }
+
+        if let Some(fr) = parsed
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|f| f.as_str())
+        {
+            if fr == "stop" {
+                saw_done = true;
+            }
+        }
 
         // OpenAI delta: choices[0].delta.content
         if let Some(delta) = parsed
@@ -685,6 +719,8 @@ where
     // a 2xx; the actual status was already validated above.
     log_raw_resp(cfg, 200, &text);
 
+    let stream_incomplete = !stream_looks_complete(saw_done, stream_broken, &text, &usage);
+
     Ok(CompletionResult {
         text,
         model,
@@ -692,7 +728,62 @@ where
         usage,
         context_window_size: None,
         scoped_text: None,
+        session_summary: None,
+        memory_compressed: false,
+        evicted_turns: None,
+        context_recovered: false,
+        stream_incomplete,
     })
+}
+
+/// Decide whether a streaming response ended normally. Local OpenAI-compat
+/// servers (LM Studio, Ollama) often omit `[DONE]` even on success.
+fn stream_looks_complete(
+    saw_done: bool,
+    stream_broken: bool,
+    text: &str,
+    usage: &TokenUsage,
+) -> bool {
+    if stream_broken {
+        return false;
+    }
+    if saw_done {
+        return true;
+    }
+    let body = text.trim();
+    if body.is_empty() {
+        return false;
+    }
+    if usage.output_tokens > 0 || usage.input_tokens > 0 {
+        return true;
+    }
+    // Non-empty body after a clean HTTP stream — treat as complete (no [DONE]).
+    true
+}
+
+#[cfg(test)]
+mod stream_complete_tests {
+    use super::stream_looks_complete;
+    use crate::models::TokenUsage;
+
+    #[test]
+    fn complete_without_done_when_text_and_usage() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+        };
+        assert!(stream_looks_complete(false, false, "Hello there", &usage));
+    }
+
+    #[test]
+    fn incomplete_when_stream_broken() {
+        assert!(!stream_looks_complete(
+            false,
+            true,
+            "partial",
+            &TokenUsage::default()
+        ));
+    }
 }
 
 /// Cheap "are you alive" round-trip used by Settings → Providers Test

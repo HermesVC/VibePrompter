@@ -169,4 +169,19 @@ pub struct CompletionResult {
     /// Extracted snippet/file body when a scoped chat session is active.
     #[serde(rename = "scopedText", default, skip_serializing_if = "Option::is_none")]
     pub scoped_text: Option<String>,
+    /// Rolling dialogue memory (LLM-compressed earlier turns).
+    #[serde(rename = "sessionSummary", default, skip_serializing_if = "Option::is_none")]
+    pub session_summary: Option<String>,
+    /// True when older turns were compressed into memory before this reply.
+    #[serde(rename = "memoryCompressed", default, skip_serializing_if = "std::ops::Not::not")]
+    pub memory_compressed: bool,
+    /// Number of messages removed from the active window (compressed into memory).
+    #[serde(rename = "evictedTurns", default, skip_serializing_if = "Option::is_none")]
+    pub evicted_turns: Option<u32>,
+    /// True when a context overflow was detected and the request was retried with tighter compression.
+    #[serde(rename = "contextRecovered", default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_recovered: bool,
+    /// Stream ended without a clean `[DONE]` / terminal chunk (used for recovery heuristics).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_incomplete: bool,
 }
