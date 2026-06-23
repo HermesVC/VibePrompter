@@ -24,8 +24,10 @@ import {
   stripVpSummaryForDisplay,
   trimSummaryToBudget,
 } from '@shared/lib/chatSessionSummary';
+import { indexContextArtifacts } from '@shared/lib/chatMemoryApi';
 import {
   parseGeneratedFileBlocks,
+  extractContextArtifacts,
   resolveGeneratedApplyPath,
   stripGeneratedFileBlocks,
   type GeneratedFileBlock,
@@ -436,9 +438,34 @@ export function ChatWindow() {
     []
   );
 
-  const processScopedCompletion = useCallback((_payload: { scopedText?: string; text: string }) => {
-    // Working snippet/file content updates only on explicit Apply — not on every reply.
-  }, []);
+  const processScopedCompletion = useCallback(
+    (payload: { scopedText?: string; text: string }) => {
+      const artifacts = extractContextArtifacts(
+        payload.text,
+        chatContextRef.current.scope
+      );
+      if (!artifacts.length) return;
+      void indexContextArtifacts(sessionIdRef.current, artifacts, {
+        connectionId: connectionId || undefined,
+        modeId: modeId ?? undefined,
+      }).catch(() => {});
+    },
+    [connectionId, modeId]
+  );
+
+  const rememberAppliedContextArtifacts = useCallback(
+    (applied: Array<{ path: string; content: string }>) => {
+      const artifacts = applied
+        .filter((f) => f.content.trim())
+        .map((f) => ({ path: f.path, content: f.content.trim() }));
+      if (!artifacts.length) return;
+      void indexContextArtifacts(sessionIdRef.current, artifacts, {
+        connectionId: connectionId || undefined,
+        modeId: modeId ?? undefined,
+      }).catch(() => {});
+    },
+    [connectionId, modeId]
+  );
 
   const promptApplyScoped = useCallback(async (assistantText: string, scopedText?: string) => {
     const scope = chatContextRef.current.scope;
@@ -548,6 +575,7 @@ export function ChatWindow() {
             : 'allow';
 
         const applyAll = async () => {
+          const applied: Array<{ path: string; content: string }> = [];
           for (const { file, preview } of items) {
             if (preview.decision === 'deny') continue;
             const result = await applyWorkspaceWrite(
@@ -557,7 +585,9 @@ export function ChatWindow() {
               true
             );
             updateScopeAfterGeneratedWrite(file.path, file.content, result.contentHash);
+            applied.push({ path: file.path, content: file.content });
           }
+          rememberAppliedContextArtifacts(applied);
         };
 
         const settings = await getWorkspaceSettings();
@@ -583,6 +613,7 @@ export function ChatWindow() {
                 true
               );
               updateScopeAfterGeneratedWrite(file.path, file.content, result.contentHash);
+              rememberAppliedContextArtifacts([{ path: file.path, content: file.content }]);
             },
           });
           return;
@@ -602,7 +633,7 @@ export function ChatWindow() {
         setAttachError(errorMessage(e));
       }
     },
-    [updateScopeAfterGeneratedWrite]
+    [updateScopeAfterGeneratedWrite, rememberAppliedContextArtifacts]
   );
 
   const promptApplyGeneratedFile = useCallback(async (file: GeneratedFileBlock) => {

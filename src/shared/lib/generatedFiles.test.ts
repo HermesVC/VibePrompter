@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseGeneratedFileBlocks,
+  extractContextArtifacts,
+  isContextArtifactPath,
   resolveGeneratedApplyPath,
   stripGeneratedFileBlocks,
 } from './generatedFiles';
@@ -54,6 +56,20 @@ describe('parseGeneratedFileBlocks', () => {
         files: [],
       })
     ).toBe('test/qwentest/index.html');
+  });
+
+  it('detects contextual artifact paths', () => {
+    expect(isContextArtifactPath('docs/PLAN.md')).toBe(true);
+    expect(isContextArtifactPath('notes/context.txt')).toBe(true);
+    expect(isContextArtifactPath('src/index.js')).toBe(false);
+  });
+
+  it('extracts context artifacts from assistant fences', () => {
+    const artifacts = extractContextArtifacts(
+      '```file docs/plan.md\n# Plan\nstep 1\n```\n```file src/a.ts\nx\n```',
+      { kind: 'none' }
+    );
+    expect(artifacts).toEqual([{ path: 'docs/plan.md', content: '# Plan\nstep 1' }]);
   });
 
   it('strips generated file blocks from prose', () => {

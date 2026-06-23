@@ -1,5 +1,6 @@
 //! Chat window commands — toggle visibility and stream multi-turn completions.
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 
@@ -14,7 +15,8 @@ const FILE_ARTIFACT_PROTOCOL: &str = r#"When the user asks you to create or modi
 ```file relative/path/from/workspace.ext
 file contents
 ```
-Use one fence per file. Put no prose inside file fences. Use stable relative workspace paths. Do not merge multiple files into one fence. If only one file is needed, you may still use one file fence."#;
+Use one fence per file. Put no prose inside file fences. Use stable relative workspace paths. Do not merge multiple files into one fence. If only one file is needed, you may still use one file fence.
+For plans, notes, and markdown context files (.md), use clear filenames (e.g. PLAN.md, notes/context.md) — the app remembers these paths in semantic memory."#;
 
 struct AutoContinueOutput {
     result: CompletionResult,
@@ -692,6 +694,82 @@ pub async fn chat_clear_session_memory(
         return Ok(());
     }
     state.chat_memory.clear_session(&session_id).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ContextArtifactInput {
+    path: String,
+    content: String,
+}
+
+/// Best-effort semantic memory for contextual artifacts (plans, markdown notes, etc.).
+#[tauri::command]
+pub async fn chat_index_context_artifacts(
+    state: State<'_, AppState>,
+    session_id: String,
+    connection_id: Option<String>,
+    mode_id: Option<String>,
+    artifacts: Vec<ContextArtifactInput>,
+) -> Result<(), AppError> {
+    if session_id.trim().is_empty() || artifacts.is_empty() {
+        return Ok(());
+    }
+
+    let row = resolve_chat_connection_row(&state, connection_id, mode_id).await?;
+    let cfg = state.connections.http_config().await;
+    let mut indexed_hashes: std::collections::HashSet<String> = state
+        .chat_memory
+        .list_content_hashes(&session_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let pairs: Vec<(String, String)> = artifacts
+        .into_iter()
+        .map(|a| (a.path, a.content))
+        .collect();
+
+    crate::chat::index_context_artifacts(
+        &state.chat_memory,
+        &row,
+        &cfg,
+        &session_id,
+        &pairs,
+        &mut indexed_hashes,
+    )
+    .await;
+
+    Ok(())
+}
+
+async fn resolve_chat_connection_row(
+    state: &AppState,
+    connection_id: Option<String>,
+    mode_id: Option<String>,
+) -> Result<crate::storage::repositories::ConnectionRow, AppError> {
+    if let Some(id) = connection_id.as_deref().filter(|s| !s.is_empty()) {
+        return state.connections.get_row(id).await;
+    }
+    if let Some(mid) = mode_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        let modes = state.catalog.list_modes().await?;
+        let mode = modes
+            .iter()
+            .find(|m| m.id == mid)
+            .ok_or_else(|| AppError::NotFound {
+                entity: "prompt_mode",
+                id: mid.to_string(),
+            })?;
+        if let Some(override_id) = mode.provider_override.as_deref().filter(|s| !s.is_empty()) {
+            return state.connections.get_row(override_id).await;
+        }
+    }
+    state
+        .connections
+        .get_default_row()
+        .await?
+        .ok_or_else(|| AppError::Validation("no default connection configured".into()))
 }
 
 /// Read files dropped onto the chat window from OS paths (Tauri drag-drop).

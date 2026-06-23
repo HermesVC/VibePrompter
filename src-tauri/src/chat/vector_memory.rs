@@ -36,6 +36,7 @@ pub enum MemoryKind {
     RepoFact,
     Code,
     UserPreference,
+    ContextArtifact,
     General,
 }
 
@@ -48,6 +49,7 @@ impl MemoryKind {
             Self::RepoFact => "repo",
             Self::Code => "code",
             Self::UserPreference => "preference",
+            Self::ContextArtifact => "context-file",
             Self::General => "note",
         }
     }
@@ -60,6 +62,7 @@ impl MemoryKind {
             Self::RepoFact => 0.06,
             Self::Code => 0.04,
             Self::UserPreference => 0.04,
+            Self::ContextArtifact => 0.11,
             Self::General => 0.0,
         }
     }
@@ -118,6 +121,66 @@ pub async fn index_evicted_messages(
                     indexed_hashes.insert(hash.clone());
                 }
                 Err(e) => tracing::warn!("vector memory insert: {e}"),
+            }
+        }
+        if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
+            tracing::warn!("vector memory prune: {e}");
+        }
+    }
+}
+
+/// Index contextual file artifacts (plans, markdown notes, etc.) into session memory.
+pub async fn index_context_artifacts(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    artifacts: &[(String, String)],
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() || artifacts.is_empty() {
+        return;
+    }
+
+    let pending: Vec<(String, String, String)> = artifacts
+        .iter()
+        .filter_map(|(path, content)| {
+            let path = path.trim();
+            let content = content.trim();
+            if path.is_empty() || content.is_empty() || !is_context_artifact_path(path) {
+                return None;
+            }
+            let text = format_context_artifact_memory(path, content);
+            let hash = chunk_content_hash("artifact", &format!("{path}\0{text}"));
+            if indexed_hashes.contains(&hash) {
+                return None;
+            }
+            Some(("artifact".into(), text, hash))
+        })
+        .collect();
+
+    if pending.is_empty() {
+        return;
+    }
+
+    for batch in pending.chunks(INDEX_BATCH) {
+        let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
+        let embeddings = match providers::embed_texts(conn, cfg, &texts, None).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("context artifact memory skipped: {e}");
+                return;
+            }
+        };
+        for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
+            match memory
+                .insert_chunk(session_id, role, text, hash, &vec)
+                .await
+            {
+                Ok(()) => {
+                    indexed_hashes.insert(hash.clone());
+                }
+                Err(e) => tracing::warn!("context artifact memory insert: {e}"),
             }
         }
         if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
@@ -290,6 +353,9 @@ fn messages_to_chunks(messages: &[ChatMessage]) -> Vec<(String, String)> {
 }
 
 fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
+    if role == "artifact" {
+        return Some(MemoryKind::ContextArtifact);
+    }
     let cleaned = compact_whitespace(text);
     let lower = cleaned.to_lowercase();
     if let Some(kind) = explicit_memory_marker(&lower) {
@@ -461,6 +527,21 @@ fn explicit_memory_marker(lower: &str) -> Option<MemoryKind> {
     if starts_with_any(
         marker,
         &[
+            "context-file:",
+            "context-file ",
+            "context artifact",
+            "context artifact:",
+            "контекстный файл:",
+            "контекстный файл ",
+            "файл контекста:",
+            "файл контекста ",
+        ],
+    ) {
+        return Some(MemoryKind::ContextArtifact);
+    }
+    if starts_with_any(
+        marker,
+        &[
             "code:", "code ", "api:", "api ", "impl:", "impl ", "код:", "код ", "апи:", "апи ",
         ],
     ) {
@@ -581,6 +662,49 @@ fn chunk_content_hash(role: &str, text: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn is_context_artifact_path(path: &str) -> bool {
+    let norm = path.replace('\\', "/").trim().trim_start_matches("./").to_string();
+    let lower = norm.to_ascii_lowercase();
+    let base = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    let stem = base
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(base);
+    if let Some((_, ext)) = base.rsplit_once('.') {
+        if matches!(ext, "md" | "mdx" | "markdown" | "txt" | "rst" | "adoc") {
+            return true;
+        }
+    }
+    const MARKERS: &[&str] = &[
+        "plan",
+        "notes",
+        "note",
+        "context",
+        "readme",
+        "changelog",
+        "design",
+        "spec",
+        "architecture",
+        "todo",
+        "adr",
+        "rag",
+        "memory",
+        "summary",
+        "decision",
+        "decisions",
+    ];
+    MARKERS
+        .iter()
+        .any(|m| stem.contains(m) || lower.contains(m))
+}
+
+fn format_context_artifact_memory(path: &str, content: &str) -> String {
+    let excerpt = compact_excerpt(content, 600);
+    format!(
+        "context-file: {path}\nImportant session context is stored in this file at `{path}`.\nSummary: {excerpt}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +785,23 @@ mod tests {
     fn explicit_bug_marker_forces_bug_memory() {
         let kind = classify_memory("user", "BUG: semantic memory block is too large");
         assert_eq!(kind, Some(MemoryKind::Bug));
+    }
+
+    #[test]
+    fn classifies_context_artifact_role() {
+        let kind = classify_memory(
+            "artifact",
+            "context-file: docs/PLAN.md\nImportant session context",
+        );
+        assert_eq!(kind, Some(MemoryKind::ContextArtifact));
+    }
+
+    #[test]
+    fn context_artifact_path_detection() {
+        assert!(is_context_artifact_path("docs/plan.md"));
+        assert!(is_context_artifact_path("RAG.md"));
+        assert!(is_context_artifact_path("notes/context.txt"));
+        assert!(!is_context_artifact_path("src/index.js"));
     }
 
     #[test]

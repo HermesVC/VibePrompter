@@ -16,8 +16,8 @@ pub use sliding_window::{
     plan_sliding_window_with_aggression, WindowAggression,
 };
 pub use vector_memory::{
-    append_retrieved_to_system, format_retrieved_for_system, index_evicted_messages,
-    retrieve_relevant,
+    append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
+    index_evicted_messages, retrieve_relevant,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

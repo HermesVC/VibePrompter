@@ -129,6 +129,43 @@ export function resolveGeneratedApplyPath(filePath: string, scope: ChatScope): s
   return path;
 }
 
+const CONTEXT_ARTIFACT_EXTENSIONS = new Set([
+  'md',
+  'mdx',
+  'markdown',
+  'txt',
+  'rst',
+  'adoc',
+]);
+
+const CONTEXT_ARTIFACT_NAME_RE =
+  /(plan|notes?|context|readme|changelog|design|spec|architecture|todo|adr|rag|memory|summary|decision)/i;
+
+/** Markdown / plan-style generated files that carry session context. */
+export function isContextArtifactPath(path: string): boolean {
+  const norm = normalizeGeneratedPath(path);
+  const base = norm.split('/').pop() ?? norm;
+  const dot = base.lastIndexOf('.');
+  const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
+  const stem = dot >= 0 ? base.slice(0, dot) : base;
+  if (CONTEXT_ARTIFACT_EXTENSIONS.has(ext)) return true;
+  if (CONTEXT_ARTIFACT_NAME_RE.test(stem)) return true;
+  if (CONTEXT_ARTIFACT_NAME_RE.test(norm)) return true;
+  return false;
+}
+
+export function extractContextArtifacts(
+  text: string,
+  scope: ChatScope
+): Array<{ path: string; content: string }> {
+  return parseGeneratedFileBlocks(text)
+    .filter((f) => f.complete && f.content.trim() && isContextArtifactPath(f.path))
+    .map((f) => ({
+      path: resolveGeneratedApplyPath(f.path, scope),
+      content: f.content.trim(),
+    }));
+}
+
 function dedupeGeneratedFiles(blocks: GeneratedFileBlock[]): GeneratedFileBlock[] {
   const byPath = new Map<string, GeneratedFileBlock>();
   for (const block of blocks) {
