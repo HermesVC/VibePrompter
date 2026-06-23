@@ -30,6 +30,7 @@ pub async fn chat_complete_stream(
     messages: Vec<ChatMessage>,
     mode_id: Option<String>,
     connection_id: Option<String>,
+    chat_context: Option<crate::workspace::ChatContextPayload>,
 ) -> Result<CompletionResult, AppError> {
     if messages.is_empty() {
         return Err(AppError::Validation("messages is empty".into()));
@@ -44,7 +45,7 @@ pub async fn chat_complete_stream(
         return Err(AppError::Validation("last user message is empty".into()));
     }
 
-    let (system_prompt, mode_name, mode_icon, temperature, max_tokens) =
+    let (mut system_prompt, mode_name, mode_icon, temperature, max_tokens) =
         if let Some(mid) = mode_id.as_deref().filter(|s| !s.trim().is_empty()) {
             let modes = state.catalog.list_modes().await?;
             let mode = modes
@@ -68,6 +69,11 @@ pub async fn chat_complete_stream(
         } else {
             (None, "Chat".to_string(), "mail".to_string(), 0.7, 4096_i64)
         };
+
+    if let Some(ctx) = chat_context.as_ref() {
+        let base = system_prompt.unwrap_or_default();
+        system_prompt = Some(state.workspace.compose_system(&base, ctx));
+    }
 
     let resolved = connection_id.clone();
     let row = match resolved.as_deref().filter(|s| !s.is_empty()) {
@@ -149,6 +155,16 @@ pub async fn chat_complete_stream(
     match result {
         Ok(mut r) => {
             state.connections.enrich_completion_context(&row, &mut r).await;
+            if let Some(ctx) = chat_context.as_ref() {
+                use crate::workspace::ChatScope;
+                r.scoped_text = match &ctx.scope {
+                    ChatScope::Snippet { .. } => {
+                        Some(state.workspace.extract_snippet(&r.text))
+                    }
+                    ChatScope::File { .. } => Some(r.text.trim().to_string()),
+                    _ => None,
+                };
+            }
             if was_cancelled {
                 let _ = app.emit(&err_event, "cancelled");
             } else {
@@ -282,6 +298,9 @@ fn is_text_ext(ext: &str) -> bool {
             | "js"
             | "jsx"
             | "py"
+            | "php"
+            | "phtml"
+            | "inc"
             | "rs"
             | "html"
             | "css"

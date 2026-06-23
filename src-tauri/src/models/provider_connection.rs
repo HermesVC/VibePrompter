@@ -156,4 +156,7 @@ pub struct CompletionResult {
     /// providers that don't expose a limit (most cloud APIs).
     #[serde(rename = "contextWindowSize", default, skip_serializing_if = "Option::is_none")]
     pub context_window_size: Option<i64>,
+    /// Extracted snippet/file body when a scoped chat session is active.
+    #[serde(rename = "scopedText", default, skip_serializing_if = "Option::is_none")]
+    pub scoped_text: Option<String>,
 }

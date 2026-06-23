@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::events::{AppEvent, EventBus};
 use crate::services::{
     AnalyticsService, CatalogService, ConnectionService, HistoryService, PromptService,
-    SettingsService, ShortcutService,
+    SettingsService, ShortcutService, WorkspaceService,
 };
 use crate::storage::repositories::{
     AnalyticsRepo, ConnectionRepo, HistoryRepo, ModeRepo, ProviderRepo, SettingsRepo,
@@ -63,6 +63,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         tracing::warn!("keyring migration failed (non-fatal): {e}");
     }
     let analytics = AnalyticsService::new(AnalyticsRepo::new(pool.clone()));
+    let workspace = WorkspaceService::new(SettingsRepo::new(pool.clone()));
     let prompts = PromptService::new(catalog.clone(), connections.clone(), history.clone())
         .with_analytics(analytics.clone());
 
@@ -141,6 +142,7 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         connections,
         prompts,
         analytics: analytics.clone(),
+        workspace,
         keyring_available,
     });
     // Audit-trail event: app finished initializing. Single event_type per

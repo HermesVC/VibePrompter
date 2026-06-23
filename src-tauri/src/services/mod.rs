@@ -9,6 +9,7 @@ pub mod pricing;
 pub mod prompt_template;
 pub mod settings_service;
 pub mod shortcut_service;
+pub mod workspace_service;
 
 pub use analytics_service::AnalyticsService;
 pub use catalog_service::CatalogService;
@@ -17,3 +18,4 @@ pub use history_service::HistoryService;
 pub use prompt_service::PromptService;
 pub use settings_service::SettingsService;
 pub use shortcut_service::ShortcutService;
+pub use workspace_service::WorkspaceService;

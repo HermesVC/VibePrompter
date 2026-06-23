@@ -327,6 +327,7 @@ pub async fn complete(
         latency_ms: started.elapsed().as_millis() as u64,
         usage,
         context_window_size: None,
+        scoped_text: None,
     })
 }
 
@@ -604,6 +605,7 @@ where
                 latency_ms: started.elapsed().as_millis() as u64,
                 usage,
                 context_window_size: None,
+                scoped_text: None,
             });
         }
         let event = match event {
@@ -688,6 +690,7 @@ where
         latency_ms: started.elapsed().as_millis() as u64,
         usage,
         context_window_size: None,
+        scoped_text: None,
     })
 }
 

@@ -152,7 +152,7 @@ mod tests {
             sqlx::query_as("SELECT COUNT(*) FROM settings").fetch_one(&pool).await.unwrap();
         assert_eq!(providers, 4);
         // 6 original seeded modes + 2 system modes (grammar, summarize).
-        assert_eq!(modes, 8);
+        assert_eq!(modes, 10);
         assert_eq!(shortcuts, 5);
         // The consolidated migration only seeds keys that back real
         // behavior — auto_paste, clipboard_fallback, low_memory_mode, and

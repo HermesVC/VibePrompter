@@ -24,6 +24,7 @@ mod providers;
 mod security;
 mod shortcuts;
 mod tray;
+mod workspace;
 
 use config::Config;
 
@@ -163,7 +164,21 @@ pub fn run() {
             commands::chat_toggle,
             commands::chat_hide,
             commands::chat_complete_stream,
+            commands::write_clipboard_text,
+            commands::read_clipboard_text,
             commands::read_chat_attachment_paths,
+            commands::get_workspace_settings,
+            commands::save_workspace_settings,
+            commands::list_chat_modifiers,
+            commands::read_workspace_file,
+            commands::list_workspace_dir,
+            commands::workspace_tree_summary,
+            commands::pick_workspace_root,
+            commands::pick_workspace_file,
+            commands::preview_workspace_write,
+            commands::apply_workspace_write,
+            commands::resolve_workspace_file_path,
+            commands::compose_chat_context_prompt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

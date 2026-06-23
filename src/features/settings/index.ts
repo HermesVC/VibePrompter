@@ -7,4 +7,5 @@ export { HistoryPanel } from './ui/panels/HistoryPanel';
 export { AppearancePanel } from './ui/panels/AppearancePanel';
 export { AdvancedPanel } from './ui/panels/AdvancedPanel';
 export { AboutPanel } from './ui/panels/AboutPanel';
+export { WorkspacePanel } from './ui/panels/WorkspacePanel';
 export type { SettingsTabId } from './domain';

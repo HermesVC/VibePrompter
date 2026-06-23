@@ -7,6 +7,7 @@ export type SettingsTabId =
   | 'providers'
   | 'history'
   | 'appearance'
+  | 'workspace'
   | 'advanced'
   | 'about';
 

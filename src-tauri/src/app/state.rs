@@ -5,7 +5,7 @@
 use crate::config::Config;
 use crate::services::{
     AnalyticsService, CatalogService, ConnectionService, HistoryService, PromptService,
-    SettingsService, ShortcutService,
+    SettingsService, ShortcutService, WorkspaceService,
 };
 
 #[derive(Clone)]
@@ -18,6 +18,7 @@ pub struct AppState {
     pub connections: ConnectionService,
     pub prompts: PromptService,
     pub analytics: AnalyticsService,
+    pub workspace: WorkspaceService,
     /// Captured once at startup — avoids re-probing Credential Manager on
     /// every health check, which is slow and produces spurious failures.
     pub keyring_available: bool,

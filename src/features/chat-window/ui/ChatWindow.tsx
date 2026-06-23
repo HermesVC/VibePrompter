@@ -23,8 +23,23 @@ import {
   MAX_CHAT_IMAGES,
   type ChatImageAttachment,
 } from '@shared/lib/chatAttachments';
+import { writeClipboardText } from '@shared/lib/clipboard';
+import {
+  buildChatContextPayload,
+  DEFAULT_CHAT_CONTEXT,
+  type ChatContextState,
+} from '@shared/lib/chatContext';
+import {
+  applyWorkspaceWrite,
+  getWorkspaceSettings,
+  previewWorkspaceWrite,
+  saveWorkspaceSettings,
+  type PolicyDecision,
+} from '@shared/lib/workspaceApi';
 import { useChatNativeFileDrop } from '../hooks/useChatNativeFileDrop';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { ChatContextBar } from './ChatContextBar';
+import { ApplyConfirmDialog } from './ApplyConfirmDialog';
 
 interface ChatImage extends ChatImageAttachment {}
 
@@ -44,6 +59,7 @@ interface DonePayload {
   latencyMs: number;
   usage?: TokenUsage;
   contextWindowSize?: number;
+  scopedText?: string;
 }
 
 /** Persists the chat window's mode choice — independent of tray/global active mode. */
@@ -83,6 +99,17 @@ export function ChatWindow() {
   const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [chatContext, setChatContext] = useState<ChatContextState>(DEFAULT_CHAT_CONTEXT);
+  const [applyDialog, setApplyDialog] = useState<{
+    title: string;
+    path?: string;
+    before: string;
+    after: string;
+    decision: PolicyDecision;
+    onConfirm: () => Promise<void>;
+  } | null>(null);
+  const chatContextRef = useRef(chatContext);
+  chatContextRef.current = chatContext;
 
   const voice = useVoiceInput({
     value: draft,
@@ -237,6 +264,75 @@ export function ChatWindow() {
     invoke('cancel_stream', { streamId }).catch(() => {});
   }, [streamId]);
 
+  const processScopedCompletion = useCallback((payload: { scopedText?: string; text: string }) => {
+    const scoped = (payload.scopedText ?? payload.text).trim();
+    if (!scoped) return;
+    setChatContext((prev) => {
+      if (prev.scope.kind === 'snippet') {
+        return { ...prev, scope: { ...prev.scope, working: scoped } };
+      }
+      return prev;
+    });
+  }, []);
+
+  const promptApplyScoped = useCallback(async (assistantText: string) => {
+    const scope = chatContextRef.current.scope;
+    const content = assistantText.trim();
+    if (!content) return;
+
+    if (scope.kind === 'snippet') {
+      setApplyDialog({
+        title: 'Apply snippet',
+        before: scope.working,
+        after: content,
+        decision: 'ask',
+        onConfirm: async () => {
+          await writeClipboardText(content);
+          setChatContext((prev) =>
+            prev.scope.kind === 'snippet'
+              ? { ...prev, scope: { ...prev.scope, working: content } }
+              : prev
+          );
+        },
+      });
+      return;
+    }
+
+    if (scope.kind !== 'file') return;
+
+    try {
+      const preview = await previewWorkspaceWrite(scope.path, content, scope.contentHash);
+      const settings = await getWorkspaceSettings();
+      const autoApply =
+        preview.decision === 'allow' && settings.applyPolicy === 'always_apply';
+
+      const doWrite = async () => {
+        const result = await applyWorkspaceWrite(scope.path, content, scope.contentHash, true);
+        setChatContext((prev) =>
+          prev.scope.kind === 'file'
+            ? { ...prev, scope: { ...prev.scope, content, contentHash: result.contentHash } }
+            : prev
+        );
+      };
+
+      if (autoApply) {
+        await doWrite();
+        return;
+      }
+
+      setApplyDialog({
+        title: 'Apply to file',
+        path: scope.path,
+        before: scope.content,
+        after: content,
+        decision: preview.decision,
+        onConfirm: doWrite,
+      });
+    } catch (e) {
+      setAttachError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if ((!text && pendingImages.length === 0) || streaming) return;
@@ -313,6 +409,7 @@ export function ChatWindow() {
               )
             );
           }
+          processScopedCompletion(e.payload);
         }),
         listen<string>(errEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
@@ -338,6 +435,7 @@ export function ChatWindow() {
         messages: apiMessages,
         modeId: modeId ?? undefined,
         connectionId: connectionId || undefined,
+        chatContext: buildChatContextPayload(chatContextRef.current),
       });
 
       // Authoritative completion payload — the event listener can race with
@@ -365,6 +463,7 @@ export function ChatWindow() {
           )
         );
       }
+      processScopedCompletion(result);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages((prev) =>
@@ -387,6 +486,7 @@ export function ChatWindow() {
     connectionId,
     scheduleFlush,
     voice,
+    processScopedCompletion,
   ]);
 
   const applyIngestResult = useCallback(
@@ -479,6 +579,7 @@ export function ChatWindow() {
     setPendingImages([]);
     setAttachError(null);
     setTokenUsage(null);
+    setChatContext(DEFAULT_CHAT_CONTEXT);
   };
 
   const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
@@ -689,6 +790,13 @@ export function ChatWindow() {
           </button>
         </div>
 
+        <ChatContextBar
+          ctx={chatContext}
+          disabled={streaming}
+          onChange={setChatContext}
+          onError={setAttachError}
+        />
+
         {/* Messages */}
         <div
           ref={listRef}
@@ -748,7 +856,16 @@ export function ChatWindow() {
             </div>
           )}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble
+              key={m.id}
+              message={m}
+              scopeKind={chatContext.scope.kind}
+              onApply={
+                m.role === 'assistant' && !m.streaming && !m.error && m.content
+                  ? () => void promptApplyScoped(m.content)
+                  : undefined
+              }
+            />
           ))}
         </div>
 
@@ -937,11 +1054,41 @@ export function ChatWindow() {
           )}
         </div>
       </div>
+      <ApplyConfirmDialog
+        open={applyDialog !== null}
+        title={applyDialog?.title ?? ''}
+        path={applyDialog?.path}
+        before={applyDialog?.before ?? ''}
+        after={applyDialog?.after ?? ''}
+        decision={applyDialog?.decision ?? 'ask'}
+        onCancel={() => setApplyDialog(null)}
+        onConfirm={async (remember) => {
+          if (!applyDialog) return;
+          await applyDialog.onConfirm();
+          if (remember && applyDialog.path) {
+            const s = await getWorkspaceSettings();
+            if (!s.allowPaths.includes(applyDialog.path)) {
+              await saveWorkspaceSettings({
+                ...s,
+                allowPaths: [...s.allowPaths, applyDialog.path],
+              });
+            }
+          }
+        }}
+      />
     </div>
   );
 }
 
-function MessageBubble({ message: m }: { message: ChatMessage }) {
+function MessageBubble({
+  message: m,
+  scopeKind,
+  onApply,
+}: {
+  message: ChatMessage;
+  scopeKind?: string;
+  onApply?: () => void;
+}) {
   const isUser = m.role === 'user';
   return (
     <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
@@ -997,6 +1144,24 @@ function MessageBubble({ message: m }: { message: ChatMessage }) {
           <div style={{ marginTop: 6, fontSize: 10, color: 'var(--fg-dim)' }}>
             {m.meta.model} · {m.meta.latencyMs}ms
           </div>
+        )}
+        {onApply && (scopeKind === 'snippet' || scopeKind === 'file') && !m.streaming && (
+          <button
+            type="button"
+            onClick={onApply}
+            style={{
+              marginTop: 8,
+              fontSize: 10.5,
+              padding: '4px 8px',
+              borderRadius: 6,
+              border: '.5px solid var(--border-strong)',
+              background: 'var(--surface)',
+              color: 'var(--accent)',
+              cursor: 'pointer',
+            }}
+          >
+            {scopeKind === 'file' ? 'Apply to file…' : 'Apply snippet…'}
+          </button>
         )}
       </div>
     </div>

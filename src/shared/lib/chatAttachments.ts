@@ -14,7 +14,7 @@ export interface IngestChatFilesResult {
   error: string | null;
 }
 
-const TEXT_FILE_RE = /\.(txt|md|markdown|json|csv|xml|yaml|yml|log|ts|tsx|js|jsx|py|rs|html|css|toml|ini|env)$/i;
+const TEXT_FILE_RE = /\.(txt|md|markdown|json|csv|xml|yaml|yml|log|ts|tsx|js|jsx|py|php|phtml|inc|rs|html|css|toml|ini|env)$/i;
 
 function isTextFile(file: File): boolean {
   if (file.type.startsWith('text/')) return true;

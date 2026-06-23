@@ -16,6 +16,7 @@ const TABS: SettingsTab[] = [
   { id: 'providers', label: 'Providers', iconName: 'cloud' },
   { id: 'history', label: 'History', iconName: 'history' },
   { id: 'appearance', label: 'Appearance', iconName: 'paint' },
+  { id: 'workspace', label: 'Workspace', iconName: 'code' },
   { id: 'advanced', label: 'Advanced', iconName: 'cpu' },
   { id: 'about', label: 'About', iconName: 'info' },
 ];

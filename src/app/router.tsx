@@ -45,6 +45,9 @@ const AppearancePanel = lazy(() =>
 const AdvancedPanel = lazy(() =>
   import('@features/settings').then((m) => ({ default: m.AdvancedPanel }))
 );
+const WorkspacePanel = lazy(() =>
+  import('@features/settings').then((m) => ({ default: m.WorkspacePanel }))
+);
 const AboutPanel = lazy(() =>
   import('@features/settings').then((m) => ({ default: m.AboutPanel }))
 );
@@ -169,6 +172,7 @@ export function AppRouter() {
           <Route path="providers" element={<ProvidersPanel />} />
           <Route path="history" element={<HistoryPanel />} />
           <Route path="appearance" element={<AppearancePanel />} />
+          <Route path="workspace" element={<WorkspacePanel />} />
           <Route path="advanced" element={<AdvancedPanel />} />
           <Route path="about" element={<AboutPanel />} />
         </Route>
