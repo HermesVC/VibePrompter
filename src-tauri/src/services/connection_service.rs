@@ -181,6 +181,7 @@ impl ConnectionService {
             tags: input.tags.clone(),
             price_input_per_m: input.price_input_per_m,
             price_output_per_m: input.price_output_per_m,
+            context_window_size: input.context_window_size,
         };
 
         if row.is_default {
@@ -216,6 +217,7 @@ impl ConnectionService {
                     "tags": r.tags,
                     "priceInputPerM": r.price_input_per_m,
                     "priceOutputPerM": r.price_output_per_m,
+                    "contextWindowSize": r.context_window_size,
                 })
             })
             .collect();
@@ -310,6 +312,10 @@ impl ConnectionService {
                     .get("priceOutputPerM")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0),
+                context_window_size: item
+                    .get("contextWindowSize")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
             };
 
             if ConnectionKind::from_db(&row.kind).is_none() || row.base_url.is_empty() {
@@ -395,6 +401,7 @@ impl ConnectionService {
             // valid fields, so default to 0 (= fall back to embedded table).
             price_input_per_m: 0.0,
             price_output_per_m: 0.0,
+            context_window_size: input.context_window_size,
         };
         let cfg = self.http_config().await;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
@@ -538,6 +545,7 @@ fn redact(row: ConnectionRow) -> ConnectionInfo {
         tags: row.tags,
         price_input_per_m: row.price_input_per_m,
         price_output_per_m: row.price_output_per_m,
+        context_window_size: row.context_window_size,
     }
 }
 

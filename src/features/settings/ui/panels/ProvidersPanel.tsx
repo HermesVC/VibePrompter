@@ -63,6 +63,7 @@ export function ProvidersPanel() {
       kind: p.kind,
       baseUrl: p.baseUrl,
       defaultModel: draft.defaultModel || p.model,
+      contextWindowSize: draft.contextWindowSize || p.contextWindow,
     });
     setModels([]);
   };
@@ -259,6 +260,7 @@ export function ProvidersPanel() {
       tags: c.tags ?? '',
       priceInputPerM: c.priceInputPerM ?? 0,
       priceOutputPerM: c.priceOutputPerM ?? 0,
+      contextWindowSize: c.contextWindowSize ?? 0,
     });
     setModels([]);
     setKeyVisible(false);
@@ -271,7 +273,8 @@ export function ProvidersPanel() {
         c.extraHeaders?.trim() ||
           c.notes?.trim() ||
           (c.priceInputPerM ?? 0) > 0 ||
-          (c.priceOutputPerM ?? 0) > 0
+          (c.priceOutputPerM ?? 0) > 0 ||
+          (c.contextWindowSize ?? 0) > 0
       )
     );
   };

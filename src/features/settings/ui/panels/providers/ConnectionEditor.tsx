@@ -275,6 +275,27 @@ export function ConnectionEditor({
         </div>
       </Field>
 
+      <Field label="Context window (tokens)">
+        <PhInput
+          mono
+          type="number"
+          value={String(draft.contextWindowSize || '')}
+          onChange={(v) => {
+            const n = Number(v);
+            setDraft({
+              ...draft,
+              contextWindowSize:
+                v.trim() === '' || !Number.isFinite(n) || n < 0 ? 0 : Math.floor(n),
+            });
+          }}
+          placeholder="128000"
+        />
+        <span className="text-[11px] text-fg-dim mt-1">
+          Max context for this model (e.g. 128000, 200000). Used for the context
+          usage ring in chat and refine. Leave empty or 0 to hide the indicator.
+        </span>
+      </Field>
+
       <Field label="Tags (optional)">
         <PhInput
           value={draft.tags}

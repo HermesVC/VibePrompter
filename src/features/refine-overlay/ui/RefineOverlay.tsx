@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { I, type IconName } from '@shared/ui';
+import { I, ContextUsageRing, type IconName } from '@shared/ui';
+import {
+  effectiveContextLimit,
+  estimateTokensFromChars,
+  isContextLimitInferred,
+  normalizeTokenUsage,
+  resolveActiveConnection,
+  resolveContextUsed,
+  type TokenUsage,
+} from '@shared/lib/contextUsage';
 
 /**
  * The near-cursor refine overlay. Lives in its own `refine-overlay` Tauri
@@ -26,12 +35,14 @@ interface ResetPayload {
   modeId: string;
   modeName: string;
   iconName?: string | null;
+  connectionId?: string;
 }
 
 interface DonePayload {
   text: string;
   model: string;
   latencyMs: number;
+  usage?: TokenUsage;
 }
 
 export function RefineOverlay() {
@@ -41,9 +52,19 @@ export function RefineOverlay() {
   const [error, setError] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [conns, setConns] = useState<
-    Array<{ id: string; label: string; defaultModel: string; hasKey: boolean; isDefault: boolean }>
+    Array<{
+      id: string;
+      label: string;
+      defaultModel: string;
+      hasKey: boolean;
+      isDefault: boolean;
+      contextWindowSize: number;
+      baseUrl: string;
+    }>
   >([]);
   const [activeConnId, setActiveConnId] = useState<string>('');
+  const [sessionConnectionId, setSessionConnectionId] = useState('');
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const bufRef = useRef('');
   const flushPendingRef = useRef(false);
   // Set true while we're in the Accept handoff so the blur-to-dismiss
@@ -128,7 +149,9 @@ export function RefineOverlay() {
         bufRef.current = '';
         setDone(null);
         setError(null);
+        setTokenUsage(null);
         setActiveConnId(''); // new session — picker shows "Default / pinned"
+        setSessionConnectionId(e.payload.connectionId ?? '');
         // A previous session may have left `accepting` true (e.g. after a
         // copy-and-hide). Without resetting here, the blur-to-reject
         // listener would silently no-op on click-away, breaking the
@@ -149,6 +172,7 @@ export function RefineOverlay() {
         bufRef.current = '';
         setDone(null);
         setError(null);
+        setTokenUsage(null);
       }),
       listen<string>('refine:token', (e) => {
         bufRef.current += e.payload;
@@ -158,6 +182,10 @@ export function RefineOverlay() {
         setDone(e.payload);
         setText(e.payload.text);
         bufRef.current = e.payload.text;
+        if (e.payload.usage) {
+          const usage = normalizeTokenUsage(e.payload.usage);
+          if (usage) setTokenUsage(usage);
+        }
       }),
       listen<string>('refine:error', (e) => {
         setError(e.payload);
@@ -271,6 +299,20 @@ export function RefineOverlay() {
     ? `${done.model} · ${done.latencyMs}ms`
     : 'Ready';
 
+  const effectiveConnectionId = activeConnId || sessionConnectionId;
+  const activeConn = useMemo(
+    () => resolveActiveConnection(conns, effectiveConnectionId),
+    [conns, effectiveConnectionId]
+  );
+  const contextLimit = effectiveContextLimit(activeConn);
+  const contextLimitInferred = isContextLimitInferred(activeConn);
+  const contextEstimate = useMemo(
+    () => estimateTokensFromChars((meta?.selection ?? '').length),
+    [meta?.selection]
+  );
+  const contextUsed = resolveContextUsed(tokenUsage, contextEstimate);
+  const contextEstimated = !(tokenUsage && tokenUsage.inputTokens > 0);
+
   return (
     <div
       className="ph-root"
@@ -354,6 +396,14 @@ export function RefineOverlay() {
               </div>
             </div>
           </div>
+          <ContextUsageRing
+            usedTokens={contextUsed}
+            contextWindowSize={contextLimit}
+            usage={tokenUsage}
+            estimated={contextEstimated}
+            limitInferred={contextLimitInferred}
+            streaming={streaming}
+          />
           {conns.filter((c) => c.hasKey).length > 1 && (
             <select
               value={activeConnId}

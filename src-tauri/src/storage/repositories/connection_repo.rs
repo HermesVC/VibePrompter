@@ -39,6 +39,63 @@ pub struct ConnectionRow {
     /// USD per million output tokens. Same fallback semantics as
     /// `price_input_per_m`.
     pub price_output_per_m: f64,
+    /// Model context window in tokens. `0` = unset (hide usage ring).
+    pub context_window_size: i64,
+}
+
+type RowTuple = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    bool,
+    String,
+    String,
+    String,
+    String,
+    f64,
+    f64,
+    i64,
+);
+
+const SELECT_COLS: &str = "id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m, context_window_size";
+
+fn row_from_tuple(
+    (
+        id,
+        label,
+        kind,
+        base_url,
+        api_key,
+        default_model,
+        is_default,
+        extra_headers,
+        last_used_at,
+        notes,
+        tags,
+        price_input_per_m,
+        price_output_per_m,
+        context_window_size,
+    ): RowTuple,
+) -> ConnectionRow {
+    ConnectionRow {
+        id,
+        label,
+        kind,
+        base_url,
+        api_key,
+        default_model,
+        is_default,
+        extra_headers,
+        last_used_at,
+        notes,
+        tags,
+        price_input_per_m,
+        price_output_per_m,
+        context_window_size,
+    }
 }
 
 #[derive(Clone)]
@@ -52,59 +109,28 @@ impl ConnectionRepo {
     }
 
     pub async fn list(&self) -> AppResult<Vec<ConnectionRow>> {
-        let rows: Vec<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
-            sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
-                 FROM provider_connections
-                 ORDER BY is_default DESC, last_used_at DESC, created_at ASC",
-            )
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| ConnectionRow {
-                id,
-                label,
-                kind,
-                base_url,
-                api_key,
-                default_model,
-                is_default,
-                extra_headers,
-                last_used_at,
-                notes,
-                tags,
-                price_input_per_m,
-                price_output_per_m,
-            })
-            .collect())
+        let rows: Vec<RowTuple> = sqlx::query_as(&format!(
+            "SELECT {SELECT_COLS}
+             FROM provider_connections
+             ORDER BY is_default DESC, last_used_at DESC, created_at ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_from_tuple).collect())
     }
 
     pub async fn get(&self, id: &str) -> AppResult<ConnectionRow> {
-        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
-            sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
-                 FROM provider_connections WHERE id = ?1",
-            )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| ConnectionRow {
-            id,
-            label,
-            kind,
-            base_url,
-            api_key,
-            default_model,
-            is_default,
-            extra_headers,
-            last_used_at,
-            notes,
-            tags,
-            price_input_per_m,
-            price_output_per_m,
-        })
-        .ok_or_else(|| AppError::NotFound { entity: "provider_connection", id: id.to_string() })
+        let row: Option<RowTuple> = sqlx::query_as(&format!(
+            "SELECT {SELECT_COLS} FROM provider_connections WHERE id = ?1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_from_tuple)
+            .ok_or_else(|| AppError::NotFound {
+                entity: "provider_connection",
+                id: id.to_string(),
+            })
     }
 
     pub async fn upsert(&self, row: &ConnectionRow) -> AppResult<()> {
@@ -148,30 +174,13 @@ impl ConnectionRepo {
     }
 
     pub async fn get_default(&self) -> AppResult<Option<ConnectionRow>> {
-        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
-            sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
-                 FROM provider_connections WHERE is_default = 1 LIMIT 1",
-            )
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| {
-            ConnectionRow {
-                id,
-                label,
-                kind,
-                base_url,
-                api_key,
-                default_model,
-                is_default,
-                extra_headers,
-                last_used_at,
-                notes,
-                tags,
-                price_input_per_m,
-                price_output_per_m,
-            }
-        }))
+        let row: Option<RowTuple> = sqlx::query_as(&format!(
+            "SELECT {SELECT_COLS}
+             FROM provider_connections WHERE is_default = 1 LIMIT 1"
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_from_tuple))
     }
 }
 
@@ -190,14 +199,15 @@ where
         "INSERT INTO provider_connections
            (id, label, kind, base_url, api_key, default_model, is_default,
             extra_headers, notes, tags, price_input_per_m, price_output_per_m,
-            created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+            context_window_size, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)
          ON CONFLICT(id) DO UPDATE SET
            label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
            default_model = ?6, is_default = ?7, extra_headers = ?8,
            notes = ?9, tags = ?10,
            price_input_per_m = ?11, price_output_per_m = ?12,
-           updated_at = ?13",
+           context_window_size = ?13,
+           updated_at = ?14",
     )
     .bind(&row.id)
     .bind(&row.label)
@@ -211,6 +221,7 @@ where
     .bind(&row.tags)
     .bind(row.price_input_per_m)
     .bind(row.price_output_per_m)
+    .bind(row.context_window_size)
     .bind(now)
     .execute(executor)
     .await?;

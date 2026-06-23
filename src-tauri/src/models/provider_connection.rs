@@ -59,6 +59,9 @@ pub struct ConnectionInfo {
     /// USD per million output tokens. 0 = fall back to embedded pricing table.
     #[serde(rename = "priceOutputPerM")]
     pub price_output_per_m: f64,
+    /// Model context window in tokens. 0 = unknown (hide usage ring).
+    #[serde(rename = "contextWindowSize")]
+    pub context_window_size: i64,
 }
 
 /// Write DTO from the frontend. `apiKey` is optional on update — when absent
@@ -89,6 +92,8 @@ pub struct ConnectionInput {
     pub price_input_per_m: f64,
     #[serde(default)]
     pub price_output_per_m: f64,
+    #[serde(default)]
+    pub context_window_size: i64,
 }
 
 /// Base64 image attached to a user turn (vision / multimodal follow-ups).

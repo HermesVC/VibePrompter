@@ -31,5 +31,6 @@ export {
 export { WindowTitlebar } from './WindowTitlebar';
 export { AppIcon } from './AppIcon';
 export { GlobalLoaderProvider, useGlobalLoader } from './GlobalLoader';
+export { ContextUsageRing } from './ContextUsageRing';
 
 

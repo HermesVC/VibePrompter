@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app::AppState;
-use crate::models::{ChatMessage, CompletionParams, NewHistoryItem};
+use crate::models::{ChatMessage, CompletionParams, CompletionResult, NewHistoryItem};
 use crate::utils::AppError;
 
 #[tauri::command]
@@ -30,7 +30,7 @@ pub async fn chat_complete_stream(
     messages: Vec<ChatMessage>,
     mode_id: Option<String>,
     connection_id: Option<String>,
-) -> Result<(), AppError> {
+) -> Result<CompletionResult, AppError> {
     if messages.is_empty() {
         return Err(AppError::Validation("messages is empty".into()));
     }
@@ -177,7 +177,7 @@ pub async fn chat_complete_stream(
                     parent_id: None,
                 })
                 .await;
-            Ok(())
+            Ok(r)
         }
         Err(e) => {
             let _ = app.emit(&err_event, e.to_string());

@@ -632,14 +632,9 @@ where
             on_token(delta);
         }
         // OpenAI final-usage chunk (sent when `stream_options.include_usage`
-        // is set). Lives alongside the deltas — capture either way.
+        // is set, or by OpenRouter in the last chunk). Lives alongside deltas.
         if let Some(u) = parsed.get("usage") {
-            if let Some(p) = u.get("prompt_tokens").and_then(|v| v.as_u64()) {
-                usage.input_tokens = p as u32;
-            }
-            if let Some(c) = u.get("completion_tokens").and_then(|v| v.as_u64()) {
-                usage.output_tokens = c as u32;
-            }
+            apply_openai_usage(u, &mut usage);
         }
 
         // Anthropic delta: content_block_delta.delta.text
@@ -711,6 +706,25 @@ pub async fn ping_with_result(
 }
 
 // ─────────────────────────────────────────────────────────── OpenAI-compatible
+
+fn apply_openai_usage(u: &serde_json::Value, usage: &mut TokenUsage) {
+    let prompt = u
+        .get("prompt_tokens")
+        .or_else(|| u.get("input_tokens"));
+    let completion = u
+        .get("completion_tokens")
+        .or_else(|| u.get("output_tokens"));
+    if let Some(p) = prompt.and_then(json_u64) {
+        usage.input_tokens = p as u32;
+    }
+    if let Some(c) = completion.and_then(json_u64) {
+        usage.output_tokens = c as u32;
+    }
+}
+
+fn json_u64(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+}
 
 #[derive(Debug, Deserialize)]
 struct OpenAiChoiceMessage {

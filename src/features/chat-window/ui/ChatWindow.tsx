@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { I, type IconName } from '@shared/ui';
+import { I, ContextUsageRing, type IconName } from '@shared/ui';
+import {
+  effectiveContextLimit,
+  estimateTokensFromChars,
+  isContextLimitInferred,
+  normalizeTokenUsage,
+  resolveActiveConnection,
+  resolveContextUsed,
+  type TokenUsage,
+} from '@shared/lib/contextUsage';
 
 interface ChatImage {
   mimeType: string;
@@ -24,6 +33,7 @@ interface DonePayload {
   text: string;
   model: string;
   latencyMs: number;
+  usage?: TokenUsage;
 }
 
 const MAX_IMAGES = 4;
@@ -51,9 +61,17 @@ export function ChatWindow() {
   const [streaming, setStreaming] = useState(false);
   const [streamId, setStreamId] = useState<string | null>(null);
   const [conns, setConns] = useState<
-    Array<{ id: string; label: string; hasKey: boolean; isDefault: boolean }>
+    Array<{
+      id: string;
+      label: string;
+      hasKey: boolean;
+      isDefault: boolean;
+      contextWindowSize: number;
+      baseUrl: string;
+    }>
   >([]);
   const [connectionId, setConnectionId] = useState('');
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [modes, setModes] = useState<ChatModeOption[]>([]);
   const [modeId, setModeId] = useState<string | null>(null);
 
@@ -130,16 +148,28 @@ export function ChatWindow() {
   }, []);
 
   useEffect(() => {
-    invoke<typeof conns>('list_connections').then(setConns).catch(() => setConns([]));
+    const loadConns = () => {
+      invoke<typeof conns>('list_connections').then(setConns).catch(() => setConns([]));
+    };
+    loadConns();
     loadModes();
-    let unlisten: (() => void) | null = null;
+    let unlistenModes: (() => void) | null = null;
+    let unlistenSettings: (() => void) | null = null;
     listen('modes_changed', () => loadModes()).then((u) => {
-      unlisten = u;
+      unlistenModes = u;
+    });
+    listen('settings_changed', () => loadConns()).then((u) => {
+      unlistenSettings = u;
     });
     return () => {
-      unlisten?.();
+      unlistenModes?.();
+      unlistenSettings?.();
     };
   }, [loadModes]);
+
+  useEffect(() => {
+    setTokenUsage(null);
+  }, [connectionId]);
 
   // On first load, apply the pinned connection from the restored local mode.
   useEffect(() => {
@@ -254,6 +284,8 @@ export function ChatWindow() {
                 : m
             )
           );
+          const usage = normalizeTokenUsage(e.payload.usage);
+          if (usage) setTokenUsage(usage);
         }),
         listen<string>(errEvent, (e) => {
           if (assistantIdRef.current !== assistantId) return;
@@ -274,12 +306,29 @@ export function ChatWindow() {
       ]);
       unlistens.push(...listeners);
 
-      await invoke('chat_complete_stream', {
+      const result = await invoke<DonePayload>('chat_complete_stream', {
         streamId: sid,
         messages: apiMessages,
         modeId: modeId ?? undefined,
         connectionId: connectionId || undefined,
       });
+
+      // Authoritative completion payload — the event listener can race with
+      // cleanup in `finally` when Tauri delivers `done` after invoke resolves.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: result.text,
+                streaming: false,
+                meta: { model: result.model, latencyMs: result.latencyMs },
+              }
+            : m
+        )
+      );
+      const usage = normalizeTokenUsage(result.usage);
+      if (usage) setTokenUsage(usage);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages((prev) =>
@@ -343,9 +392,30 @@ export function ChatWindow() {
     setDraft('');
     setPendingImages([]);
     setAttachError(null);
+    setTokenUsage(null);
   };
 
   const activeMode = modes.find((m) => m.id === modeId) ?? modes[0];
+  const effectiveConnectionId = connectionId || activeMode?.provider || '';
+  const activeConn = useMemo(
+    () => resolveActiveConnection(conns, effectiveConnectionId),
+    [conns, effectiveConnectionId]
+  );
+  const contextLimit = effectiveContextLimit(activeConn);
+  const contextLimitInferred = isContextLimitInferred(activeConn);
+  const contextEstimate = useMemo(() => {
+    let chars = 0;
+    let images = 0;
+    for (const m of messages) {
+      if (m.error) continue;
+      chars += m.content.length;
+      images += m.images?.length ?? 0;
+    }
+    return estimateTokensFromChars(chars, images);
+  }, [messages]);
+  const contextUsed = resolveContextUsed(tokenUsage, contextEstimate);
+  const contextEstimated = !(tokenUsage && tokenUsage.inputTokens > 0);
+
   const iconKey = (activeMode?.iconName ?? 'mail') as IconName;
   const ModeIcon =
     (I as Record<string, React.ComponentType<{ size?: number }>>)[iconKey] ?? I.mail;
@@ -465,6 +535,14 @@ export function ChatWindow() {
               {streaming ? 'Thinking…' : 'Local mode · stays open'}
             </div>
           </div>
+          <ContextUsageRing
+            usedTokens={contextUsed}
+            contextWindowSize={contextLimit}
+            usage={tokenUsage}
+            estimated={contextEstimated}
+            limitInferred={contextLimitInferred}
+            streaming={streaming}
+          />
           {conns.filter((c) => c.hasKey).length > 1 && (
             <select
               data-no-drag

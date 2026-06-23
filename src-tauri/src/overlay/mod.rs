@@ -393,6 +393,34 @@ async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
         other => Some(other.icon().to_string()),
     };
 
+    let connection_id = {
+        let state = app
+            .try_state::<crate::app::state::AppState>()
+            .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
+        let modes = state.catalog.list_modes().await?;
+        let mode = modes
+            .iter()
+            .find(|m| m.id == mode_id)
+            .ok_or_else(|| AppError::NotFound {
+                entity: "prompt_mode",
+                id: mode_id.clone(),
+            })?;
+        let session_override = app
+            .try_state::<RefineSession>()
+            .and_then(|s| s.connection_override.lock().unwrap().clone());
+        let resolved = session_override
+            .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+        match resolved.as_deref() {
+            Some(id) => id.to_string(),
+            None => state
+                .connections
+                .get_default_row()
+                .await?
+                .map(|r| r.id)
+                .unwrap_or_default(),
+        }
+    };
+
     let _ = app.emit(
         "refine:reset",
         serde_json::json!({
@@ -401,6 +429,7 @@ async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
             "modeId": mode_id.clone(),
             "modeName": header_name,
             "iconName": header_icon,
+            "connectionId": connection_id,
         }),
     );
 
