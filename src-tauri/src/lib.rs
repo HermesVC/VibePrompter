@@ -23,6 +23,7 @@ mod prompts;
 mod providers;
 mod security;
 mod shortcuts;
+mod tools;
 mod tray;
 mod workspace;
 
@@ -183,6 +184,9 @@ pub fn run() {
             commands::list_prompt_formats,
             commands::render_prompt_format,
             commands::parse_prompt_tool_calls,
+            commands::list_agent_tools,
+            commands::execute_agent_tool,
+            commands::execute_tool_calls_from_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

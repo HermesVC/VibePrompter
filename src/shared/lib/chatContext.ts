@@ -98,6 +98,54 @@ export function formatScopeUserContext(scope: ChatScope): string {
   }
 }
 
+export type ScopeAttachmentKind = 'snippet' | 'file' | 'workspace';
+
+export interface ParsedScopeAttachment {
+  kind: ScopeAttachmentKind;
+  label: string;
+  body: string;
+}
+
+/** Split user bubble text vs embedded scope block (for compact UI). */
+export function splitUserMessageScope(content: string): {
+  userText: string;
+  attachment: ParsedScopeAttachment | null;
+} {
+  const fenced =
+    /(?:^|\n\n)((\[Attached snippet for reference\]|\[Attached snippet — edit only this code\]|\[Attached file:[^\n]+)\n```\n)([\s\S]*?)```\s*$/;
+  const fencedMatch = content.match(fenced);
+  if (fencedMatch) {
+    const header = fencedMatch[2];
+    const body = fencedMatch[3];
+    const userText = content.slice(0, fencedMatch.index).trim();
+    const kind: ScopeAttachmentKind = header.startsWith('[Attached file:')
+      ? 'file'
+      : 'snippet';
+    const label =
+      kind === 'file'
+        ? header.replace(/^\[Attached file:\s*/, '').replace(/\]$/, '')
+        : header === '[Attached snippet for reference]'
+          ? 'Snippet'
+          : header;
+    return { userText, attachment: { kind, label, body } };
+  }
+
+  const tree = /(?:^|\n\n)(\[Workspace tree\]\n)([\s\S]*)$/;
+  const treeMatch = content.match(tree);
+  if (treeMatch) {
+    return {
+      userText: content.slice(0, treeMatch.index).trim(),
+      attachment: {
+        kind: 'workspace',
+        label: 'Workspace tree',
+        body: treeMatch[2].trim(),
+      },
+    };
+  }
+
+  return { userText: content, attachment: null };
+}
+
 export function toggleModifier(modifiers: string[], id: string): string[] {
   return modifiers.includes(id)
     ? modifiers.filter((m) => m !== id)

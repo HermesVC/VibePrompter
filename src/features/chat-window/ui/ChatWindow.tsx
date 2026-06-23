@@ -29,6 +29,7 @@ import {
   buildChatContextPayload,
   DEFAULT_CHAT_CONTEXT,
   formatScopeUserContext,
+  splitUserMessageScope,
   type ChatContextState,
 } from '@shared/lib/chatContext';
 import {
@@ -1099,6 +1100,115 @@ export function ChatWindow() {
   );
 }
 
+function UserMessageBody({ content }: { content: string }) {
+  const { userText, attachment } = splitUserMessageScope(content);
+  const [expanded, setExpanded] = useState(false);
+
+  if (!attachment) {
+    return <>{content}</>;
+  }
+
+  const previewLines = attachment.body.split('\n').slice(0, 2).join('\n');
+  const lineCount = attachment.body.split('\n').length;
+  const attachTitle =
+    attachment.kind === 'file'
+      ? `File · ${attachment.label}`
+      : attachment.kind === 'snippet'
+        ? 'Snippet'
+        : attachment.label;
+
+  return (
+    <>
+      {userText ? <div style={{ marginBottom: 8 }}>{userText}</div> : null}
+      <div
+        style={{
+          fontSize: 11,
+          borderRadius: 8,
+          border: '.5px solid var(--accent-tint-2)',
+          background: 'var(--surface)',
+          overflow: 'hidden',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            width: '100%',
+            padding: '6px 8px',
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--accent)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontSize: 11,
+          }}
+        >
+          <span
+            style={{
+              display: 'inline-flex',
+              width: 14,
+              height: 14,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 3,
+              border: '.5px solid var(--border-strong)',
+              fontSize: 9,
+              flexShrink: 0,
+            }}
+            aria-hidden
+          >
+            {expanded ? '−' : '+'}
+          </span>
+          <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {attachTitle}
+          </span>
+          <span style={{ color: 'var(--fg-dim)', fontSize: 10, flexShrink: 0 }}>
+            {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+          </span>
+        </button>
+        {expanded ? (
+          <pre
+            style={{
+              margin: 0,
+              padding: '6px 8px 8px',
+              borderTop: '.5px solid var(--border)',
+              fontSize: 10,
+              color: 'var(--fg-mute)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 240,
+              overflow: 'auto',
+            }}
+          >
+            {attachment.body}
+          </pre>
+        ) : (
+          previewLines && (
+            <pre
+              style={{
+                margin: 0,
+                padding: '0 8px 6px',
+                fontSize: 9.5,
+                color: 'var(--fg-dim)',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxHeight: 36,
+                overflow: 'hidden',
+              }}
+            >
+              {previewLines}
+              {lineCount > 2 ? '\n…' : ''}
+            </pre>
+          )
+        )}
+      </div>
+    </>
+  );
+}
+
 function MessageBubble({
   message: m,
   scopeKind,
@@ -1151,7 +1261,11 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {m.content}
+        {isUser ? (
+          <UserMessageBody content={m.content} />
+        ) : (
+          m.content
+        )}
         {m.streaming && (
           <span
             className="ph-caret"

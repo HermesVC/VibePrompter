@@ -53,7 +53,7 @@ export const SETTINGS_INDEX: SettingsHit[] = [
   { tab: 'advanced', label: 'Custom proxy URL', keywords: ['proxy', 'corporate', 'http_proxy'] },
   { tab: 'advanced', label: 'Log raw model responses', keywords: ['debug', 'verbose', 'logging'] },
   { tab: 'advanced', label: 'Export / import all settings', keywords: ['backup', 'transfer'] },
-  { tab: 'advanced', label: 'Developer tools', keywords: ['devtools', 'inspect'] },
+  { tab: 'advanced', label: 'Agent tools function calling', keywords: ['mcp', 'tool', 'chrome', 'launch'] },
 
   // About
   { tab: 'about', label: 'App version', keywords: ['version', 'build'] },
