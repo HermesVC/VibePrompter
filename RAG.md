@@ -277,6 +277,28 @@ The goal is for semantic memory to recall durable facts, decisions, bugs,
 repo paths, code context, and user preferences. It should not replay the chat
 transcript.
 
+### Explicit memory markers
+
+Use an explicit marker at the start of a chat message when a fact must be kept
+in semantic memory for the current chat session:
+
+| Marker | Stored as | Use for |
+| --- | --- | --- |
+| `IMPORTANT:`, `REMEMBER:`, `MEMORY:` | `important` | high-priority facts |
+| `BUG:`, `ISSUE:`, `ERROR:` | `bug` | defects, regressions, failures |
+| `DECISION:`, `DECIDED:` | `decision` | architectural or workflow decisions |
+| `FACT:`, `REPO:`, `PROJECT:` | `repo` | repo paths, commands, environment facts |
+| `PREF:`, `PREFERENCE:`, `USERPREF:` | `preference` | user preferences and expected behavior |
+| `CODE:`, `API:`, `IMPL:` | `code` | code/API/implementation notes |
+
+Russian aliases are supported: `ВАЖНО:`, `ЗАПОМНИ:`, `ПАМЯТЬ:`, `БАГ:`,
+`ОШИБКА:`, `РЕШЕНИЕ:`, `РЕШИЛИ:`, `ФАКТ:`, `РЕПО:`, `ПРОЕКТ:`,
+`ПРЕДПОЧТЕНИЕ:`, `КОД:`, `АПИ:`.
+
+These markers force indexing and give the snippet a retrieval priority boost,
+but the memory is still session-scoped unless/until project/global memory is
+implemented.
+
 ---
 
 ## Repo preflight script

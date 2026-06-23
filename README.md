@@ -134,6 +134,22 @@ turns such as greetings, classifies retrieved snippets as `decision`, `bug`,
 `repo`, `code`, `preference`, or `note`, and caps retrieval to a small prompt
 budget so long context recovery does not spend thousands of tokens on memory.
 
+To force a turn into semantic memory for the current chat session, start the
+message with an explicit memory marker:
+
+| Marker | Stored as |
+| --- | --- |
+| `IMPORTANT:`, `REMEMBER:`, `MEMORY:` | `important` |
+| `BUG:`, `ISSUE:`, `ERROR:` | `bug` |
+| `DECISION:`, `DECIDED:` | `decision` |
+| `FACT:`, `REPO:`, `PROJECT:` | `repo` |
+| `PREF:`, `PREFERENCE:`, `USERPREF:` | `preference` |
+| `CODE:`, `API:`, `IMPL:` | `code` |
+
+Russian aliases are supported too: `ВАЖНО:`, `ЗАПОМНИ:`, `ПАМЯТЬ:`, `БАГ:`,
+`ОШИБКА:`, `РЕШЕНИЕ:`, `РЕШИЛИ:`, `ФАКТ:`, `РЕПО:`, `ПРОЕКТ:`,
+`ПРЕДПОЧТЕНИЕ:`, `КОД:`, `АПИ:`.
+
 ---
 
 ## Contributing

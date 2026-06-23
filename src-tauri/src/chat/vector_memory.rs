@@ -30,6 +30,7 @@ pub struct RetrievedChunk {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {
+    Important,
     Decision,
     Bug,
     RepoFact,
@@ -41,6 +42,7 @@ pub enum MemoryKind {
 impl MemoryKind {
     fn label(self) -> &'static str {
         match self {
+            Self::Important => "important",
             Self::Decision => "decision",
             Self::Bug => "bug",
             Self::RepoFact => "repo",
@@ -52,6 +54,7 @@ impl MemoryKind {
 
     fn priority_boost(self) -> f32 {
         match self {
+            Self::Important => 0.12,
             Self::Decision => 0.08,
             Self::Bug => 0.07,
             Self::RepoFact => 0.06,
@@ -289,6 +292,9 @@ fn messages_to_chunks(messages: &[ChatMessage]) -> Vec<(String, String)> {
 fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
     let cleaned = compact_whitespace(text);
     let lower = cleaned.to_lowercase();
+    if let Some(kind) = explicit_memory_marker(&lower) {
+        return Some(kind);
+    }
     if is_low_signal(&lower) {
         return None;
     }
@@ -356,6 +362,109 @@ fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
     }
     if cleaned.chars().count() >= 120 {
         return Some(MemoryKind::General);
+    }
+    None
+}
+
+fn explicit_memory_marker(lower: &str) -> Option<MemoryKind> {
+    let marker = lower
+        .trim_start()
+        .trim_start_matches(|c: char| matches!(c, '[' | '(' | '#' | '!' | '-' | '*'))
+        .trim_start();
+    if starts_with_any(
+        marker,
+        &[
+            "important:",
+            "important ",
+            "remember:",
+            "remember ",
+            "memory:",
+            "memory ",
+            "memo:",
+            "memo ",
+            "важно:",
+            "важно ",
+            "запомни:",
+            "запомни ",
+            "память:",
+            "память ",
+        ],
+    ) {
+        return Some(MemoryKind::Important);
+    }
+    if starts_with_any(
+        marker,
+        &[
+            "decision:",
+            "decision ",
+            "decided:",
+            "decided ",
+            "решение:",
+            "решение ",
+            "решили:",
+            "решили ",
+        ],
+    ) {
+        return Some(MemoryKind::Decision);
+    }
+    if starts_with_any(
+        marker,
+        &[
+            "bug:",
+            "bug ",
+            "issue:",
+            "issue ",
+            "error:",
+            "error ",
+            "баг:",
+            "баг ",
+            "ошибка:",
+            "ошибка ",
+        ],
+    ) {
+        return Some(MemoryKind::Bug);
+    }
+    if starts_with_any(
+        marker,
+        &[
+            "fact:",
+            "fact ",
+            "repo:",
+            "repo ",
+            "project:",
+            "project ",
+            "факт:",
+            "факт ",
+            "репо:",
+            "репо ",
+            "проект:",
+            "проект ",
+        ],
+    ) {
+        return Some(MemoryKind::RepoFact);
+    }
+    if starts_with_any(
+        marker,
+        &[
+            "pref:",
+            "pref ",
+            "preference:",
+            "preference ",
+            "userpref:",
+            "userpref ",
+            "предпочтение:",
+            "предпочтение ",
+        ],
+    ) {
+        return Some(MemoryKind::UserPreference);
+    }
+    if starts_with_any(
+        marker,
+        &[
+            "code:", "code ", "api:", "api ", "impl:", "impl ", "код:", "код ", "апи:", "апи ",
+        ],
+    ) {
+        return Some(MemoryKind::Code);
     }
     None
 }
@@ -436,6 +545,10 @@ fn looks_like_code(text: &str) -> bool {
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn starts_with_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.starts_with(needle))
 }
 
 fn compact_excerpt(text: &str, max_chars: usize) -> String {
@@ -536,6 +649,18 @@ mod tests {
             "Решили запускать RAG preflight через scripts/preflight-rag-build.ps1",
         );
         assert_eq!(kind, Some(MemoryKind::Decision));
+    }
+
+    #[test]
+    fn explicit_important_marker_forces_memory() {
+        let kind = classify_memory("user", "IMPORTANT: use npm run preflight:rag");
+        assert_eq!(kind, Some(MemoryKind::Important));
+    }
+
+    #[test]
+    fn explicit_bug_marker_forces_bug_memory() {
+        let kind = classify_memory("user", "BUG: semantic memory block is too large");
+        assert_eq!(kind, Some(MemoryKind::Bug));
     }
 
     #[test]
