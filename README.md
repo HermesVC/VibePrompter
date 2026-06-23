@@ -150,6 +150,22 @@ Russian aliases are supported too: `ВАЖНО:`, `ЗАПОМНИ:`, `ПАМЯТ
 `ОШИБКА:`, `РЕШЕНИЕ:`, `РЕШИЛИ:`, `ФАКТ:`, `РЕПО:`, `ПРОЕКТ:`,
 `ПРЕДПОЧТЕНИЕ:`, `КОД:`, `АПИ:`.
 
+### Chat generated files
+
+When a chat answer creates code for multiple files, the backend asks the model
+to emit one markdown fence per file:
+
+````markdown
+```file src/example.ts
+export const value = 1;
+```
+````
+
+The chat UI parses these fences into a persistent "Generated files" list. Since
+the source text remains in the saved chat transcript, the file list is restored
+after a chat-window reload. Each file can be copied or applied to the current
+workspace through the normal workspace write policy.
+
 ---
 
 ## Contributing

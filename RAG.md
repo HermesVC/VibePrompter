@@ -299,6 +299,21 @@ These markers force indexing and give the snippet a retrieval priority boost,
 but the memory is still session-scoped unless/until project/global memory is
 implemented.
 
+### Multi-file code artifacts
+
+For code generation that spans multiple files, chat completions should use
+one markdown fence per file:
+
+````markdown
+```file src/example.ts
+export const value = 1;
+```
+````
+
+The parser accepts closed and currently unclosed `file` fences. This lets the
+UI show the active file during streaming/auto-continue and rebuild the same
+generated-file list after a chat-window reload from the persisted transcript.
+
 ---
 
 ## Repo preflight script

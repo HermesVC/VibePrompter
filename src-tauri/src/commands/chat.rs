@@ -10,6 +10,11 @@ use crate::utils::AppError;
 const MAX_AUTO_CONTINUES: usize = 3;
 const CONTINUATION_TAIL_CHARS: usize = 6_000;
 const STITCH_OVERLAP_CHARS: usize = 2_000;
+const FILE_ARTIFACT_PROTOCOL: &str = r#"When the user asks you to create or modify code that naturally spans multiple files, output each file as a separate markdown fence using exactly this header:
+```file relative/path/from/workspace.ext
+file contents
+```
+Use one fence per file. Put no prose inside file fences. Use stable relative workspace paths. Do not merge multiple files into one fence. If only one file is needed, you may still use one file fence."#;
 
 struct AutoContinueOutput {
     result: CompletionResult,
@@ -100,6 +105,7 @@ pub async fn chat_complete_stream(
         let base = system_prompt.unwrap_or_default();
         system_prompt = Some(state.workspace.compose_system(&base, ctx));
     }
+    append_file_artifact_protocol(&mut system_prompt);
 
     let resolved = connection_id.clone();
     let row = match resolved.as_deref().filter(|s| !s.is_empty()) {
@@ -457,6 +463,15 @@ pub async fn chat_complete_stream(
 
 fn is_cancelled_err(e: &AppError) -> bool {
     matches!(e, AppError::Validation(msg) if msg == "cancelled")
+}
+
+fn append_file_artifact_protocol(system_prompt: &mut Option<String>) {
+    let mut sys = system_prompt.take().unwrap_or_default();
+    if !sys.trim().is_empty() {
+        sys.push_str("\n\n");
+    }
+    sys.push_str(FILE_ARTIFACT_PROTOCOL);
+    *system_prompt = Some(sys);
 }
 
 async fn complete_stream_with_auto_continue(

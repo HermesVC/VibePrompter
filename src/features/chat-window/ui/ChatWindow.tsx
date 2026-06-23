@@ -24,6 +24,11 @@ import {
   stripVpSummaryForDisplay,
   trimSummaryToBudget,
 } from '@shared/lib/chatSessionSummary';
+import {
+  parseGeneratedFileBlocks,
+  stripGeneratedFileBlocks,
+  type GeneratedFileBlock,
+} from '@shared/lib/generatedFiles';
 
 import {
   clipboardHasAttachableFiles,
@@ -47,6 +52,7 @@ import {
   applyWorkspaceWrite,
   getWorkspaceSettings,
   previewWorkspaceWrite,
+  readWorkspaceFile,
   saveWorkspaceSettings,
   type PolicyDecision,
 } from '@shared/lib/workspaceApi';
@@ -478,6 +484,59 @@ export function ChatWindow() {
         path: scope.path,
         before: scope.content,
         after: content,
+        decision: preview.decision,
+        onConfirm: doWrite,
+      });
+    } catch (e) {
+      setAttachError(errorMessage(e));
+    }
+  }, []);
+
+  const promptApplyGeneratedFile = useCallback(async (file: GeneratedFileBlock) => {
+    if (!file.complete || !file.content.trim()) return;
+    try {
+      const preview = await previewWorkspaceWrite(file.path, file.content);
+      const before =
+        preview.lineCountBefore > 0
+          ? await readWorkspaceFile(file.path)
+              .then((f) => f.content)
+              .catch(() => '')
+          : '';
+      const settings = await getWorkspaceSettings();
+      const autoApply =
+        preview.decision === 'allow' && settings.applyPolicy === 'always_apply';
+
+      const doWrite = async () => {
+        const result = await applyWorkspaceWrite(
+          file.path,
+          file.content,
+          preview.contentHashBefore,
+          true
+        );
+        setChatContext((prev) =>
+          prev.scope.kind === 'file' && prev.scope.path === file.path
+            ? {
+                ...prev,
+                scope: {
+                  ...prev.scope,
+                  content: file.content,
+                  contentHash: result.contentHash,
+                },
+              }
+            : prev
+        );
+      };
+
+      if (autoApply) {
+        await doWrite();
+        return;
+      }
+
+      setApplyDialog({
+        title: preview.lineCountBefore > 0 ? 'Apply generated file' : 'Create generated file',
+        path: file.path,
+        before,
+        after: file.content,
         decision: preview.decision,
         onConfirm: doWrite,
       });
@@ -1226,6 +1285,7 @@ export function ChatWindow() {
                   ? () => void promptApplyScoped(m.content, m.scopedText)
                   : undefined
               }
+              onApplyGeneratedFile={(file) => void promptApplyGeneratedFile(file)}
             />
           ))}
         </div>
@@ -1560,13 +1620,19 @@ function MessageBubble({
   scopeKind,
   scopeWorking,
   onApply,
+  onApplyGeneratedFile,
 }: {
   message: ChatMessage;
   scopeKind?: string;
   scopeWorking?: string;
   onApply?: () => void;
+  onApplyGeneratedFile?: (file: GeneratedFileBlock) => void;
 }) {
   const isUser = m.role === 'user';
+  const generatedFiles = !isUser ? parseGeneratedFileBlocks(m.content) : [];
+  const assistantDisplay = !isUser && generatedFiles.length
+    ? stripGeneratedFileBlocks(m.content)
+    : m.content;
   const applyCandidate = extractScopedCodeForApply((m.scopedText ?? m.content).trim());
   const showApply =
     onApply &&
@@ -1610,7 +1676,10 @@ function MessageBubble({
         {isUser ? (
           <UserMessageBody content={m.content} />
         ) : (
-          m.content
+          assistantDisplay || null
+        )}
+        {!isUser && generatedFiles.length > 0 && (
+          <GeneratedFilesList files={generatedFiles} onApply={onApplyGeneratedFile} />
         )}
         {m.streaming && (
           <span
@@ -1654,6 +1723,155 @@ function MessageBubble({
       </div>
     </div>
   );
+}
+
+function GeneratedFilesList({
+  files,
+  onApply,
+}: {
+  files: GeneratedFileBlock[];
+  onApply?: (file: GeneratedFileBlock) => void;
+}) {
+  const [openPath, setOpenPath] = useState(files[0]?.path ?? '');
+  const open = files.find((f) => f.path === openPath) ?? files[0];
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        borderTop: '.5px solid var(--border)',
+        paddingTop: 8,
+        whiteSpace: 'normal',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 6,
+          color: 'var(--fg-mute)',
+          fontSize: 11,
+          fontWeight: 600,
+        }}
+      >
+        <I.code size={13} />
+        <span>Generated files</span>
+        <span style={{ color: 'var(--fg-dim)', fontWeight: 500 }}>({files.length})</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {files.map((file) => {
+          const active = file.path === open.path;
+          return (
+            <button
+              key={file.path}
+              type="button"
+              onClick={() => setOpenPath(file.path)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                minHeight: 28,
+                border: '.5px solid var(--border)',
+                borderRadius: 6,
+                background: active ? 'var(--accent-tint)' : 'var(--surface)',
+                color: active ? 'var(--accent)' : 'var(--fg)',
+                padding: '5px 7px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontSize: 11,
+              }}
+            >
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {file.path}
+              </span>
+              <span style={{ color: file.complete ? 'var(--fg-dim)' : 'var(--warn)', fontSize: 10 }}>
+                {file.complete ? file.language ?? 'file' : 'incomplete'}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          marginTop: 6,
+          border: '.5px solid var(--border)',
+          borderRadius: 6,
+          overflow: 'hidden',
+          background: 'var(--bg-2)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            minHeight: 30,
+            padding: '5px 7px',
+            borderBottom: '.5px solid var(--border)',
+            color: 'var(--fg-mute)',
+            fontSize: 10.5,
+          }}
+        >
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {open.path}
+          </span>
+          <button
+            type="button"
+            onClick={() => void writeClipboardText(open.content)}
+            title="Copy file content"
+            style={miniFileBtnStyle(false)}
+          >
+            <I.copy size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onApply?.(open)}
+            disabled={!open.complete || !onApply}
+            title={open.complete ? 'Apply generated file to workspace' : 'Wait until generation completes'}
+            style={miniFileBtnStyle(!open.complete || !onApply)}
+          >
+            <I.download size={11} />
+          </button>
+        </div>
+        <pre
+          style={{
+            margin: 0,
+            padding: '7px',
+            maxHeight: 220,
+            overflow: 'auto',
+            color: 'var(--fg)',
+            fontSize: 10.5,
+            lineHeight: 1.45,
+            whiteSpace: 'pre',
+            wordBreak: 'normal',
+          }}
+        >
+          {open.content}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function miniFileBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    border: '.5px solid var(--border)',
+    background: 'var(--surface)',
+    color: disabled ? 'var(--fg-dim)' : 'var(--fg-mute)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.45 : 1,
+    padding: 0,
+  };
 }
 
 function iconBtnStyle(disabled = false): React.CSSProperties {
