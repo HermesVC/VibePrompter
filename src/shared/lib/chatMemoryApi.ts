@@ -35,3 +35,18 @@ export async function indexFolderOutline(
     input: { folderPath, outlineSummary },
   });
 }
+
+/** Index a brief plan-step summary into session vector memory. */
+export async function indexPlanStepSummary(
+  sessionId: string,
+  summary: string,
+  opts?: { connectionId?: string; modeId?: string }
+): Promise<void> {
+  if (!sessionId.trim() || !summary.trim()) return;
+  await invoke('chat_index_plan_step_summary', {
+    sessionId,
+    connectionId: opts?.connectionId,
+    modeId: opts?.modeId,
+    summary,
+  });
+}

@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::AppResult;
 
-use super::helpers::{cap_tool_text, ensure_listable_path};
 use super::super::context::ToolExecutionContext;
 use super::super::ToolExecutionResult;
+use super::helpers::{cap_tool_text, ensure_listable_path};
 
 pub const NAME: &str = "list_dir";
 
@@ -33,11 +33,11 @@ pub fn tool_definition() -> ToolDefinition {
     }
 }
 
-pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<ToolExecutionResult> {
-    let raw_path = arguments
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+pub async fn execute(
+    ctx: &ToolExecutionContext,
+    arguments: Value,
+) -> AppResult<ToolExecutionResult> {
+    let raw_path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let depth = arguments
         .get("depth")
         .and_then(|v| v.as_u64())

@@ -120,7 +120,8 @@ pub fn format_tool_followup_user_message(
                     "[Tool result: {}]\n{}\n",
                     r.name,
                     if r.ok {
-                        serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| r.message.clone())
+                        serde_json::to_string_pretty(&r.output)
+                            .unwrap_or_else(|_| r.message.clone())
                     } else {
                         format!("ERROR: {}", r.message)
                     }
@@ -245,14 +246,12 @@ mod tests {
         let scope = ChatScope::Folder {
             path: "src/app".into(),
             tree_summary: String::new(),
+            outline_summary: String::new(),
             files: vec![],
             truncated: false,
         };
         assert!(scope_enables_tools(&scope));
-        assert_eq!(
-            scope_path_for_tools(&scope).as_deref(),
-            Some("src/app")
-        );
+        assert_eq!(scope_path_for_tools(&scope).as_deref(), Some("src/app"));
     }
 
     #[test]
@@ -266,10 +265,7 @@ mod tests {
             language_id: None,
         };
         assert!(scope_enables_tools(&scope));
-        assert_eq!(
-            scope_path_for_tools(&scope).as_deref(),
-            Some("src/lib")
-        );
+        assert_eq!(scope_path_for_tools(&scope).as_deref(), Some("src/lib"));
     }
 
     #[test]

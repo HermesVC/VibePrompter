@@ -6,6 +6,7 @@
 
 mod agent_tools;
 mod context_recovery;
+mod memory_compress;
 mod session_summary;
 mod sliding_window;
 mod vector_memory;
@@ -15,6 +16,9 @@ pub use agent_tools::{
     ToolLoopMemoryHook,
 };
 pub use context_recovery::should_retry_for_context;
+pub use memory_compress::{
+    compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
+};
 pub use session_summary::append_memory_to_system;
 pub use sliding_window::{
     compress_evicted_turns, estimate_message_tokens, fallback_merge_memory,
@@ -22,7 +26,8 @@ pub use sliding_window::{
 };
 pub use vector_memory::{
     append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
-    index_evicted_messages, index_folder_outline, index_tool_results, retrieve_relevant,
+    index_evicted_messages, index_folder_outline, index_plan_step_summary, index_tool_results,
+    retrieve_relevant,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

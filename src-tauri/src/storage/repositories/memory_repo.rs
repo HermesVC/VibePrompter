@@ -12,6 +12,14 @@ pub struct MemoryChunkRow {
     pub embedding: Vec<f32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewMemoryChunk {
+    pub role: String,
+    pub content: String,
+    pub content_hash: String,
+    pub embedding: Vec<f32>,
+}
+
 #[derive(Clone)]
 pub struct MemoryRepo {
     pool: SqlitePool,
@@ -80,6 +88,40 @@ impl MemoryRepo {
         Ok(())
     }
 
+    pub async fn replace_session_chunks(
+        &self,
+        session_id: &str,
+        chunks: &[NewMemoryChunk],
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await.map_err(AppError::Database)?;
+        sqlx::query("DELETE FROM chat_memory_chunks WHERE session_id = ?1")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::Database)?;
+
+        for chunk in chunks {
+            let blob = embedding_to_blob(&chunk.embedding);
+            sqlx::query(
+                "INSERT INTO chat_memory_chunks
+                 (session_id, role, content, content_hash, embedding, dims)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(session_id)
+            .bind(&chunk.role)
+            .bind(&chunk.content)
+            .bind(&chunk.content_hash)
+            .bind(blob)
+            .bind(chunk.embedding.len() as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::Database)?;
+        }
+
+        tx.commit().await.map_err(AppError::Database)?;
+        Ok(())
+    }
+
     pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
         if keep_latest <= 0 {
             return self.delete_session(session_id).await;
@@ -111,6 +153,16 @@ impl MemoryRepo {
                 .await
                 .map_err(|e| AppError::Database(e))?;
         Ok(rows.into_iter().map(|(h,)| h).collect())
+    }
+
+    pub async fn count_session_chunks(&self, session_id: &str) -> AppResult<i64> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM chat_memory_chunks WHERE session_id = ?1")
+                .bind(session_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| AppError::Database(e))?;
+        Ok(row.0)
     }
 }
 
@@ -146,4 +198,91 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (na.sqrt() * nb.sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn repo() -> MemoryRepo {
+        MemoryRepo::new(crate::storage::pool::test_pool().await)
+    }
+
+    #[tokio::test]
+    async fn replace_session_chunks_swaps_only_target_session() {
+        let repo = repo().await;
+        repo.insert_chunk("s1", "user", "old", "old-hash", &[1.0, 0.0])
+            .await
+            .unwrap();
+        repo.insert_chunk("other", "user", "keep", "other-hash", &[0.0, 1.0])
+            .await
+            .unwrap();
+
+        repo.replace_session_chunks(
+            "s1",
+            &[
+                NewMemoryChunk {
+                    role: "compressed".into(),
+                    content: "new-a".into(),
+                    content_hash: "new-a-hash".into(),
+                    embedding: vec![0.5, 0.5],
+                },
+                NewMemoryChunk {
+                    role: "compressed".into(),
+                    content: "new-b".into(),
+                    content_hash: "new-b-hash".into(),
+                    embedding: vec![0.25, 0.75],
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let s1 = repo.list_session_chunks("s1").await.unwrap();
+        assert_eq!(s1.len(), 2);
+        assert!(s1.iter().all(|row| row.role == "compressed"));
+        assert_eq!(
+            s1.iter()
+                .map(|row| row.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new-a", "new-b"]
+        );
+
+        let other = repo.list_session_chunks("other").await.unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].content, "keep");
+    }
+
+    #[tokio::test]
+    async fn replace_session_chunks_rolls_back_on_insert_failure() {
+        let repo = repo().await;
+        repo.insert_chunk("s1", "user", "old", "old-hash", &[1.0, 0.0])
+            .await
+            .unwrap();
+
+        let err = repo
+            .replace_session_chunks(
+                "s1",
+                &[
+                    NewMemoryChunk {
+                        role: "compressed".into(),
+                        content: "new-a".into(),
+                        content_hash: "dup-hash".into(),
+                        embedding: vec![0.5, 0.5],
+                    },
+                    NewMemoryChunk {
+                        role: "compressed".into(),
+                        content: "new-b".into(),
+                        content_hash: "dup-hash".into(),
+                        embedding: vec![0.25, 0.75],
+                    },
+                ],
+            )
+            .await;
+
+        assert!(err.is_err());
+        let s1 = repo.list_session_chunks("s1").await.unwrap();
+        assert_eq!(s1.len(), 1);
+        assert_eq!(s1[0].content, "old");
+    }
 }

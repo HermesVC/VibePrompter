@@ -907,10 +907,19 @@ struct OpenAiChoiceMessage {
 }
 
 fn openai_assistant_text(msg: &OpenAiChoiceMessage) -> String {
-    if let Some(c) = msg.content.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(c) = msg
+        .content
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         return c.to_string();
     }
-    if let Some(r) = msg.reasoning_content.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    if let Some(r) = msg
+        .reasoning_content
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
     {
         // Thinking models may put the answer only in reasoning when thinking is on.
         if let Some(after) = r.rsplit_once("\n\n") {

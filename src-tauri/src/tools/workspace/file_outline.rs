@@ -6,18 +6,19 @@ use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::AppResult;
 use crate::workspace::symbols::outline_for_file;
 
-use super::helpers::ensure_readable_path;
 use super::super::context::ToolExecutionContext;
 use super::super::ToolExecutionResult;
+use super::helpers::ensure_readable_path;
 
 pub const NAME: &str = "file_outline";
 
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "List classes, methods, and functions in a PHP/JS/Python file with line ranges. \
+        description:
+            "List classes, methods, and functions in a PHP/JS/Python file with line ranges. \
                       Other file types return line count only — use read_file for full content."
-            .into(),
+                .into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -31,7 +32,10 @@ pub fn tool_definition() -> ToolDefinition {
     }
 }
 
-pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<ToolExecutionResult> {
+pub async fn execute(
+    ctx: &ToolExecutionContext,
+    arguments: Value,
+) -> AppResult<ToolExecutionResult> {
     let raw_path = arguments
         .get("path")
         .and_then(|v| v.as_str())

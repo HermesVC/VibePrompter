@@ -1,6 +1,16 @@
 //! Rolling dialogue memory injected into the chat system prompt.
 
-const SUMMARY_FRACTION: f64 = 0.3;
+pub const SUMMARY_FRACTION: f64 = 0.3;
+
+/// Max characters for rolling session memory (≈30% of context window).
+pub fn summary_budget_chars(context_limit_tokens: i64) -> usize {
+    let limit = if context_limit_tokens > 0 {
+        context_limit_tokens
+    } else {
+        8192
+    };
+    (((limit as f64) * SUMMARY_FRACTION * 4.0) as usize).max(256)
+}
 
 /// Inject compressed long-term memory (no per-reply tags — compression runs in sliding_window).
 pub fn append_memory_to_system(
@@ -19,14 +29,13 @@ pub fn append_memory_to_system(
     );
     system.push_str(&trim_summary_to_budget(memory, context_limit_tokens));
 }
+
 pub fn trim_summary_to_budget(summary: &str, context_limit_tokens: i64) -> String {
-    let limit = if context_limit_tokens > 0 {
-        context_limit_tokens
-    } else {
-        8192
-    };
-    let max_chars = ((limit as f64) * SUMMARY_FRACTION * 4.0) as usize;
-    trim_chars(summary, max_chars.max(256))
+    trim_to_char_budget(summary, summary_budget_chars(context_limit_tokens))
+}
+
+pub fn trim_to_char_budget(summary: &str, max_chars: usize) -> String {
+    trim_chars(summary, max_chars.max(128))
 }
 
 fn trim_chars(s: &str, max: usize) -> String {

@@ -5,17 +5,17 @@ use serde_json::{json, Value};
 use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::AppResult;
 
-use super::helpers::{cap_tool_text, ensure_readable_path};
 use super::super::context::ToolExecutionContext;
 use super::super::ToolExecutionResult;
+use super::helpers::{cap_tool_text, ensure_readable_path};
 
 pub const NAME: &str = "read_file";
 
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Read a text file from the workspace. Use start_line/end_line for large files."
-            .into(),
+        description:
+            "Read a text file from the workspace. Use start_line/end_line for large files.".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -37,19 +37,25 @@ pub fn tool_definition() -> ToolDefinition {
     }
 }
 
-pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<ToolExecutionResult> {
+pub async fn execute(
+    ctx: &ToolExecutionContext,
+    arguments: Value,
+) -> AppResult<ToolExecutionResult> {
     let raw_path = arguments
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| crate::utils::AppError::Validation("path is required".into()))?;
-    let start_line = arguments.get("start_line").and_then(|v| v.as_u64()).map(|n| n as u32);
-    let end_line = arguments.get("end_line").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let start_line = arguments
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let end_line = arguments
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
     let path = ensure_readable_path(ctx, raw_path)?;
-    let file = ctx
-        .workspace
-        .read_file(&path, start_line, end_line)
-        .await?;
+    let file = ctx.workspace.read_file(&path, start_line, end_line).await?;
 
     let (content, truncated) = cap_tool_text(&file.content);
 

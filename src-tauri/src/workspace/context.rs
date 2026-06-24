@@ -69,7 +69,8 @@ pub fn list_modifiers() -> Vec<ChatModifierInfo> {
         ChatModifierInfo {
             id: "developer".into(),
             label: "Developer".into(),
-            description: "PLAN.md step-by-step workflow (only with File / Folder / Workspace scope)".into(),
+            description:
+                "PLAN.md step-by-step workflow (only with File / Folder / Workspace scope)".into(),
         },
         ChatModifierInfo {
             id: "translate_en".into(),
@@ -151,11 +152,17 @@ For LARGE tasks, do NOT jump straight to full implementation.
 ### Phase B — Execute (continue / иди по плану / следующий пункт)
 1. Use PLAN.md from context or retrieved memory. Pick the first unchecked `- [ ]` step.
 2. Implement ONE step only (file fences).
-3. After code, outside fences:
-   - **Step review**: what changed, risks
-   - **Self-check**: syntax, imports, scope fit
-   - **Fixes**: if needed, fix fences in the same turn
-4. Update PLAN.md: mark step `[x]`, update Status.
+3. After code, OUTSIDE fences, output ONLY this brief block (max 4 short lines inside; no long prose):
+
+<plan-step-summary>
+step: N / TOTAL
+done: что сделано (1 короткая фраза)
+why: зачем (1 короткая фраза)
+next: следующий пункт или «готово»
+</plan-step-summary>
+
+The app stores this block in semantic memory — after context reload you must still know current step, what is done, and what is next. Keep it extremely brief.
+4. Update PLAN.md: mark step `[x]`, update **Status** (`Current step`, `Last completed`).
 5. Stop after one step unless the user explicitly asked for full autopilot.
 
 ### Phase C — Small tasks
@@ -429,6 +436,7 @@ mod tests {
         let sys = compose_system_prompt("", &with_dev);
         assert!(sys.contains("PLAN.md"));
         assert!(sys.contains("Plan-driven developer workflow"));
+        assert!(sys.contains("<plan-step-summary>"));
 
         let no_dev = ChatContextPayload {
             scope: folder_scope.clone(),

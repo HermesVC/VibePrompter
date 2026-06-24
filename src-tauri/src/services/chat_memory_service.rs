@@ -1,6 +1,6 @@
 //! Chat session semantic memory (SQLite + embeddings).
 
-use crate::storage::repositories::{MemoryChunkRow, MemoryRepo};
+use crate::storage::repositories::{MemoryChunkRow, MemoryRepo, NewMemoryChunk};
 use crate::utils::AppResult;
 
 #[derive(Clone)]
@@ -34,11 +34,23 @@ impl ChatMemoryService {
         self.repo.delete_session(session_id).await
     }
 
+    pub async fn replace_session_chunks(
+        &self,
+        session_id: &str,
+        chunks: &[NewMemoryChunk],
+    ) -> AppResult<()> {
+        self.repo.replace_session_chunks(session_id, chunks).await
+    }
+
     pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
         self.repo.prune_session(session_id, keep_latest).await
     }
 
     pub async fn list_content_hashes(&self, session_id: &str) -> AppResult<Vec<String>> {
         self.repo.list_content_hashes(session_id).await
+    }
+
+    pub async fn count_chunks(&self, session_id: &str) -> AppResult<i64> {
+        self.repo.count_session_chunks(session_id).await
     }
 }

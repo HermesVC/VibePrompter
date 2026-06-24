@@ -1,13 +1,11 @@
 //! Sliding context window — keep recent turns in the prompt, compress older ones via LLM.
 
-use crate::models::{ChatMessage, CompletionParams};
-use crate::providers::{self, HttpConfig};
+use crate::models::ChatMessage;
+use crate::providers::HttpConfig;
 use crate::storage::repositories::ConnectionRow;
-use crate::utils::{AppError, AppResult};
+use crate::utils::AppResult;
 
-use super::session_summary::trim_summary_to_budget;
-
-const SUMMARY_FRACTION: f64 = 0.3;
+use super::session_summary::{summary_budget_chars, trim_summary_to_budget, SUMMARY_FRACTION};
 const MIN_ACTIVE_TURNS: usize = 2;
 const COMPRESS_TURN_MAX_CHARS: usize = 1_200;
 const COMPRESS_MAX_TURNS: usize = 24;
@@ -16,9 +14,10 @@ const COMPRESS_MAX_BODY_CHARS: usize = 12_000;
 const COMPRESS_SYSTEM: &str = "\
 You maintain long-term memory for an ongoing chat session.\n\
 You will receive PRIOR_MEMORY (may be empty) and EVICTED_TURNS (older messages leaving the active window).\n\
-Write UPDATED_MEMORY: one cohesive paragraph (3–8 sentences) merging prior memory with important facts from evicted turns.\n\
-Keep: topics, decisions, names, preferences, open tasks. Drop: filler and repetition.\n\
-Use the same language as the conversation. Output ONLY the memory text — no markdown, no labels.\n";
+Merge them into UPDATED_MEMORY: one cohesive paragraph keeping essential facts.\n\
+Target length: about 30% of the combined input (roughly 70% compression). Drop filler and repetition.\n\
+Keep: topics, decisions, names, preferences, open tasks, plan progress. Use the same language as the conversation.\n\
+Output ONLY the memory text — no markdown, no labels.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAggression {
@@ -257,46 +256,26 @@ pub async fn compress_evicted_turns(
 
     let prior = prior_memory.trim();
     let turns = format_evicted_turns(evicted, context_limit);
+    let combined_chars = prior.chars().count() + turns.chars().count();
+    let target_chars = super::memory_compress::compression_target_chars(combined_chars)
+        .min(summary_budget_chars(context_limit));
     let user_body = format!(
-        "PRIOR_MEMORY:\n{}\n\nEVICTED_TURNS:\n{}",
+        "PRIOR_MEMORY:\n{}\n\nEVICTED_TURNS:\n{}\n\nTARGET_LENGTH: ~{target_chars} characters (~30% of combined input)",
         if prior.is_empty() { "(empty)" } else { prior },
         turns
     );
 
-    let messages = vec![ChatMessage {
-        role: "user".into(),
-        content: user_body,
-        images: Vec::new(),
-    }];
-
-    let params = CompletionParams {
-        model: None,
-        temperature: Some(0.2),
-        max_tokens: Some(400),
-        system: Some(COMPRESS_SYSTEM.into()),
-        disable_thinking: Some(true),
-        retry: Some(false),
-    };
-
-    const COMPRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
-    let compress_future =
-        providers::complete(conn, messages, params, cfg);
-    let result = match tokio::time::timeout(COMPRESS_TIMEOUT, compress_future).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => {
-            return Err(AppError::Validation(
-                "memory compression timed out".into(),
-            ));
-        }
-    };
-    let merged = result.text.trim();
-    if merged.is_empty() {
-        return Err(AppError::Validation(
-            "memory compression returned empty text".into(),
-        ));
-    }
-    Ok(trim_summary_to_budget(merged, context_limit))
+    super::memory_compress::compress_with_system_retries(
+        conn,
+        cfg,
+        &user_body,
+        target_chars,
+        context_limit,
+        COMPRESS_SYSTEM,
+        false,
+    )
+    .await
+    .map(|merged| trim_summary_to_budget(&merged, context_limit))
 }
 
 #[cfg(test)]
@@ -315,7 +294,8 @@ mod tests {
     fn evicts_oldest_when_over_budget() {
         let messages: Vec<ChatMessage> =
             (0..8).map(|_| msg("user", &"word ".repeat(400))).collect();
-        let plan = plan_sliding_window_with_aggression(messages, 8192, "", 1024, WindowAggression::Normal);
+        let plan =
+            plan_sliding_window_with_aggression(messages, 8192, "", 1024, WindowAggression::Normal);
         assert!(!plan.evicted.is_empty());
         assert!(!plan.active.is_empty());
         assert_eq!(plan.evicted.len() + plan.active.len(), 8);
@@ -324,7 +304,13 @@ mod tests {
     #[test]
     fn keeps_all_when_fits() {
         let messages = vec![msg("user", "hi"), msg("assistant", "hello")];
-        let plan = plan_sliding_window_with_aggression(messages.clone(), 8192, "", 1024, WindowAggression::Normal);
+        let plan = plan_sliding_window_with_aggression(
+            messages.clone(),
+            8192,
+            "",
+            1024,
+            WindowAggression::Normal,
+        );
         assert!(plan.evicted.is_empty());
         assert_eq!(plan.active.len(), 2);
     }

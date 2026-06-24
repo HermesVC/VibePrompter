@@ -141,11 +141,7 @@ pub async fn chat_complete_stream(
     };
 
     if let Some(ctx) = chat_context.as_ref() {
-        crate::chat::augment_system_for_tools(
-            &mut system_prompt,
-            &row.prompt_format,
-            &ctx.scope,
-        );
+        crate::chat::augment_system_for_tools(&mut system_prompt, &row.prompt_format, &ctx.scope);
     }
 
     let cfg = state.connections.http_config().await;
@@ -225,6 +221,29 @@ pub async fn chat_complete_stream(
         );
         evicted_count = window_plan.evicted.len() as u32;
 
+        if crate::chat::session_memory_needs_compression(&memory, context_limit) {
+            let _ = app.emit(
+                &status_event,
+                serde_json::json!({
+                    "phase": "compressing_memory",
+                    "generation": stream_generation,
+                    "kind": "rolling",
+                }),
+            );
+            match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await {
+                Ok(compressed) => {
+                    memory = compressed;
+                    memory_compressed = true;
+                }
+                Err(e) => {
+                    tracing::warn!("rolling memory compression failed: {e}");
+                    memory = crate::chat::fallback_compress_session_memory(&memory, context_limit);
+                    memory_compressed = true;
+                }
+            }
+            emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
+        }
+
         let evicted_for_compression: Vec<ChatMessage> = window_plan
             .evicted
             .iter()
@@ -267,6 +286,31 @@ pub async fn chat_complete_stream(
                 compressed_evicted_keys.insert(message_memory_key(m));
             }
             emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
+
+            if crate::chat::session_memory_needs_compression(&memory, context_limit) {
+                let _ = app.emit(
+                    &status_event,
+                    serde_json::json!({
+                        "phase": "compressing_memory",
+                        "generation": stream_generation,
+                        "kind": "rolling",
+                    }),
+                );
+                match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await
+                {
+                    Ok(compressed) => {
+                        memory = compressed;
+                        memory_compressed = true;
+                    }
+                    Err(e) => {
+                        tracing::warn!("rolling memory post-merge compression failed: {e}");
+                        memory =
+                            crate::chat::fallback_compress_session_memory(&memory, context_limit);
+                        memory_compressed = true;
+                    }
+                }
+                emit_chat_memory_update(&app, &memory_event, &memory, context_limit);
+            }
         }
 
         if !window_plan.evicted.is_empty() && !session_id.trim().is_empty() {
@@ -492,6 +536,21 @@ pub async fn chat_complete_stream(
                 let _ = app.emit(&err_event, "cancelled");
                 return Err(AppError::Validation("cancelled".into()));
             } else {
+                if !session_id.trim().is_empty() {
+                    if let Some(inner) =
+                        crate::workspace::plan_memory::extract_plan_step_summary(&r.text)
+                    {
+                        crate::chat::index_plan_step_summary(
+                            &state.chat_memory,
+                            &row,
+                            &cfg,
+                            &session_id,
+                            &inner,
+                            &mut indexed_chunk_hashes,
+                        )
+                        .await;
+                    }
+                }
                 let _ = app.emit(&done_event, &r);
                 state.connections.mark_used(&row.id).await;
             }
@@ -797,10 +856,7 @@ pub async fn chat_index_context_artifacts(
         .into_iter()
         .collect();
 
-    let pairs: Vec<(String, String)> = artifacts
-        .into_iter()
-        .map(|a| (a.path, a.content))
-        .collect();
+    let pairs: Vec<(String, String)> = artifacts.into_iter().map(|a| (a.path, a.content)).collect();
 
     crate::chat::index_context_artifacts(
         &state.chat_memory,
@@ -852,6 +908,42 @@ pub async fn chat_index_folder_outline(
         &session_id,
         &input.folder_path,
         &input.outline_summary,
+        &mut indexed_hashes,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// Best-effort semantic memory for plan step progress summaries.
+#[tauri::command]
+pub async fn chat_index_plan_step_summary(
+    state: State<'_, AppState>,
+    session_id: String,
+    connection_id: Option<String>,
+    mode_id: Option<String>,
+    summary: String,
+) -> Result<(), AppError> {
+    if session_id.trim().is_empty() || summary.trim().is_empty() {
+        return Ok(());
+    }
+
+    let row = resolve_chat_connection_row(&state, connection_id, mode_id).await?;
+    let cfg = state.connections.http_config().await;
+    let mut indexed_hashes: std::collections::HashSet<String> = state
+        .chat_memory
+        .list_content_hashes(&session_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    crate::chat::index_plan_step_summary(
+        &state.chat_memory,
+        &row,
+        &cfg,
+        &session_id,
+        &summary,
         &mut indexed_hashes,
     )
     .await;

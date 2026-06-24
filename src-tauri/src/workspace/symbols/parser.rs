@@ -42,8 +42,12 @@ pub fn find_symbol<'a>(outline: &'a FileOutline, query: &str) -> Option<&'a Symb
         .find(|s| {
             s.name.eq_ignore_ascii_case(q)
                 || s.qualified_name.eq_ignore_ascii_case(q)
-                || s.qualified_name.to_ascii_lowercase().ends_with(&format!("::{q_lower}"))
-                || s.qualified_name.to_ascii_lowercase().ends_with(&format!(".{q_lower}"))
+                || s.qualified_name
+                    .to_ascii_lowercase()
+                    .ends_with(&format!("::{q_lower}"))
+                || s.qualified_name
+                    .to_ascii_lowercase()
+                    .ends_with(&format!(".{q_lower}"))
         })
         .or_else(|| {
             outline.symbols.iter().find(|s| {
@@ -334,7 +338,10 @@ fn python_block_end(lines: &[&str], start_idx: usize) -> u32 {
 /// Compact multi-line summary for folder scope prompts.
 pub fn format_outline_text(outline: &FileOutline) -> String {
     if !outline.parseable {
-        return format!("{} ({} lines, use read_file)", outline.path, outline.line_count);
+        return format!(
+            "{} ({} lines, use read_file)",
+            outline.path, outline.line_count
+        );
     }
     if outline.symbols.is_empty() {
         return format!("{} (no symbols detected)", outline.path);
@@ -372,7 +379,10 @@ class UserService {
     fn parses_python_def() {
         let src = "class Foo:\n    def bar(self):\n        return 1\n";
         let outline = outline_for_file("m.py", src);
-        assert!(outline.symbols.iter().any(|s| s.qualified_name == "Foo.bar"));
+        assert!(outline
+            .symbols
+            .iter()
+            .any(|s| s.qualified_name == "Foo.bar"));
     }
 
     #[test]

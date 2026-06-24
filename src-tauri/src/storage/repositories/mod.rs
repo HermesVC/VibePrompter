@@ -12,7 +12,7 @@ pub mod shortcut_repo;
 pub use analytics_repo::AnalyticsRepo;
 pub use connection_repo::{ConnectionRepo, ConnectionRow};
 pub use history_repo::HistoryRepo;
-pub use memory_repo::{cosine_similarity, MemoryChunkRow, MemoryRepo};
+pub use memory_repo::{cosine_similarity, MemoryChunkRow, MemoryRepo, NewMemoryChunk};
 pub use mode_repo::ModeRepo;
 pub use provider_repo::ProviderRepo;
 pub use settings_repo::SettingsRepo;

@@ -6,17 +6,18 @@ use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::AppResult;
 use crate::workspace::symbols::{find_symbol, outline_for_file};
 
-use super::helpers::{cap_tool_text, ensure_readable_path};
 use super::super::context::ToolExecutionContext;
 use super::super::ToolExecutionResult;
+use super::helpers::{cap_tool_text, ensure_readable_path};
 
 pub const NAME: &str = "read_symbol";
 
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Read the body of a class, method, or function by symbol name in PHP/JS/Python files."
-            .into(),
+        description:
+            "Read the body of a class, method, or function by symbol name in PHP/JS/Python files."
+                .into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -34,7 +35,10 @@ pub fn tool_definition() -> ToolDefinition {
     }
 }
 
-pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<ToolExecutionResult> {
+pub async fn execute(
+    ctx: &ToolExecutionContext,
+    arguments: Value,
+) -> AppResult<ToolExecutionResult> {
     let raw_path = arguments
         .get("path")
         .and_then(|v| v.as_str())
@@ -64,7 +68,10 @@ pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<
 
     let start = entry.line_start.saturating_sub(1).max(1);
     let end = entry.line_end.max(start);
-    let slice = ctx.workspace.read_file(&path, Some(start), Some(end)).await?;
+    let slice = ctx
+        .workspace
+        .read_file(&path, Some(start), Some(end))
+        .await?;
     let (content, truncated) = cap_tool_text(&slice.content);
 
     Ok(ToolExecutionResult {

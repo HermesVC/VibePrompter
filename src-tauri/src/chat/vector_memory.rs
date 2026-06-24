@@ -7,7 +7,12 @@ use sha2::{Digest, Sha256};
 use crate::models::ChatMessage;
 use crate::providers::{self, HttpConfig};
 use crate::services::ChatMemoryService;
-use crate::storage::repositories::ConnectionRow;
+use crate::storage::repositories::{ConnectionRow, MemoryChunkRow, NewMemoryChunk};
+
+use super::memory_compress::{
+    compress_text_via_llm, compression_target_chars, fallback_compress_text,
+    MEMORY_PRESSURE_FRACTION,
+};
 
 const CHUNK_MAX_CHARS: usize = 700;
 const TOP_K: usize = 4;
@@ -47,6 +52,7 @@ pub enum MemoryKind {
     Code,
     UserPreference,
     ContextArtifact,
+    PlanProgress,
     General,
 }
 
@@ -60,6 +66,7 @@ impl MemoryKind {
             Self::Code => "code",
             Self::UserPreference => "preference",
             Self::ContextArtifact => "context-file",
+            Self::PlanProgress => "plan",
             Self::General => "note",
         }
     }
@@ -73,6 +80,7 @@ impl MemoryKind {
             Self::Code => 0.04,
             Self::UserPreference => 0.04,
             Self::ContextArtifact => 0.11,
+            Self::PlanProgress => 0.13,
             Self::General => 0.0,
         }
     }
@@ -133,9 +141,9 @@ pub async fn index_evicted_messages(
                 Err(e) => tracing::warn!("vector memory insert: {e}"),
             }
         }
-        if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
-            tracing::warn!("vector memory prune: {e}");
-        }
+    }
+    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+        tracing::warn!("vector memory maintain: {e}");
     }
 }
 
@@ -193,9 +201,9 @@ pub async fn index_context_artifacts(
                 Err(e) => tracing::warn!("context artifact memory insert: {e}"),
             }
         }
-        if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
-            tracing::warn!("vector memory prune: {e}");
-        }
+    }
+    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+        tracing::warn!("vector memory maintain: {e}");
     }
 }
 
@@ -221,8 +229,51 @@ pub async fn index_folder_outline(
     if indexed_hashes.contains(&hash) {
         return;
     }
-    insert_single_chunk(memory, conn, cfg, session_id, "symbol-index", &text, &hash, indexed_hashes)
-        .await;
+    insert_single_chunk(
+        memory,
+        conn,
+        cfg,
+        session_id,
+        "symbol-index",
+        &text,
+        &hash,
+        indexed_hashes,
+    )
+    .await;
+}
+
+/// Index a brief plan-step summary block into session vector memory.
+pub async fn index_plan_step_summary(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    summary_inner: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    let inner = summary_inner.trim();
+    if session_id.trim().is_empty() || inner.is_empty() {
+        return;
+    }
+    let text = crate::workspace::plan_memory::format_plan_step_for_memory(inner);
+    if text.is_empty() {
+        return;
+    }
+    let hash = chunk_content_hash("plan-step", &text);
+    if indexed_hashes.contains(&hash) {
+        return;
+    }
+    insert_single_chunk(
+        memory,
+        conn,
+        cfg,
+        session_id,
+        "plan-step",
+        &text,
+        &hash,
+        indexed_hashes,
+    )
+    .await;
 }
 
 /// Index workspace tool read results (read_file, read_symbol, file_outline).
@@ -245,11 +296,7 @@ pub async fn index_tool_results(
         }
         let (role, text) = match r.name.as_str() {
             "file_outline" => {
-                let path = r
-                    .output
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let path = r.output.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let symbols = r
                     .output
                     .get("symbols")
@@ -258,17 +305,10 @@ pub async fn index_tool_results(
                 if path.is_empty() {
                     continue;
                 }
-                (
-                    "symbol-index",
-                    format!("REPO: {path}\nSYMBOLS:\n{symbols}"),
-                )
+                ("symbol-index", format!("REPO: {path}\nSYMBOLS:\n{symbols}"))
             }
             "read_file" | "read_symbol" => {
-                let path = r
-                    .output
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let path = r.output.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let content = r
                     .output
                     .get("content")
@@ -328,9 +368,154 @@ pub async fn index_tool_results(
                 Err(e) => tracing::warn!("workspace tool memory insert: {e}"),
             }
         }
-        if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
-            tracing::warn!("vector memory prune: {e}");
+    }
+    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+        tracing::warn!("vector memory maintain: {e}");
+    }
+}
+
+/// When the chunk store nears its cap, LLM-compress the full extract to ~30% and replace chunks.
+pub async fn maybe_compress_vector_session(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    indexed_hashes: &mut HashSet<String>,
+) -> Result<(), crate::utils::AppError> {
+    let count = memory.count_chunks(session_id).await?;
+    let threshold = vector_compress_chunk_threshold();
+    if count < threshold {
+        return Ok(());
+    }
+
+    let chunks = memory.list_chunks(session_id).await?;
+    if chunks.is_empty() {
+        return Ok(());
+    }
+
+    let full_text = format_chunks_for_compression(&chunks);
+    let source_chars = full_text.chars().count();
+    if source_chars < 320 {
+        return Ok(());
+    }
+
+    let target_chars = compression_target_chars(source_chars);
+    tracing::info!(
+        "vector memory compression: {count} chunks, {source_chars} chars → ~{target_chars} chars"
+    );
+
+    let context_limit = conn.context_window_size.max(8192);
+    let compressed =
+        match compress_text_via_llm(conn, cfg, &full_text, target_chars, context_limit).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                "vector memory LLM compression failed after retries: {e}, using truncate fallback"
+            );
+                fallback_compress_text(&full_text, context_limit)
+            }
+        };
+
+    let body = format!("COMPRESSED_MEMORY:\n{compressed}");
+    let parts: Vec<String> = split_text_chunks(&body, CHUNK_MAX_CHARS);
+    if parts.is_empty() {
+        return Ok(());
+    }
+    let embeddings = match providers::embed_texts(conn, cfg, &parts, None).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("vector memory re-index after compression failed: {e}");
+            return Ok(());
         }
+    };
+    if embeddings.len() != parts.len() {
+        tracing::warn!(
+            "vector memory re-index returned {} embeddings for {} chunks; keeping old memory",
+            embeddings.len(),
+            parts.len()
+        );
+        return Ok(());
+    }
+
+    let replacement: Vec<NewMemoryChunk> = parts
+        .into_iter()
+        .enumerate()
+        .zip(embeddings.into_iter())
+        .map(|((i, part), embedding)| {
+            let role = "compressed";
+            let content_hash = chunk_content_hash(role, &format!("{session_id}:{i}\0{part}"));
+            NewMemoryChunk {
+                role: role.into(),
+                content: part,
+                content_hash,
+                embedding,
+            }
+        })
+        .collect();
+
+    memory
+        .replace_session_chunks(session_id, &replacement)
+        .await?;
+
+    reload_indexed_hashes(memory, session_id, indexed_hashes).await;
+    Ok(())
+}
+
+async fn maintain_vector_session(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    indexed_hashes: &mut HashSet<String>,
+) -> Result<(), crate::utils::AppError> {
+    maybe_compress_vector_session(memory, conn, cfg, session_id, indexed_hashes).await?;
+    let count = memory.count_chunks(session_id).await?;
+    if count > MAX_SESSION_CHUNKS {
+        memory.prune_session(session_id, MAX_SESSION_CHUNKS).await?;
+        reload_indexed_hashes(memory, session_id, indexed_hashes).await;
+    }
+    Ok(())
+}
+
+fn vector_compress_chunk_threshold() -> i64 {
+    (MAX_SESSION_CHUNKS as f64 * MEMORY_PRESSURE_FRACTION) as i64
+}
+
+fn format_chunks_for_compression(chunks: &[MemoryChunkRow]) -> String {
+    chunks
+        .iter()
+        .map(|c| format!("[{}] {}", c.role.trim(), c.content.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn split_text_chunks(text: &str, max_chars: usize) -> Vec<String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Vec::new();
+    }
+    if t.chars().count() <= max_chars {
+        return vec![t.to_string()];
+    }
+    let chars: Vec<char> = t.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let end = (start + max_chars).min(chars.len());
+        out.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    out
+}
+
+async fn reload_indexed_hashes(
+    memory: &ChatMemoryService,
+    session_id: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if let Ok(hashes) = memory.list_content_hashes(session_id).await {
+        indexed_hashes.clear();
+        indexed_hashes.extend(hashes);
     }
 }
 
@@ -363,8 +548,8 @@ async fn insert_single_chunk(
         }
         Err(e) => tracing::warn!("workspace memory insert: {e}"),
     }
-    if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
-        tracing::warn!("vector memory prune: {e}");
+    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+        tracing::warn!("vector memory maintain: {e}");
     }
 }
 
@@ -511,6 +696,14 @@ fn messages_to_chunks(messages: &[ChatMessage]) -> Vec<(String, String)> {
         if text.is_empty() {
             continue;
         }
+        if role == "assistant" {
+            if let Some(inner) = crate::workspace::plan_memory::extract_plan_step_summary(text) {
+                let mem = crate::workspace::plan_memory::format_plan_step_for_memory(&inner);
+                if !mem.is_empty() {
+                    out.push(("plan-step".into(), mem));
+                }
+            }
+        }
         if classify_memory(&role, text).is_none() {
             continue;
         }
@@ -541,6 +734,12 @@ fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
     }
     if role == "code-read" {
         return Some(MemoryKind::Code);
+    }
+    if role == "plan-step" {
+        return Some(MemoryKind::PlanProgress);
+    }
+    if role == "compressed" {
+        return Some(MemoryKind::Important);
     }
     let cleaned = compact_whitespace(text);
     let lower = cleaned.to_lowercase();
@@ -623,6 +822,17 @@ fn explicit_memory_marker(lower: &str) -> Option<MemoryKind> {
         .trim_start()
         .trim_start_matches(|c: char| matches!(c, '[' | '(' | '#' | '!' | '-' | '*'))
         .trim_start();
+    if starts_with_any(
+        marker,
+        &[
+            "plan_progress:",
+            "plan progress:",
+            "plan-progress:",
+            "plan progress ",
+        ],
+    ) {
+        return Some(MemoryKind::PlanProgress);
+    }
     if starts_with_any(
         marker,
         &[
@@ -849,13 +1059,14 @@ fn chunk_content_hash(role: &str, text: &str) -> String {
 }
 
 fn is_context_artifact_path(path: &str) -> bool {
-    let norm = path.replace('\\', "/").trim().trim_start_matches("./").to_string();
+    let norm = path
+        .replace('\\', "/")
+        .trim()
+        .trim_start_matches("./")
+        .to_string();
     let lower = norm.to_ascii_lowercase();
     let base = lower.rsplit('/').next().unwrap_or(lower.as_str());
-    let stem = base
-        .rsplit_once('.')
-        .map(|(s, _)| s)
-        .unwrap_or(base);
+    let stem = base.rsplit_once('.').map(|(s, _)| s).unwrap_or(base);
     if let Some((_, ext)) = base.rsplit_once('.') {
         if matches!(ext, "md" | "mdx" | "markdown" | "txt" | "rst" | "adoc") {
             return true;
@@ -1004,5 +1215,66 @@ mod tests {
         }]);
         assert!(out.contains("[decision] User:"));
         assert!(!out.contains("---"));
+    }
+
+    #[test]
+    fn plan_step_summary_is_extracted_even_when_assistant_reply_is_low_signal() {
+        let chunks = messages_to_chunks(&[ChatMessage {
+            role: "assistant".into(),
+            content: "ok\n<plan-step-summary>\n\nstep: 3 / 7\n  done: patched repo\nwhy: invariant\nnext: tests\n\n</plan-step-summary>".into(),
+            images: vec![],
+        }]);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].0, "plan-step");
+        assert!(chunks[0].1.starts_with("PLAN_PROGRESS:"));
+        assert!(chunks[0].1.contains("step: 3 / 7"));
+        assert!(!chunks[0].1.contains("\n\n"));
+    }
+
+    #[test]
+    fn explicit_plan_progress_marker_survives_adornment_and_case() {
+        let kind = classify_memory("assistant", "  ### PLAN PROGRESS: next step is tests");
+        assert_eq!(kind, Some(MemoryKind::PlanProgress));
+    }
+
+    #[test]
+    fn compressed_chunks_are_always_important_memory() {
+        let kind = classify_memory("compressed", "short text that would normally be low signal");
+        assert_eq!(kind, Some(MemoryKind::Important));
+    }
+
+    #[test]
+    fn split_text_chunks_respects_char_boundaries_and_never_emits_empty_parts() {
+        let input = "  абв😀где😀жзи  ";
+        let parts = split_text_chunks(input, 4);
+
+        assert_eq!(parts, vec!["абв😀", "где😀", "жзи"]);
+        assert!(parts.iter().all(|part| !part.is_empty()));
+        assert!(parts.iter().all(|part| part.chars().count() <= 4));
+        assert_eq!(parts.join(""), input.trim());
+    }
+
+    #[test]
+    fn format_chunks_for_compression_trims_roles_and_content_without_reordering() {
+        let chunks = vec![
+            MemoryChunkRow {
+                id: 10,
+                role: " user ".into(),
+                content: " first\n".into(),
+                embedding: vec![1.0],
+            },
+            MemoryChunkRow {
+                id: 11,
+                role: "plan-step".into(),
+                content: "\nPLAN_PROGRESS:\nnext: tests ".into(),
+                embedding: vec![1.0],
+            },
+        ];
+
+        assert_eq!(
+            format_chunks_for_compression(&chunks),
+            "[user] first\n\n[plan-step] PLAN_PROGRESS:\nnext: tests"
+        );
     }
 }

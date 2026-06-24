@@ -3,7 +3,7 @@
 export const SESSION_SUMMARY_MAX_FRACTION = 0.3;
 
 export const SESSION_MEMORY_HINT =
-  'При переполнении контекста старые реплики сжимаются в память диалога через LLM (до 30% окна).';
+  'При переполнении контекста старые реплики сжимаются в память диалога через LLM. При ~85% лимита вся выжимка сжимается до ~30% объёма (коэф. 70%).';
 
 export function extractVpSummary(text: string): { body: string; summary: string | null } {
   const open = '<vp-summary>';

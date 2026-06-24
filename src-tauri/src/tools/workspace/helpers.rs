@@ -32,7 +32,9 @@ pub fn ensure_readable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<
         }
     }
     if matches_deny(&ctx.settings.deny_globs, &path) {
-        return Err(AppError::Validation(format!("path denied by workspace policy: {path}")));
+        return Err(AppError::Validation(format!(
+            "path denied by workspace policy: {path}"
+        )));
     }
     if !file_extension_allowed(&ctx.settings, &path) {
         return Err(AppError::Validation(format!(
@@ -56,9 +58,11 @@ pub fn ensure_listable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<
 }
 
 fn matches_deny(patterns: &[String], path: &str) -> bool {
-    patterns
-        .iter()
-        .any(|p| Pattern::new(&p.replace('\\', "/")).map(|pat| pat.matches(path)).unwrap_or(false))
+    patterns.iter().any(|p| {
+        Pattern::new(&p.replace('\\', "/"))
+            .map(|pat| pat.matches(path))
+            .unwrap_or(false)
+    })
 }
 
 fn file_extension_allowed(settings: &WorkspaceSettings, path: &str) -> bool {
@@ -70,8 +74,22 @@ fn file_extension_allowed(settings: &WorkspaceSettings, path: &str) -> bool {
     if list.is_empty() {
         return matches!(
             ext.as_str(),
-            ".md" | ".php" | ".ts" | ".tsx" | ".js" | ".jsx" | ".rs" | ".json" | ".yaml" | ".yml"
-                | ".toml" | ".css" | ".html" | ".sql" | ".py" | ".pyw"
+            ".md"
+                | ".php"
+                | ".ts"
+                | ".tsx"
+                | ".js"
+                | ".jsx"
+                | ".rs"
+                | ".json"
+                | ".yaml"
+                | ".yml"
+                | ".toml"
+                | ".css"
+                | ".html"
+                | ".sql"
+                | ".py"
+                | ".pyw"
         );
     }
     list.iter().any(|e| e.eq_ignore_ascii_case(&ext))

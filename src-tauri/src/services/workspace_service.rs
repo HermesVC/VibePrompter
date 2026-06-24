@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 
 use crate::storage::repositories::SettingsRepo;
 use crate::utils::{AppError, AppResult};
-use crate::workspace::{
-    compose_system_prompt, extract_snippet_output, list_dir_recursive,
-    list_modifiers, read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo,
-    FileContentDto, FolderScopeDto, PolicyDecision, PolicyEngine, WorkspaceSettings,
-    WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
-};
 use crate::workspace::symbols::{format_outline_text, outline_for_file};
+use crate::workspace::{
+    compose_system_prompt, extract_snippet_output, list_dir_recursive, list_modifiers,
+    read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo, FileContentDto,
+    FolderScopeDto, PolicyDecision, PolicyEngine, WorkspaceSettings, WritePreviewDto,
+    WriteResultDto, WORKSPACE_SETTINGS_KEY,
+};
 
 #[derive(Clone)]
 pub struct WorkspaceService {
@@ -129,11 +129,7 @@ impl WorkspaceService {
         };
 
         Ok(FolderScopeDto {
-            path: if rel.is_empty() {
-                ".".into()
-            } else {
-                rel
-            },
+            path: if rel.is_empty() { ".".into() } else { rel },
             tree_summary,
             outline_summary,
             files: Vec::new(),

@@ -24,7 +24,7 @@ import {
   stripVpSummaryForDisplay,
   trimSummaryToBudget,
 } from '@shared/lib/chatSessionSummary';
-import { indexContextArtifacts } from '@shared/lib/chatMemoryApi';
+import { indexContextArtifacts, indexPlanStepSummary } from '@shared/lib/chatMemoryApi';
 import {
   parseGeneratedFileBlocks,
   extractContextArtifacts,
@@ -32,6 +32,7 @@ import {
   stripGeneratedFileBlocks,
   type GeneratedFileBlock,
 } from '@shared/lib/generatedFiles';
+import { extractPlanStepSummary } from '@shared/lib/planMemory';
 
 import {
   clipboardHasAttachableFiles,
@@ -440,6 +441,13 @@ export function ChatWindow() {
 
   const processScopedCompletion = useCallback(
     (payload: { scopedText?: string; text: string }) => {
+      const planSummary = extractPlanStepSummary(payload.text);
+      if (planSummary) {
+        void indexPlanStepSummary(sessionIdRef.current, planSummary, {
+          connectionId: connectionId || undefined,
+          modeId: modeId ?? undefined,
+        }).catch(() => {});
+      }
       const artifacts = extractContextArtifacts(
         payload.text,
         chatContextRef.current.scope
