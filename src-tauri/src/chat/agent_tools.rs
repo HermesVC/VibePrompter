@@ -19,6 +19,9 @@ You can inspect the project with these tools (declare via tool_call blocks):
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
 
 Use relative paths from the workspace root. Prefer `read_file` with line ranges for large files.
+When you need to inspect files, output only tool_call blocks in this exact format, then wait:
+<|tool_call>call:read_file{path:<|"|>relative/path.ext<|"|>}<|tool_call|>
+Do not say "I will inspect/read/check" unless you also emit the needed tool_call block in the same turn.
 After a tool_call, wait for tool results before answering the user."#;
 
 /// Scopes where the model should use filesystem tools instead of inlined bodies.
@@ -279,6 +282,24 @@ mod tests {
         let msg = format_tool_followup_user_message("gemma4", &results);
         assert!(msg.contains("<|tool_response>"));
         assert!(msg.contains("read_file"));
+    }
+
+    #[test]
+    fn tool_protocol_shows_exact_call_syntax() {
+        let mut system = Some("base".to_string());
+        let scope = ChatScope::Folder {
+            path: "src/app".into(),
+            tree_summary: String::new(),
+            outline_summary: String::new(),
+            files: vec![],
+            truncated: false,
+        };
+
+        augment_system_for_tools(&mut system, "openai_messages", &scope);
+        let system = system.unwrap();
+
+        assert!(system.contains("<|tool_call>call:read_file"));
+        assert!(system.contains("Do not say \"I will inspect/read/check\""));
     }
 
     #[test]

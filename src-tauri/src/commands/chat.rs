@@ -17,6 +17,10 @@ file contents
 ```
 Use one fence per file. Put no prose inside file fences. Use stable relative workspace paths. Do not merge multiple files into one fence. If only one file is needed, you may still use one file fence.
 For plans, notes, and markdown context files (.md), use clear filenames (e.g. PLAN.md, notes/context.md) — the app remembers these paths in semantic memory."#;
+const DIAGNOSTIC_INSPECTION_PROTOCOL: &str = r#"Diagnostic/debug request in workspace scope:
+- First inspect the relevant files with workspace tool_call blocks. Do not output generated file fences, rewrites, or replacement code before tool results.
+- If you cannot call tools, say which exact files you need to read; do not invent file contents.
+- After tool results, explain the likely root cause first. Only then provide a minimal patch if the user explicitly asked to fix it."#;
 
 struct AutoContinueOutput {
     result: CompletionResult,
@@ -108,6 +112,7 @@ pub async fn chat_complete_stream(
         system_prompt = Some(state.workspace.compose_system(&base, ctx));
     }
     append_file_artifact_protocol(&mut system_prompt);
+    append_diagnostic_inspection_protocol(&mut system_prompt, &messages, chat_context.as_ref());
 
     let resolved = connection_id.clone();
     let row = match resolved.as_deref().filter(|s| !s.is_empty()) {
@@ -609,6 +614,61 @@ fn append_file_artifact_protocol(system_prompt: &mut Option<String>) {
     }
     sys.push_str(FILE_ARTIFACT_PROTOCOL);
     *system_prompt = Some(sys);
+}
+
+fn append_diagnostic_inspection_protocol(
+    system_prompt: &mut Option<String>,
+    messages: &[ChatMessage],
+    ctx: Option<&crate::workspace::ChatContextPayload>,
+) {
+    let Some(ctx) = ctx else {
+        return;
+    };
+    if !scope_needs_tool_inspection(&ctx.scope) {
+        return;
+    }
+    let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") else {
+        return;
+    };
+    if !user_requests_diagnosis(&last_user.content) {
+        return;
+    }
+
+    let mut sys = system_prompt.take().unwrap_or_default();
+    if !sys.trim().is_empty() {
+        sys.push_str("\n\n");
+    }
+    sys.push_str(DIAGNOSTIC_INSPECTION_PROTOCOL);
+    *system_prompt = Some(sys);
+}
+
+fn scope_needs_tool_inspection(scope: &crate::workspace::ChatScope) -> bool {
+    matches!(
+        scope,
+        crate::workspace::ChatScope::Folder { .. } | crate::workspace::ChatScope::Workspace { .. }
+    )
+}
+
+fn user_requests_diagnosis(text: &str) -> bool {
+    let t = text.to_lowercase();
+    const MARKERS: &[&str] = &[
+        "разбер",
+        "что не так",
+        "почему",
+        "не работает",
+        "сломал",
+        "сломалось",
+        "баг",
+        "ошибк",
+        "debug",
+        "diagnos",
+        "what is wrong",
+        "why",
+        "find the problem",
+        "root cause",
+        "game over",
+    ];
+    MARKERS.iter().any(|m| t.contains(m))
 }
 
 async fn complete_stream_with_auto_continue(
@@ -1355,5 +1415,87 @@ mod chat_command_tests {
         assert!(prompt.contains("generated file fence"));
         assert!(prompt.contains("close the markdown fence"));
         assert!(prompt.contains("next ```file"));
+    }
+
+    #[test]
+    fn diagnostic_folder_request_requires_tool_inspection_before_file_fences() {
+        let scope = crate::workspace::ChatScope::Folder {
+            path: "test".into(),
+            tree_summary: "index.html\njs/snake.js".into(),
+            outline_summary: String::new(),
+            files: vec![],
+            truncated: false,
+        };
+        let ctx = crate::workspace::ChatContextPayload {
+            scope,
+            modifiers: vec!["developer".into()],
+            language_id: None,
+        };
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: "не работает, на экране всегда game over, разберись".into(),
+            images: vec![],
+        }];
+        let mut system = Some("base".to_string());
+
+        append_diagnostic_inspection_protocol(&mut system, &messages, Some(&ctx));
+        let system = system.unwrap();
+
+        assert!(system.contains("Diagnostic/debug request in workspace scope"));
+        assert!(system.contains("First inspect the relevant files"));
+        assert!(system.contains("Do not output generated file fences"));
+    }
+
+    #[test]
+    fn non_diagnostic_folder_edit_does_not_get_inspection_gate() {
+        let scope = crate::workspace::ChatScope::Folder {
+            path: "test".into(),
+            tree_summary: "index.html".into(),
+            outline_summary: String::new(),
+            files: vec![],
+            truncated: false,
+        };
+        let ctx = crate::workspace::ChatContextPayload {
+            scope,
+            modifiers: vec!["developer".into()],
+            language_id: None,
+        };
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: "добавь кнопку рестарта".into(),
+            images: vec![],
+        }];
+        let mut system = Some("base".to_string());
+
+        append_diagnostic_inspection_protocol(&mut system, &messages, Some(&ctx));
+
+        assert_eq!(system.as_deref(), Some("base"));
+    }
+
+    #[test]
+    fn file_scope_diagnosis_uses_inline_file_without_extra_gate() {
+        let scope = crate::workspace::ChatScope::File {
+            path: "test/game.js".into(),
+            content: "const gameOver = true;".into(),
+            content_hash: String::new(),
+            line_start: 1,
+            line_end: 1,
+            language_id: Some("javascript".into()),
+        };
+        let ctx = crate::workspace::ChatContextPayload {
+            scope,
+            modifiers: vec![],
+            language_id: None,
+        };
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: "почему всегда game over?".into(),
+            images: vec![],
+        }];
+        let mut system = Some("base".to_string());
+
+        append_diagnostic_inspection_protocol(&mut system, &messages, Some(&ctx));
+
+        assert_eq!(system.as_deref(), Some("base"));
     }
 }
