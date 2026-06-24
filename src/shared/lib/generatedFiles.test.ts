@@ -86,8 +86,21 @@ describe('parseGeneratedFileBlocks', () => {
     expect(files).toHaveLength(0);
   });
 
+  it('ignores file fences with old_text/new_text labels (not full files)', () => {
+    const files = parseGeneratedFileBlocks(
+      '```file:vp/src/a.php\nold_text:\nforeach ($projectUids as $x) {\nnew_text:\nforeach ($projectUuids as $x) {\n```'
+    );
+    expect(files).toHaveLength(0);
+  });
+
   it('parses file:path header without space', () => {
     const files = parseGeneratedFileBlocks('```file:src/a.ts\nexport const a = 1;\n```');
     expect(files[0]?.path).toBe('src/a.ts');
+  });
+
+  it('ignores whole php file fences (apply_patch handles edits)', () => {
+    const body = '<?php\n' + 'line();\n'.repeat(40);
+    const files = parseGeneratedFileBlocks(`\`\`\`file:vp/src/a.php\n${body}\`\`\``);
+    expect(files).toHaveLength(0);
   });
 });

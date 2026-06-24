@@ -8,8 +8,9 @@ pub mod symbols;
 pub mod types;
 
 pub use context::{
-    compose_system_prompt, extract_snippet_output, list_modifiers, normalize_chat_context,
-    user_requests_code_edit,
+    compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output,
+    list_modifiers, normalize_chat_context, scope_user_context_block, user_requests_code_edit,
+    ComposeSystemOptions,
 };
 pub use fs::{
     list_dir_recursive, read_absolute_file_for_context, read_file_range, rel_display_path,

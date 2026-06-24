@@ -33,7 +33,12 @@ function scanGeneratedFileBlocks(text: string): GeneratedFileBlock[] {
     const rawContent = text.slice(contentStart, contentEnd).replace(/\r\n/g, '\n');
     const content = complete ? rawContent.replace(/\n$/, '') : rawContent;
 
-    if (isPatchEditsFenceContent(content)) {
+    if (isPatchWireFenceContent(content)) {
+      FENCE_RE.lastIndex = endOffset;
+      continue;
+    }
+
+    if (isWholeSourceFileFenceContent(content, parsed.path)) {
       FENCE_RE.lastIndex = endOffset;
       continue;
     }
@@ -116,9 +121,30 @@ function unquote(s: string | undefined): string | null {
   return value;
 }
 
-/** Patch wire format (`edits:[...]`) — not a full-file body; handled via apply_patch tools. */
+const SOURCE_FILE_EXT = new Set(['php', 'ts', 'tsx', 'js', 'jsx', 'rs', 'py', 'go', 'java', 'cs', 'cpp', 'c', 'h']);
+
+/** Patch wire format — not a full-file body; handled via apply_patch tools. */
+export function isPatchWireFenceContent(content: string): boolean {
+  const t = content.trim();
+  if (/^\s*edits\s*:\s*[\[{]/i.test(t)) return true;
+  if (/^\s*old_text\s*:/im.test(t) && /\bnew_text\s*:/im.test(t)) return true;
+  if (/call\s*:\s*apply_patch\b/i.test(t)) return true;
+  return false;
+}
+
+/** @deprecated Use {@link isPatchWireFenceContent} */
 export function isPatchEditsFenceContent(content: string): boolean {
-  return /^\s*edits\s*:\s*[\[{]/i.test(content.trim());
+  return isPatchWireFenceContent(content);
+}
+
+/** Large source bodies from `file:` fences — use apply_patch tools, not full replace. */
+export function isWholeSourceFileFenceContent(content: string, path: string): boolean {
+  if (isPatchWireFenceContent(content)) return false;
+  const lines = content.trim().split('\n').length;
+  if (lines <= 25) return false;
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  if (SOURCE_FILE_EXT.has(ext)) return true;
+  return lines > 80;
 }
 
 export function normalizeGeneratedPath(path: string): string {

@@ -24,6 +24,7 @@ const RETRIEVAL_FRACTION: f64 = 0.035;
 const RETRIEVAL_MIN_CHARS: usize = 480;
 const RETRIEVAL_MAX_CHARS: usize = 2_200;
 const EXCERPT_MAX_CHARS: usize = 420;
+const CODE_READ_MEMORY_CHARS: usize = 280;
 const INDEX_BATCH: usize = 8;
 const MAX_SESSION_CHUNKS: i64 = 1_500;
 /// Embed models (nomic) truncate around 2048 tokens — keep query well under that.
@@ -438,28 +439,17 @@ pub async fn index_tool_results(
                     (Some(s), Some(e)) => format!("\nLINES: {s}-{e}"),
                     _ => String::new(),
                 };
-                ("code-read", format!("{header}{lines}\n---\n{content}"))
+                let excerpt = compact_excerpt(content, CODE_READ_MEMORY_CHARS);
+                ("code-read", format!("{header}{lines}\n---\n{excerpt}"))
             }
-            "apply_patch" => {
-                let path = r.output.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                let edits = r
-                    .output
-                    .get("editsApplied")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let hash = r
-                    .output
-                    .get("contentHash")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if path.is_empty() {
+            "apply_patch" if r.ok => {
+                let note = format_apply_patch_memory_note(r);
+                if note.is_empty() {
                     continue;
                 }
-                (
-                    "code-edit",
-                    format!("PATCH: {path} edits={edits} hash={hash}"),
-                )
+                ("memory-note", note)
             }
+            "apply_patch" => continue,
             _ => continue,
         };
         let hash = chunk_content_hash(role, &text);
@@ -868,19 +858,175 @@ fn retrieval_char_budget(context_limit: i64) -> usize {
     ((limit * RETRIEVAL_FRACTION * 4.0) as usize).clamp(RETRIEVAL_MIN_CHARS, RETRIEVAL_MAX_CHARS)
 }
 
+/// Strip attached file/snippet bodies before indexing or displaying memory excerpts.
+pub fn strip_scope_attachments_for_memory(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("[Attached ") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let header_end = tail.find('\n').unwrap_or(tail.len());
+        let header = tail[..header_end].trim();
+        if !header.is_empty() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(header);
+            out.push_str(" (file body omitted from memory)");
+            out.push('\n');
+        }
+        let after_header = if header_end < tail.len() {
+            &tail[header_end + 1..]
+        } else {
+            ""
+        };
+        rest = skip_leading_code_fence(after_header);
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+fn skip_leading_code_fence(s: &str) -> &str {
+    let s = s.trim_start();
+    if !s.starts_with("```") {
+        return s;
+    }
+    let after_ticks = s.get(3..).unwrap_or("");
+    let content_start = after_ticks.find('\n').map(|i| i + 1).unwrap_or(after_ticks.len());
+    let inner = &after_ticks[content_start..];
+    inner
+        .find("```")
+        .map(|close| &inner[close + 3..])
+        .unwrap_or("")
+        .trim_start()
+}
+
+fn should_skip_evicted_message_content(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("<plan-step-summary>")
+        || lower.contains("</plan-step-summary>")
+}
+
+fn prepare_message_text_for_memory(role: &str, text: &str) -> Option<String> {
+    if should_skip_evicted_message_content(text) {
+        return None;
+    }
+    let stripped = strip_scope_attachments_for_memory(text);
+    let compact = compact_whitespace(&stripped);
+    if compact.is_empty() {
+        return None;
+    }
+    if looks_like_code(&compact) && compact.contains("file body omitted from memory") {
+        return None;
+    }
+    if classify_memory(role, &compact).is_none() {
+        return None;
+    }
+    Some(compact)
+}
+
+fn format_apply_patch_memory_note(r: &crate::tools::ToolExecutionResult) -> String {
+    let path = r.output.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![format!("PATCH: {path}")];
+    if let Some(edits) = r.output.get("memoryEdits").and_then(|v| v.as_array()) {
+        for edit in edits {
+            let old = edit.get("oldPreview").and_then(|v| v.as_str()).unwrap_or("");
+            let new = edit.get("newPreview").and_then(|v| v.as_str()).unwrap_or("");
+            if !old.is_empty() || !new.is_empty() {
+                lines.push(format!("  {old} → {new}"));
+            }
+        }
+    }
+    if lines.len() == 1 {
+        if let Some(msg) = r.message.strip_prefix("Patched ") {
+            lines.push(format!("  {msg}"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Optional LLM summary after a tool loop; deterministic patch notes are indexed separately.
+pub async fn index_turn_memory_after_tools(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    context_limit: i64,
+    memory_llm_summarize: bool,
+    assistant_text: &str,
+    tool_results: &[crate::tools::ToolExecutionResult],
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() || tool_results.is_empty() {
+        return;
+    }
+    if !memory_llm_summarize {
+        return;
+    }
+    let had_success = tool_results.iter().any(|r| r.ok);
+    if !had_success && assistant_text.trim().len() < 80 {
+        return;
+    }
+    let tool_trace = format_tool_results_trace(tool_results);
+    let assistant_excerpt = compact_excerpt(assistant_text, 600);
+    let Some(summary) = super::memory_compress::summarize_turn_for_memory(
+        conn,
+        cfg,
+        &assistant_excerpt,
+        &tool_trace,
+        context_limit,
+    )
+    .await
+    else {
+        return;
+    };
+    let text = summary.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("none") {
+        return;
+    }
+    let hash = chunk_content_hash("memory-note", &format!("turn-summary\0{text}"));
+    if indexed_hashes.contains(&hash) {
+        return;
+    }
+    insert_single_chunk(
+        memory,
+        conn,
+        cfg,
+        session_id,
+        "memory-note",
+        text,
+        &hash,
+        indexed_hashes,
+    )
+    .await;
+}
+
+fn format_tool_results_trace(results: &[crate::tools::ToolExecutionResult]) -> String {
+    results
+        .iter()
+        .map(|r| {
+            if r.ok {
+                format!("[{}] {}", r.name, r.message)
+            } else {
+                format!("[{}] ERROR: {}", r.name, r.message)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn messages_to_chunks(messages: &[ChatMessage]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for m in messages {
         let role = m.role.clone();
-        let text = m.content.trim();
-        if text.is_empty() {
+        let Some(text) = prepare_message_text_for_memory(&role, m.content.trim()) else {
             continue;
-        }
-        if classify_memory(&role, text).is_none() {
-            continue;
-        }
+        };
         if text.chars().count() <= CHUNK_MAX_CHARS {
-            out.push((role, text.to_string()));
+            out.push((role, text));
             continue;
         }
         let mut start = 0usize;
@@ -915,6 +1061,12 @@ fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
     }
     if role == "compressed" {
         return Some(MemoryKind::Important);
+    }
+    if role == "memory-note" {
+        if let Some(kind) = explicit_memory_marker(&compact_whitespace(text).to_lowercase()) {
+            return Some(kind);
+        }
+        return Some(MemoryKind::Decision);
     }
     let cleaned = compact_whitespace(text);
     let lower = cleaned.to_lowercase();
@@ -1204,7 +1356,8 @@ fn starts_with_any(haystack: &str, needles: &[&str]) -> bool {
 }
 
 fn compact_excerpt(text: &str, max_chars: usize) -> String {
-    let compact = compact_whitespace(text);
+    let stripped = strip_scope_attachments_for_memory(text);
+    let compact = compact_whitespace(&stripped);
     if compact.chars().count() <= max_chars {
         return compact;
     }
@@ -1218,7 +1371,8 @@ fn compact_whitespace(text: &str) -> String {
 }
 
 fn normalized_dedupe_key(text: &str) -> String {
-    compact_whitespace(text)
+    let stripped = strip_scope_attachments_for_memory(text);
+    compact_whitespace(&stripped)
         .to_lowercase()
         .chars()
         .take(220)
@@ -1280,6 +1434,41 @@ fn format_context_artifact_memory(path: &str, content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_attached_file_body_from_memory_index() {
+        let raw = "поищи баги плиз\n\n[Attached file: vp/src/a.php (lines 1-783)]\n```\n<?php\nclass A {}\n```";
+        let stripped = strip_scope_attachments_for_memory(raw);
+        assert!(stripped.contains("поищи баги"));
+        assert!(stripped.contains("file body omitted"));
+        assert!(!stripped.contains("<?php"));
+        let chunks = messages_to_chunks(&[ChatMessage {
+            role: "user".into(),
+            content: raw.into(),
+            images: vec![],
+        }]);
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].1.contains("<?php"));
+    }
+
+    #[test]
+    fn format_apply_patch_memory_includes_edit_previews() {
+        use crate::tools::ToolExecutionResult;
+        let note = format_apply_patch_memory_note(&ToolExecutionResult {
+            name: "apply_patch".into(),
+            ok: true,
+            output: serde_json::json!({
+                "path": "vp/a.php",
+                "memoryEdits": [
+                    {"oldPreview": "$uids", "newPreview": "$uuids"}
+                ]
+            }),
+            message: "Patched vp/a.php (1 edit(s))".into(),
+        });
+        assert!(note.contains("PATCH: vp/a.php"));
+        assert!(note.contains("$uids"));
+        assert!(note.contains("$uuids"));
+    }
 
     #[test]
     fn splits_long_message() {

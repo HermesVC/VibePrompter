@@ -82,6 +82,22 @@ export function resolveContextUsed(
   return fallbackEstimate;
 }
 
+/** Rough token budget for the next chat request (messages + session summary). */
+export function estimateChatRequestTokens(
+  messages: ReadonlyArray<{ role: string; content: string; images?: readonly unknown[] | null }>,
+  sessionSummary = ''
+): number {
+  let chars = sessionSummary.length;
+  let images = 0;
+  for (const m of messages) {
+    chars += m.content.length;
+    images += m.images?.length ?? 0;
+  }
+  // System prompt, tools protocol, scope metadata (not always in message bodies).
+  chars += 2_500;
+  return estimateTokensFromChars(chars, images);
+}
+
 export function resolveActiveConnection(
   conns: ConnContextInfo[],
   connectionId: string

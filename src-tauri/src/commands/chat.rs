@@ -488,6 +488,7 @@ pub async fn chat_complete_stream(
             if let Some(ctx) = chat_context.as_ref() {
                 if crate::chat::scope_enables_tools(&ctx.scope) {
                     let scope_path = crate::chat::scope_path_for_tools(&ctx.scope);
+                    let ws_settings = state.workspace.get_settings().await?;
                     let app_for_tokens = app.clone();
                     let tokens_for_stream = token_event.clone();
                     let cancel_for_stream = cancel_check.clone();
@@ -527,6 +528,8 @@ pub async fn chat_complete_stream(
                                 conn: &row,
                                 cfg: &cfg,
                                 indexed_hashes: &mut indexed_chunk_hashes,
+                                context_limit,
+                                memory_llm_summarize: ws_settings.memory_llm_summarize,
                             })
                         },
                     )

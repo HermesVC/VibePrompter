@@ -171,7 +171,22 @@ Single-file fix or trivial change: skip PLAN.md. Use `read_file` + `apply_patch`
 
 Use Russian for prose unless the user uses another language."#;
 
+/// Options when building the layered system prompt.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ComposeSystemOptions {
+    /// Workspace agent tools are active (file/folder/workspace + tool-capable format).
+    pub tools_active: bool,
+}
+
 pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> String {
+    compose_system_prompt_with_opts(base_mode_sys, ctx, ComposeSystemOptions::default())
+}
+
+pub fn compose_system_prompt_with_opts(
+    base_mode_sys: &str,
+    ctx: &ChatContextPayload,
+    opts: ComposeSystemOptions,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !base_mode_sys.trim().is_empty() {
         parts.push(base_mode_sys.trim().to_string());
@@ -233,16 +248,27 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| detect_language(Some(path), Some(content)));
-            parts.push(format!(
-                "You have a FILE attached for reference in this session.\n\
-                 Rules:\n\
-                 - Questions about the file (what is it, explain, review): answer in plain language.\n\
-                 - Rewrite requests: output ONLY the updated file body for the scoped region unless a full-file rewrite is explicit.\n\
-                 - Do not invent paths or modules not present in the workspace context.\n\n\
-                 <file path=\"{path}\" lines=\"{line_start}-{line_end}\" lang=\"{lang}\">\n\
-                 {content}\n\
-                 </file>"
-            ));
+            if opts.tools_active {
+                parts.push(format!(
+                    "You have a FILE scoped in this session: path=\"{path}\" lines=\"{line_start}-{line_end}\" lang=\"{lang}\".\n\
+                     Rules:\n\
+                     - Do NOT paste the file body, a rewritten file, or ```file:``` fences for this path.\n\
+                     - To inspect or fix: emit <|tool_call|> read_file / apply_patch only (see Workspace file tools below).\n\
+                     - Questions: answer in plain language; quote short fragments only after read_file.\n\
+                     - Code fixes: apply_patch with 1–3 line old_text — never whole methods, switch blocks, or files."
+                ));
+            } else {
+                parts.push(format!(
+                    "You have a FILE attached for reference in this session.\n\
+                     Rules:\n\
+                     - Questions about the file (what is it, explain, review): answer in plain language.\n\
+                     - Rewrite requests: output ONLY the updated file body for the scoped region unless a full-file rewrite is explicit.\n\
+                     - Do not invent paths or modules not present in the workspace context.\n\n\
+                     <file path=\"{path}\" lines=\"{line_start}-{line_end}\" lang=\"{lang}\">\n\
+                     {content}\n\
+                     </file>"
+                ));
+            }
         }
         ChatScope::Workspace { tree_summary } => {
             let tree = tree_summary
@@ -265,6 +291,16 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
             files: _,
             truncated,
         } => {
+            let edit_rules = if opts.tools_active {
+                "- Edits to **existing** files: ONLY <|tool_call|> apply_patch after read_file. \
+                 Never ```file:``` fences with edits:, old_text:, or new_text: for existing paths.\n\
+                 - **New** files only: use ```file relative/path``` fences with the full new file body.\n\
+                 - Prefer read_symbol over read_file for large PHP/JS/Python files."
+            } else {
+                "- Prefer small, targeted edits; use file fences with paths when changing multiple files.\n\
+                 - For new or changed files in this folder, use ```file paths relative to the workspace root \
+                 (prefix with `{path}/` when the scoped path is not `.`, e.g. `{path}/index.html`)."
+            };
             let mut block = format!(
                 "You are in FOLDER scoped session for `{path}`.\n\
                  Rules:\n\
@@ -272,10 +308,7 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
                  - Tools: list_dir, file_outline, read_symbol, read_file.\n\
                  - Refer to files by relative paths from the tree.\n\
                  - Do not claim to have read a file until you received it via a tool result.\n\
-                 - Prefer read_symbol over read_file for large PHP/JS/Python files.\n\
-                 - Prefer small, targeted edits; use file fences with paths when changing multiple files.\n\
-                 - For new or changed files in this folder, use ```file paths relative to the workspace root \
-                 (prefix with `{path}/` when the scoped path is not `.`, e.g. `{path}/index.html`).\n\n\
+                 {edit_rules}\n\n\
                  <folder-tree path=\"{path}\">\n{tree_summary}\n</folder-tree>\n\n\
                  <folder-outline path=\"{path}\">\n{outline_summary}\n</folder-outline>"
             );
@@ -299,6 +332,57 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
     }
 
     parts.join("\n\n")
+}
+
+/// User-turn scope block appended to the last user message.
+pub fn scope_user_context_block(scope: &ChatScope, tools_active: bool) -> String {
+    match scope {
+        ChatScope::None => String::new(),
+        ChatScope::Snippet { working, .. } => {
+            format!("[Attached snippet for reference]\n```\n{working}\n```")
+        }
+        ChatScope::File {
+            path,
+            content,
+            line_start,
+            line_end,
+            ..
+        } => {
+            if tools_active {
+                format!(
+                    "[Scoped file: {path} (lines {line_start}-{line_end}) — use read_file tool; do not expect file body in this message]"
+                )
+            } else {
+                format!("[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```")
+            }
+        }
+        ChatScope::Workspace { tree_summary } => {
+            if tools_active {
+                return "[Workspace scope — file tree is in the system prompt; use read_file to load file bodies]"
+                    .to_string();
+            }
+            tree_summary
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|tree| format!("[Workspace tree]\n{tree}"))
+                .unwrap_or_default()
+        }
+        ChatScope::Folder {
+            path,
+            tree_summary,
+            outline_summary,
+            ..
+        } => {
+            if tools_active {
+                return format!(
+                    "[Scoped folder: {path} — tree/outline in system prompt; use list_dir / read_file tools]"
+                );
+            }
+            format!(
+                "[Attached folder: {path}]\n[Folder tree]\n{tree_summary}\n\n[Folder outline]\n{outline_summary}"
+            )
+        }
+    }
 }
 
 fn scope_language(scope: &ChatScope) -> Option<String> {
@@ -462,6 +546,55 @@ mod tests {
         assert!(
             !compose_system_prompt("", &snippet_scope).contains("Plan-driven developer workflow")
         );
+    }
+
+    #[test]
+    fn file_scope_tools_active_omits_body_from_system() {
+        let ctx = ChatContextPayload {
+            scope: ChatScope::File {
+                path: "vp/a.php".into(),
+                content: "<?php\n$secret = 1;\n".into(),
+                content_hash: "x".into(),
+                line_start: 1,
+                line_end: 2,
+                language_id: Some("php".into()),
+            },
+            modifiers: vec![],
+            language_id: None,
+        };
+        let with_tools = compose_system_prompt_with_opts(
+            "",
+            &ctx,
+            ComposeSystemOptions { tools_active: true },
+        );
+        assert!(with_tools.contains("read_file"));
+        assert!(!with_tools.contains("$secret"));
+        assert!(!with_tools.contains("output ONLY the updated file body"));
+
+        let without_tools = compose_system_prompt_with_opts(
+            "",
+            &ctx,
+            ComposeSystemOptions::default(),
+        );
+        assert!(without_tools.contains("$secret"));
+        assert!(without_tools.contains("output ONLY the updated file body"));
+    }
+
+    #[test]
+    fn scope_user_block_tools_active_is_minimal() {
+        let scope = ChatScope::File {
+            path: "vp/a.php".into(),
+            content: "body".into(),
+            content_hash: "h".into(),
+            line_start: 1,
+            line_end: 1,
+            language_id: None,
+        };
+        let minimal = scope_user_context_block(&scope, true);
+        assert!(minimal.contains("read_file"));
+        assert!(!minimal.contains("body"));
+        let full = scope_user_context_block(&scope, false);
+        assert!(full.contains("body"));
     }
 
     #[test]

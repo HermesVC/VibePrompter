@@ -13,6 +13,7 @@ pub fn parse_all_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     out.extend(parse_bare_call_tool_calls(&text));
     out.extend(parse_file_edits_fence_tool_calls(&text));
     out.extend(parse_inline_file_edits_tool_calls(&text));
+    out.extend(parse_inline_file_old_new_tool_calls(&text));
     dedupe_tool_calls(out)
 }
 
@@ -121,9 +122,16 @@ fn parse_call_segment(segment: &str) -> Option<ParsedToolCall> {
     if let Some(call) = parse_json_tool_call(args) {
         return Some(call);
     }
+    let mut arguments =
+        parse_relaxed_args(args).unwrap_or_else(|| serde_json::Map::new().into());
+    if name == "apply_patch" {
+        if let Some(fixed) = parse_apply_patch_relaxed_body(args) {
+            arguments = fixed;
+        }
+    }
     Some(ParsedToolCall {
         name: name.to_string(),
-        arguments: parse_relaxed_args(args).unwrap_or_else(|| serde_json::Map::new().into()),
+        arguments,
     })
 }
 
@@ -320,7 +328,7 @@ pub fn parse_file_edits_fence_tool_calls(text: &str) -> Vec<ParsedToolCall> {
         let (content_end, close_len) = find_fence_content_end(&text[content_start..]);
         let content = &text[content_start..content_start + content_end];
         let next = content_start + content_end + close_len;
-        if let Some(call) = file_edits_fence_to_call(header, content) {
+        if let Some(call) = file_patch_fence_to_call(header, content) {
             out.push(call);
         }
         search_from = next;
@@ -375,16 +383,150 @@ fn find_fence_content_end(slice: &str) -> (usize, usize) {
     }
 }
 
-fn file_edits_fence_to_call(header: &str, content: &str) -> Option<ParsedToolCall> {
+fn file_patch_fence_to_call(header: &str, content: &str) -> Option<ParsedToolCall> {
     let path = parse_file_fence_header_path(header)?;
-    let edits = parse_edits_field(content)?;
+    if let Some(edits) = parse_edits_field(content) {
+        return Some(ParsedToolCall {
+            name: "apply_patch".into(),
+            arguments: serde_json::json!({
+                "path": path,
+                "edits": edits,
+            }),
+        });
+    }
+    let (old_text, new_text) = parse_old_new_fields(content)?;
     Some(ParsedToolCall {
         name: "apply_patch".into(),
         arguments: serde_json::json!({
             "path": path,
-            "edits": edits,
+            "old_text": old_text,
+            "new_text": new_text,
         }),
     })
+}
+
+/// `file:path` + labeled `old_text:` / `new_text:` blocks (Qwen markdown fallback).
+pub fn parse_inline_file_old_new_tool_calls(text: &str) -> Vec<ParsedToolCall> {
+    let mut out = Vec::new();
+    let lower = text.to_ascii_lowercase();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find("file:") {
+        let at = search_from + rel;
+        let line_end = text[at..]
+            .find('\n')
+            .map(|i| at + i)
+            .unwrap_or(text.len());
+        let header_line = text[at..line_end].trim();
+        let path = header_line
+            .strip_prefix("file:")
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+        let Some(path) = path else {
+            search_from = at + 5;
+            continue;
+        };
+        let after_line = line_end + 1;
+        let region = &text[after_line..];
+        let Some((old_text, new_text)) = parse_old_new_fields(region) else {
+            search_from = at + 5;
+            continue;
+        };
+        out.push(ParsedToolCall {
+            name: "apply_patch".into(),
+            arguments: serde_json::json!({
+                "path": path,
+                "old_text": old_text,
+                "new_text": new_text,
+            }),
+        });
+        search_from = after_line + 1;
+    }
+    out
+}
+
+fn parse_old_new_fields(content: &str) -> Option<(String, String)> {
+    let lower = content.to_ascii_lowercase();
+    let old_pos = lower.find("old_text:")?;
+    let new_pos = lower.find("new_text:")?;
+    if new_pos <= old_pos {
+        return None;
+    }
+    let old_start = old_pos + "old_text:".len();
+    let old_raw = content[old_start..new_pos].trim();
+    let new_start = new_pos + "new_text:".len();
+    let new_raw = content[new_start..].trim();
+    let old_text = strip_optional_code_fence(old_raw);
+    let new_text = strip_optional_code_fence(new_raw);
+    if old_text.trim().is_empty() && new_text.trim().is_empty() {
+        return None;
+    }
+    Some((old_text, new_text))
+}
+
+fn strip_optional_code_fence(s: &str) -> String {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix("```") {
+        let body = rest
+            .trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '+')
+            .trim_start_matches('\n');
+        if let Some(end) = body.rfind("```") {
+            return body[..end].trim_end().to_string();
+        }
+        return body.trim_end().to_string();
+    }
+    s.to_string()
+}
+
+/// `apply_patch{path:…,old_text:…,new_text:…}` — commas inside unquoted old/new are common.
+fn parse_apply_patch_relaxed_body(body: &str) -> Option<Value> {
+    let inner = body.trim().trim_start_matches('{').trim_end_matches('}').trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let lower = inner.to_ascii_lowercase();
+    if let Some(edits_pos) = lower.find("edits:") {
+        if let Some(edits) = parse_edits_field(&inner[edits_pos..]) {
+            let path = extract_apply_patch_path(&inner[..edits_pos])?;
+            return Some(serde_json::json!({ "path": path, "edits": edits }));
+        }
+    }
+    let old_pos = lower.find("old_text:")?;
+    let new_pos = lower.find("new_text:")?;
+    if new_pos <= old_pos {
+        return None;
+    }
+    let path = extract_apply_patch_path(&inner[..old_pos])?;
+    let old_start = old_pos + "old_text:".len();
+    let old_text = unquote_relaxed_field(inner[old_start..new_pos].trim());
+    let new_start = new_pos + "new_text:".len();
+    let new_text =
+        unquote_relaxed_field(inner[new_start..].trim().trim_end_matches('}').trim_end_matches(','));
+    Some(serde_json::json!({
+        "path": path,
+        "old_text": old_text,
+        "new_text": new_text,
+    }))
+}
+
+fn extract_apply_patch_path(prefix: &str) -> Option<String> {
+    let prefix = prefix.trim().trim_end_matches(',');
+    if let Some(rest) = prefix.strip_prefix("path:") {
+        let path = unquote_relaxed_field(rest.trim());
+        if !path.is_empty() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn unquote_relaxed_field(raw: &str) -> String {
+    let raw = raw.trim().trim_end_matches(',');
+    if (raw.starts_with('"') && raw.ends_with('"'))
+        || (raw.starts_with('\'') && raw.ends_with('\''))
+    {
+        return unescape_relaxed_string(&raw[1..raw.len() - 1]);
+    }
+    raw.to_string()
 }
 
 fn parse_file_fence_header_path(header: &str) -> Option<String> {
@@ -526,7 +668,8 @@ pub fn contains_tool_call_markup(text: &str) -> bool {
         || lower.contains("call:read_file{")
         || lower.contains("call:list_dir{")
         || lower.contains("call:apply_patch{")
-        || lower.contains("edits:[")
+        || lower.contains("old_text:")
+        || (lower.contains("file:") && lower.contains("new_text:"))
         || (lower.contains("file:") && lower.contains("edits:"))
 }
 
@@ -770,6 +913,44 @@ edits:[{"old_text":"foreach ($projectUids as $x)","new_text":"foreach ($projectU
         assert_eq!(
             calls[1].arguments["old_text"],
             "foreach ($projectUids as $projectUuid) {"
+        );
+    }
+
+    #[test]
+    fn parses_file_fence_with_old_new_labels() {
+        let calls = parse_all_tool_calls(
+            r#"```file:vp/src/service/api/Controllers/ProjectsAPI.php
+old_text:
+foreach ($projectUids as $projectUuid) {
+new_text:
+foreach ($projectUuids as $projectUuid) {
+```"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "apply_patch");
+        assert_eq!(
+            calls[0].arguments["old_text"],
+            "foreach ($projectUids as $projectUuid) {"
+        );
+        assert_eq!(
+            calls[0].arguments["new_text"],
+            "foreach ($projectUuids as $projectUuid) {"
+        );
+    }
+
+    #[test]
+    fn parses_apply_patch_with_commas_inside_unquoted_old_text() {
+        let calls = parse_all_tool_calls(
+            r#"<|tool_call|>call:apply_patch{path:vp/a.php,old_text:foreach ($projectUids as $id) {,new_text:foreach ($projectUuids as $id) {}</|tool_call|>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments["old_text"],
+            "foreach ($projectUids as $id) {"
+        );
+        assert_eq!(
+            calls[0].arguments["new_text"],
+            "foreach ($projectUuids as $id) {"
         );
     }
 

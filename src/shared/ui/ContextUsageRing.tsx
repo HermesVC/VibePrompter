@@ -40,8 +40,15 @@ export function ContextUsageRing({
   const size = (r + stroke) * 2;
   const circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - percent / 100);
-  const ringColor =
-    percent >= 90 ? 'var(--danger)' : percent >= 70 ? 'var(--warn)' : 'var(--accent)';
+  const ringColor = estimated
+    ? percent >= 85
+      ? 'var(--warn)'
+      : 'var(--accent)'
+    : percent >= 90
+      ? 'var(--danger)'
+      : percent >= 70
+        ? 'var(--warn)'
+        : 'var(--accent)';
 
   const out = usage?.outputTokens ?? 0;
   const usedLabel = estimated ? `~${formatTokenCount(usedTokens)}` : formatTokenCount(usedTokens);

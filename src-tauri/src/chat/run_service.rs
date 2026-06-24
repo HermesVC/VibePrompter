@@ -89,9 +89,22 @@ where
 
     validate_messages(&request.messages)?;
 
+    let row = resolve_chat_connection_row(
+        state,
+        request.connection_id.clone(),
+        request.mode_id.clone(),
+    )
+    .await?;
+
+    let tools_active = request
+        .chat_context
+        .as_ref()
+        .map(|ctx| crate::chat::connection_tools_active(&ctx.scope, &row.prompt_format))
+        .unwrap_or(false);
+
     let mut messages = request.messages;
     if let Some(ctx) = request.chat_context.as_ref() {
-        augment_messages_with_scope(&mut messages, ctx);
+        augment_messages_with_scope(&mut messages, ctx, tools_active);
     }
 
     let (mut system_prompt, mode_name, mode_icon, temperature, max_tokens) =
@@ -99,21 +112,19 @@ where
 
     if let Some(ctx) = request.chat_context.as_ref() {
         let base = system_prompt.unwrap_or_default();
-        system_prompt = Some(state.workspace.compose_system(&base, ctx));
+        system_prompt = Some(state.workspace.compose_system_with_opts(
+            &base,
+            ctx,
+            crate::workspace::ComposeSystemOptions { tools_active },
+        ));
     }
-    append_file_artifact_protocol(&mut system_prompt);
+    append_file_artifact_protocol(&mut system_prompt, tools_active);
     append_diagnostic_inspection_protocol(
         &mut system_prompt,
         &messages,
         request.chat_context.as_ref(),
+        tools_active,
     );
-
-    let row = resolve_chat_connection_row(
-        state,
-        request.connection_id.clone(),
-        request.mode_id.clone(),
-    )
-    .await?;
 
     if let Some(ctx) = request.chat_context.as_ref() {
         crate::chat::augment_system_for_tools(&mut system_prompt, &row.prompt_format, &ctx.scope);
@@ -370,6 +381,7 @@ where
             if let Some(ctx) = request.chat_context.as_ref() {
                 if crate::chat::scope_enables_tools(&ctx.scope) {
                     let scope_path = crate::chat::scope_path_for_tools(&ctx.scope);
+                    let ws_settings = state.workspace.get_settings().await?;
                     events.status(ChatRunStatus {
                         phase: "tools".into(),
                         generation: stream_generation,
@@ -398,6 +410,8 @@ where
                                 conn: &row,
                                 cfg: &cfg,
                                 indexed_hashes: &mut indexed_chunk_hashes,
+                                context_limit,
+                                memory_llm_summarize: ws_settings.memory_llm_summarize,
                             })
                         },
                     )
@@ -580,7 +594,10 @@ async fn resolve_chat_connection_row(
         .ok_or_else(|| AppError::Validation("no default connection configured".into()))
 }
 
-fn append_file_artifact_protocol(system_prompt: &mut Option<String>) {
+fn append_file_artifact_protocol(system_prompt: &mut Option<String>, tools_active: bool) {
+    if tools_active {
+        return;
+    }
     let mut sys = system_prompt.take().unwrap_or_default();
     if !sys.trim().is_empty() {
         sys.push_str("\n\n");
@@ -593,7 +610,11 @@ fn append_diagnostic_inspection_protocol(
     system_prompt: &mut Option<String>,
     messages: &[ChatMessage],
     ctx: Option<&crate::workspace::ChatContextPayload>,
+    tools_active: bool,
 ) {
+    if !tools_active {
+        return;
+    }
     let Some(ctx) = ctx else {
         return;
     };
@@ -618,7 +639,9 @@ fn append_diagnostic_inspection_protocol(
 fn scope_needs_tool_inspection(scope: &crate::workspace::ChatScope) -> bool {
     matches!(
         scope,
-        crate::workspace::ChatScope::Folder { .. } | crate::workspace::ChatScope::Workspace { .. }
+        crate::workspace::ChatScope::File { .. }
+            | crate::workspace::ChatScope::Folder { .. }
+            | crate::workspace::ChatScope::Workspace { .. }
     )
 }
 
@@ -894,8 +917,9 @@ fn message_memory_key(message: &ChatMessage) -> String {
 fn augment_messages_with_scope(
     messages: &mut Vec<ChatMessage>,
     ctx: &crate::workspace::ChatContextPayload,
+    tools_active: bool,
 ) {
-    let block = scope_user_context_block(&ctx.scope);
+    let block = crate::workspace::scope_user_context_block(&ctx.scope, tools_active);
     if block.is_empty() {
         return;
     }
@@ -909,6 +933,9 @@ fn augment_messages_with_scope(
         || last.content.contains("[Attached file")
         || last.content.contains("[Attached folder")
         || last.content.contains("[Workspace tree]")
+        || last.content.contains("[Scoped file:")
+        || last.content.contains("[Scoped folder:")
+        || last.content.contains("[Workspace scope")
     {
         return;
     }
@@ -917,40 +944,6 @@ fn augment_messages_with_scope(
     } else {
         format!("{}\n\n{}", last.content.trim(), block)
     };
-}
-
-fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
-    use crate::workspace::ChatScope;
-    match scope {
-        ChatScope::None => String::new(),
-        ChatScope::Snippet { working, .. } => {
-            format!("[Attached snippet for reference]\n```\n{working}\n```")
-        }
-        ChatScope::File {
-            path,
-            content,
-            line_start,
-            line_end,
-            ..
-        } => {
-            format!("[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```")
-        }
-        ChatScope::Workspace { tree_summary } => tree_summary
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|tree| format!("[Workspace tree]\n{tree}"))
-            .unwrap_or_default(),
-        ChatScope::Folder {
-            path,
-            tree_summary,
-            outline_summary,
-            ..
-        } => {
-            format!(
-                "[Attached folder: {path}]\n[Folder tree]\n{tree_summary}\n\n[Folder outline]\n{outline_summary}"
-            )
-        }
-    }
 }
 
 fn emit_chat_memory_update<E: ChatRunEventSink>(events: &mut E, memory: &str, context_limit: i64) {

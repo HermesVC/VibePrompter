@@ -28,6 +28,9 @@ pub struct WorkspaceSettings {
     /// Max lines allowed in a single edit's `old_text`.
     #[serde(default = "default_patch_max_lines")]
     pub patch_max_lines: u32,
+    /// LLM bullet summary after tool loop (findings / patches). Default on.
+    #[serde(default = "default_memory_llm_summarize")]
+    pub memory_llm_summarize: bool,
 }
 
 fn default_patch_policy() -> String {
@@ -36,6 +39,10 @@ fn default_patch_policy() -> String {
 
 fn default_patch_max_lines() -> u32 {
     15
+}
+
+fn default_memory_llm_summarize() -> bool {
+    true
 }
 
 fn default_apply_policy() -> String {

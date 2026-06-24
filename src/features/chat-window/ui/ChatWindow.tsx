@@ -7,6 +7,7 @@ import {
   applyCompletionContextUpdate,
   effectiveContextLimit,
   estimateTokensFromChars,
+  estimateChatRequestTokens,
   isContextLimitInferred,
   normalizeTokenUsage,
   resolveActiveConnection,
@@ -515,7 +516,12 @@ export function ChatWindow() {
 
   const promptApplyScoped = useCallback(async (assistantText: string, scopedText?: string) => {
     const scope = chatContextRef.current.scope;
-    const content = extractScopedCodeForApply((scopedText ?? assistantText).trim());
+    const scopeWorking =
+      scope.kind === 'file' ? scope.content : scope.kind === 'snippet' ? scope.working : '';
+    const content = extractScopedCodeForApply(
+      (scopedText ?? assistantText).trim(),
+      scopeWorking || undefined
+    );
     if (!content) return;
 
     if (scope.kind === 'snippet') {
@@ -735,6 +741,7 @@ export function ChatWindow() {
     setIsContinuingOutput(false);
     setProviderRetryWarning(null);
     setMemoryDebugLabel('Vector memory: checking...');
+    setTokenUsage(null);
 
     setMessages((prev) => [
       ...prev,
@@ -1090,16 +1097,10 @@ export function ChatWindow() {
   activeConnIdRef.current = connectionId || activeConn?.id || '';
   const contextLimit = effectiveContextLimit(activeConn);
   const contextLimitInferred = isContextLimitInferred(activeConn);
-  const contextEstimate = useMemo(() => {
-    let chars = 0;
-    let images = 0;
-    for (const m of messages) {
-      if (m.error) continue;
-      chars += m.content.length;
-      images += m.images?.length ?? 0;
-    }
-    return estimateTokensFromChars(chars, images);
-  }, [messages]);
+  const contextEstimate = useMemo(
+    () => estimateChatRequestTokens(messages, sessionSummary),
+    [messages, sessionSummary]
+  );
   const contextUsed = resolveContextUsed(tokenUsage, contextEstimate);
   const contextEstimated = !(tokenUsage && tokenUsage.inputTokens > 0);
 
@@ -1271,6 +1272,24 @@ export function ChatWindow() {
             limitInferred={contextLimitInferred}
             streaming={streaming}
           />
+          {streaming && (
+            <button
+              type="button"
+              data-no-drag
+              onPointerDown={(e) => {
+                e.preventDefault();
+                cancelStream();
+              }}
+              title="Stop generation"
+              style={{
+                ...iconBtnStyle(),
+                color: 'var(--danger)',
+                borderColor: 'color-mix(in srgb, var(--danger) 35%, var(--border))',
+              }}
+            >
+              <I.close size={12} />
+            </button>
+          )}
           {conns.filter((c) => c.hasKey).length > 1 && (
             <select
               data-no-drag
@@ -1882,7 +1901,10 @@ function MessageBubble({
   const assistantDisplay = !isUser && generatedFiles.length
     ? stripGeneratedFileBlocks(m.content)
     : m.content;
-  const applyCandidate = extractScopedCodeForApply((m.scopedText ?? m.content).trim());
+  const applyCandidate = extractScopedCodeForApply(
+    (m.scopedText ?? m.content).trim(),
+    scopeWorking
+  );
   const showApply =
     onApply &&
     (scopeKind === 'snippet' || scopeKind === 'file') &&

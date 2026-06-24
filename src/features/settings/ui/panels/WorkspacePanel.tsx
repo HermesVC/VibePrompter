@@ -171,6 +171,20 @@ export function WorkspacePanel() {
         />
       </Group>
 
+      <Group title="Semantic memory">
+        <SettingRow
+          label="LLM turn summary"
+          hint="After tool loop, extract short [bug]/[decision] bullets into vector memory (uses your connection)"
+          control={
+            <input
+              type="checkbox"
+              checked={draft.memoryLlmSummarize !== false}
+              onChange={(e) => update({ memoryLlmSummarize: e.target.checked })}
+            />
+          }
+        />
+      </Group>
+
       <Group title="Allow list">
         <SettingRow
           label="Allowed directories"

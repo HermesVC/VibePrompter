@@ -212,7 +212,10 @@ pub fn compose_chat_context_prompt(
     mode_system_prompt: String,
     chat_context: ChatContextPayload,
 ) -> Result<String, AppError> {
-    Ok(state
-        .workspace
-        .compose_system(&mode_system_prompt, &chat_context))
+    let tools_active = crate::chat::scope_enables_tools(&chat_context.scope);
+    Ok(state.workspace.compose_system_with_opts(
+        &mode_system_prompt,
+        &chat_context,
+        crate::workspace::ComposeSystemOptions { tools_active },
+    ))
 }

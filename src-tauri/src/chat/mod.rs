@@ -15,12 +15,13 @@ mod sliding_window;
 mod vector_memory;
 
 pub use agent_tools::{
-    augment_system_for_tools, run_tool_followup_loop, scope_enables_tools, scope_path_for_tools,
-    ToolLoopMemoryHook,
+    augment_system_for_tools, connection_tools_active, run_tool_followup_loop,
+    scope_enables_tools, scope_path_for_tools, ToolLoopMemoryHook,
 };
 pub use context_recovery::should_retry_for_context;
 pub use memory_compress::{
     compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
+    summarize_turn_for_memory,
 };
 pub use run_service::{
     run_chat, ChatRunEventSink, ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus,
@@ -33,7 +34,8 @@ pub use sliding_window::{
 pub use vector_memory::{
     append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
     index_evicted_messages, index_folder_outline, index_plan_step_summary, index_tool_results,
-    retrieve_relevant, upsert_plan_canonical_from_plan_markdown,
+    index_turn_memory_after_tools, retrieve_relevant, strip_scope_attachments_for_memory,
+    upsert_plan_canonical_from_plan_markdown,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

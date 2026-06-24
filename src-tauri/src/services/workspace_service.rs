@@ -6,10 +6,10 @@ use crate::storage::repositories::SettingsRepo;
 use crate::utils::{AppError, AppResult};
 use crate::workspace::symbols::{format_outline_text, outline_for_file};
 use crate::workspace::{
-    compose_system_prompt, extract_snippet_output, list_dir_recursive, list_modifiers,
-    read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo, FileContentDto,
-    FolderScopeDto, PolicyDecision, PolicyEngine, WorkspaceSettings, WritePreviewDto,
-    WriteResultDto, WORKSPACE_SETTINGS_KEY,
+    compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output,
+    list_dir_recursive, list_modifiers, read_file_range, write_file_checked, ChatContextPayload,
+    ChatModifierInfo, FileContentDto, FolderScopeDto, PolicyDecision,
+    PolicyEngine, WorkspaceSettings, WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
 
 #[derive(Clone)]
@@ -45,6 +45,15 @@ impl WorkspaceService {
 
     pub fn compose_system(&self, base_mode_sys: &str, ctx: &ChatContextPayload) -> String {
         compose_system_prompt(base_mode_sys, ctx)
+    }
+
+    pub fn compose_system_with_opts(
+        &self,
+        base_mode_sys: &str,
+        ctx: &ChatContextPayload,
+        opts: crate::workspace::ComposeSystemOptions,
+    ) -> String {
+        compose_system_prompt_with_opts(base_mode_sys, ctx, opts)
     }
 
     pub fn extract_snippet(&self, text: &str) -> String {

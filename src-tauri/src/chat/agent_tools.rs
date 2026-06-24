@@ -15,6 +15,11 @@ const TOOL_STITCH_OVERLAP_CHARS: usize = 2_000;
 
 const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 
+**Mandatory output format**
+- For inspect/fix tasks on existing files: your first output must be `<|tool_call|>call:read_file{...}</|tool_call|>` (or apply_patch after you have read_file results). No prose before tool_call.
+- Never paste a rewritten file body, ```file:``` fences, `edits:`, or labeled `old_text:` / `new_text:` blocks for existing files — those are not executed.
+- One-line fixes = one apply_patch with 1–3 line old_text. Wait for tool results before explaining to the user.
+
 You can inspect and edit the project with these tools (declare via tool_call blocks):
 - `list_dir` — list files under a path (`path`, optional `depth`)
 - `read_file` — read a file or line range (`path`, optional `start_line`/`end_line` or `lines:[start,end]`)
@@ -41,6 +46,14 @@ GOOD — read then patch:
 BAD — not executed as tools (do NOT use for patches):
 ```file:path/to/File.php
 edits:[{"old_text":"...whole method...","new_text":"..."}]
+```
+
+BAD — labeled old_text/new_text inside file fences (shown as garbage in UI, not applied):
+```file:path/to/File.php
+old_text:
+foreach ($projectUids as $id) {
+new_text:
+foreach ($projectUuids as $id) {
 ```
 
 BAD — whole case/method in old_text (rejected by patch size limits).
@@ -70,6 +83,12 @@ pub fn scope_enables_tools(scope: &ChatScope) -> bool {
         scope,
         ChatScope::Folder { .. } | ChatScope::Workspace { .. } | ChatScope::File { .. }
     )
+}
+
+/// True when scope and connection format both support the workspace agent tool loop.
+pub fn connection_tools_active(scope: &ChatScope, prompt_format_id: &str) -> bool {
+    scope_enables_tools(scope)
+        && prompt_format::resolve(prompt_format_id).supports_tool_calling()
 }
 
 pub fn workspace_tool_definitions() -> Vec<ToolDefinition> {
@@ -194,6 +213,8 @@ pub struct ToolLoopMemoryHook<'a> {
     pub conn: &'a crate::storage::repositories::ConnectionRow,
     pub cfg: &'a crate::providers::HttpConfig,
     pub indexed_hashes: &'a mut std::collections::HashSet<String>,
+    pub context_limit: i64,
+    pub memory_llm_summarize: bool,
 }
 
 /// After a model turn, run tool calls and re-prompt until no tools or limit hit.
@@ -222,6 +243,7 @@ where
     let ctx = build_tool_context(state, scope_path).await?;
     let mut tools_executed = 0usize;
     let mut last_tool_results: Vec<ToolExecutionResult> = Vec::new();
+    let mut all_tool_results: Vec<ToolExecutionResult> = Vec::new();
 
     for _ in 0..MAX_TOOL_ITERATIONS {
         if should_cancel() {
@@ -266,6 +288,7 @@ where
         let tool_results = tools::execute_many(&ctx, &pairs).await;
         tools_executed += tool_results.len();
         last_tool_results = tool_results.clone();
+        all_tool_results.extend(tool_results.clone());
 
         if let Some(hook) = memory_hook.as_mut() {
             crate::chat::index_tool_results(
@@ -347,6 +370,20 @@ where
             if !err_block.trim().is_empty() {
                 result.text = format!("{err_block}\n\n{}", result.text.trim());
             }
+        }
+        if let Some(hook) = memory_hook.as_mut() {
+            crate::chat::index_turn_memory_after_tools(
+                hook.memory,
+                hook.conn,
+                hook.cfg,
+                hook.session_id,
+                hook.context_limit,
+                hook.memory_llm_summarize,
+                &result.text,
+                &all_tool_results,
+                hook.indexed_hashes,
+            )
+            .await;
         }
     }
 

@@ -138,6 +138,16 @@ pub async fn execute(
         message.push_str(" [patch size warning]");
     }
 
+    let memory_edits: Vec<_> = edits
+        .iter()
+        .map(|e| {
+            json!({
+                "oldPreview": preview_edit_fragment(&e.old_text),
+                "newPreview": preview_edit_fragment(&e.new_text),
+            })
+        })
+        .collect();
+
     Ok(ToolExecutionResult {
         name: NAME.into(),
         ok: true,
@@ -152,6 +162,7 @@ pub async fn execute(
             "editMetrics": edit_metrics,
             "patchPolicy": patch_policy_label,
             "patchWarnings": validation.violations,
+            "memoryEdits": memory_edits,
             "policy": match decision {
                 PolicyDecision::Allow => "allow",
                 PolicyDecision::Ask => "ask",
@@ -203,6 +214,17 @@ fn parse_edit_object(item: &Value) -> AppResult<PatchEdit> {
         old_text: old_text.to_string(),
         new_text: new_text.to_string(),
     })
+}
+
+fn preview_edit_fragment(s: &str) -> String {
+    const MAX: usize = 72;
+    let one_line = s.replace('\r', "").replace('\n', " ").trim().to_string();
+    if one_line.chars().count() <= MAX {
+        return one_line;
+    }
+    let mut out: String = one_line.chars().take(MAX.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 #[cfg(test)]

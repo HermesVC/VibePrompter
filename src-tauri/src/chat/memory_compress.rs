@@ -306,6 +306,75 @@ pub fn truncate_compress_source(source: &str, max_chars: usize) -> String {
     trim_to_char_budget(source, max_chars.max(256))
 }
 
+const TURN_MEMORY_SYSTEM: &str = r#"You extract durable session memory bullets from an assistant turn and tool trace.
+Rules:
+- Output 0-3 lines only. Each line MUST start with [bug], [decision], [repo], [note], or [code].
+- Max 400 characters total. No markdown fences. No full file bodies.
+- Record findings, patches applied, and plans — not user chit-chat.
+- If nothing worth remembering, output exactly: NONE"#;
+
+/// Optional LLM summary after a tool loop (findings / patches).
+pub async fn summarize_turn_for_memory(
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    assistant_excerpt: &str,
+    tool_trace: &str,
+    context_limit: i64,
+) -> Option<String> {
+    let assistant_excerpt = assistant_excerpt.trim();
+    let tool_trace = tool_trace.trim();
+    if assistant_excerpt.is_empty() && tool_trace.is_empty() {
+        return None;
+    }
+    let budget = compress_input_budget_chars(context_limit, 0.35).min(2_800);
+    let user_body = format!(
+        "Assistant excerpt:\n{}\n\nTool trace:\n{}\n",
+        truncate_compress_source(assistant_excerpt, budget / 2),
+        truncate_compress_source(tool_trace, budget / 2)
+    );
+    if user_body.trim().chars().count() < 24 {
+        return None;
+    }
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: user_body,
+        images: Vec::new(),
+    }];
+    let params = CompletionParams {
+        model: None,
+        temperature: Some(0.15),
+        max_tokens: Some(220),
+        system: Some(TURN_MEMORY_SYSTEM.into()),
+        disable_thinking: Some(true),
+        retry: Some(false),
+    };
+    let compress_timeout = compress_request_timeout(cfg);
+    let mut compress_cfg = cfg.clone();
+    compress_cfg.timeout = compress_timeout.min(std::time::Duration::from_secs(45));
+    let result = match tokio::time::timeout(
+        compress_cfg.timeout,
+        providers::complete(conn, messages, params, &compress_cfg),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            tracing::warn!("turn memory summarize skipped: {e}");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!("turn memory summarize timed out");
+            return None;
+        }
+    };
+    let text = result.text.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(trim_to_char_budget(text, 420))
+    }
+}
+
 async fn single_compress_attempt(
     conn: &ConnectionRow,
     cfg: &HttpConfig,
