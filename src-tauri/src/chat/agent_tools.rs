@@ -26,6 +26,7 @@ You can inspect and edit the project with these tools (declare via tool_call blo
 - `file_outline` — list classes/methods/functions in PHP/JS/Python (`path`)
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
 - `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
+- `run_verify` — deterministic check after edits (`kind`: file_contains | file_not_contains | php_lint | cargo_check | vitest, plus `path` / `needle` / `manifest`)
 
 Use relative paths from the workspace root. Prefer `read_file` before editing.
 **Patch sizing:** prefer the smallest unique `old_text` (often 1–3 lines for typos). Multi-line `old_text` is fine when the fix genuinely spans a case block, method, or branch — include enough context that the anchor is unique once in the file.

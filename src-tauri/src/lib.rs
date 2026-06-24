@@ -165,6 +165,8 @@ pub fn run() {
             commands::chat_hide,
             commands::chat_complete_stream,
             commands::chat_debug_run_scenario,
+            commands::autonomous_run_stream,
+            commands::autonomous_debug_run,
             commands::chat_clear_session_memory,
             commands::chat_index_context_artifacts,
             commands::chat_index_folder_outline,

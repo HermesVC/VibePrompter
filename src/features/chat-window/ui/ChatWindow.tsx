@@ -66,6 +66,8 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { ChatContextBar } from './ChatContextBar';
 import { ApplyConfirmDialog } from './ApplyConfirmDialog';
 import { BatchApplyConfirmDialog, type BatchApplyItem } from './BatchApplyConfirmDialog';
+import { AutonomousPlanStrip } from './AutonomousPlanStrip';
+import { useAutonomousChatRun } from '../hooks/useAutonomousChatRun';
 
 interface ChatImage extends ChatImageAttachment {}
 
@@ -213,6 +215,16 @@ export function ChatWindow() {
     onChange: setDraft,
     disabled: streaming,
   });
+
+  const {
+    autonomousMode,
+    setAutonomousMode,
+    plan: autonomousPlan,
+    phase: autonomousPhase,
+    phaseDetail: autonomousPhaseDetail,
+    sendAutonomous,
+    clearAutonomousUi,
+  } = useAutonomousChatRun();
 
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -753,6 +765,133 @@ export function ChatWindow() {
     setAttachError(null);
     setStreaming(true);
 
+    if (autonomousMode && text) {
+      try {
+        await sendAutonomous({
+          streamId: sid,
+          goal: text,
+          apiMessages,
+          modeId,
+          connectionId,
+          chatContext: chatContextRef.current,
+          sessionSummary: sessionSummaryRef.current,
+          sessionId: sessionIdRef.current,
+          onToken: (generation, delta) => {
+            if (generation !== streamGenerationRef.current || !delta) return;
+            setProviderRetryWarning(null);
+            bufRef.current += delta;
+            scheduleFlush(assistantId);
+          },
+          onChatStatus: (payload) => {
+            if (typeof payload.generation === 'number') {
+              streamGenerationRef.current = payload.generation;
+            }
+            if (payload.phase === 'provider_retry') {
+              setProviderRetryWarning(
+                payload.message?.trim() ||
+                  `Prompt template error (retry ${payload.attempt ?? 1}/3)…`
+              );
+              return;
+            }
+            if (payload.phase === 'compressing_memory') {
+              const kind = payload.kind === 'vector' ? 'vector' : 'rolling';
+              setMemoryDebugLabel(`Memory compression: ${kind}`);
+              return;
+            }
+            if (payload.phase === 'tools') {
+              bufRef.current = '';
+              flushPendingRef.current = false;
+              setMemoryDebugLabel('Running workspace tools…');
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: '', streaming: true } : m
+                )
+              );
+              return;
+            }
+            if (payload.phase === 'recovering') {
+              bufRef.current = '';
+              flushPendingRef.current = false;
+              setIsRecoveringContext(true);
+              setIsContinuingOutput(false);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: '', streaming: true } : m
+                )
+              );
+              return;
+            }
+            if (payload.phase === 'continuing') {
+              setIsContinuingOutput(true);
+            }
+          },
+          onMemory: (payload) => {
+            applySessionSummaryFromPayload(
+              payload.sessionSummary,
+              payload.contextWindowSize ?? contextLimit
+            );
+          },
+          onComplete: (result) => {
+            if (cancelledRef.current) return;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: result.finalText,
+                      streaming: false,
+                      meta: { model: 'autonomous', latencyMs: 0 },
+                    }
+                  : m
+              )
+            );
+            const inner = extractPlanStepSummary(result.finalText);
+            if (inner) {
+              void indexPlanStepSummary(sessionIdRef.current, inner, {
+                connectionId: connectionId || undefined,
+              });
+            }
+          },
+          onError: (msg, cancelled) => {
+            setIsRecoveringContext(false);
+            setIsContinuingOutput(false);
+            setProviderRetryWarning(null);
+            if (cancelled) cancelledRef.current = true;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: cancelled ? stripVpSummaryForDisplay(bufRef.current) : '',
+                      streaming: false,
+                      error: cancelled ? 'Cancelled' : msg,
+                    }
+                  : m
+              )
+            );
+          },
+        });
+      } catch (e) {
+        if (!cancelledRef.current) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, streaming: false, error: errorMessage(e) }
+                : m
+            )
+          );
+        }
+      } finally {
+        setStreaming(false);
+        setIsRecoveringContext(false);
+        setIsContinuingOutput(false);
+        setProviderRetryWarning(null);
+        setStreamId(null);
+        assistantIdRef.current = null;
+      }
+      return;
+    }
+
     const tokenEvent = `chat:${sid}:token`;
     const doneEvent = `chat:${sid}:done`;
     const errEvent = `chat:${sid}:error`;
@@ -977,6 +1116,9 @@ export function ChatWindow() {
     conns,
     scheduleFlush,
     voice,
+    autonomousMode,
+    sendAutonomous,
+    clearAutonomousUi,
     processScopedCompletion,
     applySessionSummaryFromPayload,
     applyRetrievedMemoryFromPayload,
@@ -1350,6 +1492,42 @@ export function ChatWindow() {
           sessionId={sessionId}
           connectionId={connectionId}
         />
+
+        <div
+          data-no-drag
+          style={{
+            margin: '0 12px 6px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: 'var(--fg-dim)',
+          }}
+        >
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: streaming ? 'not-allowed' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={autonomousMode}
+              disabled={streaming}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setAutonomousMode(on);
+                if (!on) clearAutonomousUi();
+              }}
+            />
+            Autonomous (plan → steps → verify)
+          </label>
+        </div>
+
+        {(autonomousMode || autonomousPlan || autonomousPhase) && (
+          <div data-no-drag style={{ margin: '0 12px' }}>
+            <AutonomousPlanStrip
+              phase={autonomousPhase}
+              phaseDetail={autonomousPhaseDetail}
+              plan={autonomousPlan}
+            />
+          </div>
+        )}
 
         {contextTrimNotice && (
           <div

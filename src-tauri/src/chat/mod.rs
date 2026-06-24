@@ -5,6 +5,7 @@
 //! message history; the backend only streams completions.
 
 mod agent_tools;
+mod autonomous;
 mod context_recovery;
 mod memory_compress;
 mod memory_facts;
@@ -22,6 +23,11 @@ pub use context_recovery::should_retry_for_context;
 pub use memory_compress::{
     compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
     summarize_turn_for_memory,
+};
+pub use autonomous::{
+    run_autonomous, AutonomousPhase, AutonomousPlanSnapshot, AutonomousRunConfig,
+    AutonomousRunEventSink, AutonomousRunRequest, AutonomousRunResult, AutonomousStepRecord,
+    StepSnapshot,
 };
 pub use run_service::{
     run_chat, ChatRunEventSink, ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus,

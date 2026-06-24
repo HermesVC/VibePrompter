@@ -34,6 +34,7 @@ const DIAGNOSTIC_INSPECTION_PROTOCOL: &str = r#"Diagnostic/debug request in work
 - If you cannot call tools, say which exact files you need to read; do not invent file contents.
 - After tool results, explain the likely root cause first. Only then provide a minimal patch if the user explicitly asked to fix it."#;
 
+#[derive(Clone)]
 pub struct ChatRunRequest {
     pub messages: Vec<ChatMessage>,
     pub mode_id: Option<String>,

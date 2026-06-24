@@ -1,6 +1,7 @@
 //! Tauri command handlers — thin IPC adapters. Business logic lives in `services`.
 
 pub mod agent_tools;
+pub mod autonomous;
 pub mod catalog;
 pub mod chat;
 pub mod clipboard;
@@ -14,6 +15,7 @@ pub mod shortcuts;
 pub mod workspace;
 
 pub use agent_tools::*;
+pub use autonomous::*;
 pub use catalog::*;
 pub use chat::*;
 pub use clipboard::*;

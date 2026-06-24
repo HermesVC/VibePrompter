@@ -28,6 +28,11 @@ import {
   harnessApplyGeneratedFences,
   harnessResetSyntheticFixture,
 } from '@shared/lib/chatDebugApi';
+import { autonomousDebugRun } from '@shared/lib/autonomousRunApi';
+import {
+  autonomousSyntheticFixtureScenario,
+  interpretAutonomousDebug,
+} from '@shared/lib/chatDebugAutonomousScenarios';
 import {
   interpretToolProbeTrace,
   toolCallFolderReadScenario,
@@ -79,6 +84,14 @@ export function ChatDebugPanel() {
   > | null>(null);
   const [reactStep, setReactStep] = useState<1 | 2 | 3 | null>(null);
   const [reactFilesPresent, setReactFilesPresent] = useState<string[]>([]);
+  const [autonomousOutput, setAutonomousOutput] = useState<Awaited<
+    ReturnType<typeof autonomousDebugRun>
+  > | null>(null);
+
+  const autonomousVerdict = useMemo(
+    () => interpretAutonomousDebug(autonomousOutput),
+    [autonomousOutput]
+  );
 
   const memoryVerdict = useMemo(() => {
     const result = output?.result as CompletionLike | null | undefined;
@@ -204,8 +217,56 @@ export function ChatDebugPanel() {
     }
   }, [loadPreset, toast]);
 
+  const runAutonomousSynthetic = useCallback(async () => {
+    setBusy(true);
+    try {
+      await harnessResetSyntheticFixture();
+      const preset = autonomousSyntheticFixtureScenario();
+      const result = await autonomousDebugRun(preset);
+      setAutonomousOutput(result);
+      if (result.error) {
+        toast.err(result.error, 'Autonomous debug');
+      } else if (result.result?.phase === 'done') {
+        toast.ok('Autonomous run done', 'Debug');
+      } else {
+        toast.ok(`Phase: ${result.result?.phase ?? '?'}`, 'Autonomous debug');
+      }
+    } catch (e) {
+      toast.err(errorMessage(e), 'Autonomous debug failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [toast]);
+
   return (
     <>
+      <Group title="Autonomous run (multi-step)">
+        <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
+          Outer loop: plan → execute → verify → replan. Тест на синтетической фикстуре (LM Studio
+          required). В чате: checkbox «Autonomous».
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          <PhButton size="sm" disabled={busy} onClick={() => void runAutonomousSynthetic()}>
+            Run synthetic autonomous
+          </PhButton>
+        </div>
+        {autonomousVerdict.length > 0 && (
+          <ul
+            style={{
+              margin: '0 0 8px',
+              paddingLeft: 18,
+              fontSize: 11,
+              color: 'var(--fg-dim)',
+              lineHeight: 1.45,
+            }}
+          >
+            {autonomousVerdict.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </Group>
+
       <Group title="Memory probe (debug panel)">
         <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
           Тест памяти через тот же pipeline, что и чат. Ожидаемый секрет:{' '}

@@ -1,0 +1,79 @@
+import { invoke } from '@tauri-apps/api/core';
+import type { ChatDebugMessage } from './chatDebugApi';
+
+export type AutonomousPhase =
+  | 'planning'
+  | 'executing'
+  | 'verifying'
+  | 'replanning'
+  | 'completing'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export type StepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped';
+
+export interface AutonomousRunConfig {
+  maxSteps?: number;
+  maxReplans?: number;
+  planningEnabled?: boolean;
+  verifySteps?: boolean;
+}
+
+export interface StepSnapshot {
+  id: number;
+  title: string;
+  status: StepStatus;
+}
+
+export interface AutonomousPlanSnapshot {
+  progress: string;
+  steps: StepSnapshot[];
+}
+
+export interface AutonomousStepRecord {
+  stepId: number;
+  title: string;
+  phase: AutonomousPhase;
+  assistantPreview: string;
+  verifyOk?: boolean | null;
+  verifyMessage?: string | null;
+}
+
+export interface AutonomousRunResult {
+  phase: AutonomousPhase;
+  plan?: { steps: StepSnapshot[] } | null;
+  steps: AutonomousStepRecord[];
+  finalText: string;
+  replansUsed: number;
+}
+
+export interface AutonomousRunStreamInput {
+  streamId: string;
+  goal: string;
+  messages: ChatDebugMessage[];
+  modeId?: string | null;
+  connectionId?: string | null;
+  chatContext?: unknown;
+  sessionSummary?: string | null;
+  sessionId?: string | null;
+  config?: AutonomousRunConfig;
+}
+
+export async function autonomousRunStream(
+  input: AutonomousRunStreamInput
+): Promise<AutonomousRunResult> {
+  return invoke<AutonomousRunResult>('autonomous_run_stream', { input });
+}
+
+export interface AutonomousDebugRunOutput {
+  trace: Array<Record<string, unknown>>;
+  result: AutonomousRunResult | null;
+  error: string | null;
+}
+
+export async function autonomousDebugRun(
+  input: Omit<AutonomousRunStreamInput, 'streamId'>
+): Promise<AutonomousDebugRunOutput> {
+  return invoke<AutonomousDebugRunOutput>('autonomous_debug_run', { input });
+}

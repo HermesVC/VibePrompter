@@ -6,6 +6,7 @@ pub mod plan_memory;
 pub mod policy;
 pub mod symbols;
 pub mod types;
+pub mod verify;
 
 pub use context::{
     compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output,
@@ -18,3 +19,4 @@ pub use fs::{
 };
 pub use policy::{PolicyDecision, PolicyEngine};
 pub use types::*;
+pub use verify::{run_verify_spec, VerifyOutcome, VerifySpec};
