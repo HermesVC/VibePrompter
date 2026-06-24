@@ -158,6 +158,15 @@ foreach ($projectUuids as $x) {
         smoke_msg,
     ));
 
+    let toolchain = crate::app::toolchain_probe::run_toolchain_deterministic(state).await?;
+    for s in &toolchain.steps {
+        checks.push(check(
+            &format!("toolchain_{}", s.id),
+            s.pass,
+            format!("{}: {}", s.tool, s.detail),
+        ));
+    }
+
     let all_pass = checks.iter().all(|c| c.pass);
     Ok(HarnessDeterministicReport { checks, all_pass })
 }

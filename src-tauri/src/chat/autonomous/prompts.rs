@@ -16,7 +16,7 @@ You are executing a multi-step plan. The orchestrator runs one step per turn.
 </autonomous-plan>
 
 Verify kinds (optional per step): `file_contains`, `file_not_contains`, `php_lint`, `cargo_check`, `vitest`.
-Keep plans to 3–8 concrete steps. Use workspace tools (`read_file`, `apply_patch`, `run_verify`) — not ```file:``` fences for existing files.
+Keep plans to 3–8 concrete steps. Tools: `list_dir`, `read_file`, `write_file` (new files), `apply_patch` (existing), `run_verify`.
 
 **After each step** — end your message with:
 <step-result step="N" status="done|failed">

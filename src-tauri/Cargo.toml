@@ -31,6 +31,10 @@ path = "src/bin/projects_api_probe.rs"
 name = "harness_probe"
 path = "src/bin/harness_probe.rs"
 
+[[bin]]
+name = "tools_integration_probe"
+path = "src/bin/tools_integration_probe.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.1", features = [] }
 

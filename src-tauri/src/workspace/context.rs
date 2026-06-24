@@ -294,7 +294,8 @@ pub fn compose_system_prompt_with_opts(
             let edit_rules = if opts.tools_active {
                 "- Edits to **existing** files: ONLY <|tool_call|> apply_patch after read_file. \
                  Never ```file:``` fences with edits:, old_text:, or new_text: for existing paths.\n\
-                 - **New** files only: use ```file relative/path``` fences with the full new file body.\n\
+                 - **New** files: <|tool_call|> write_file{path, content} (one file per call). \
+                 apply_patch cannot create files. Optional ```file path``` fences as UI fallback.\n\
                  - Prefer read_symbol over read_file for large PHP/JS/Python files."
             } else {
                 "- Prefer small, targeted edits; use file fences with paths when changing multiple files.\n\

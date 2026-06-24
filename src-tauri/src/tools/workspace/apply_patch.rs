@@ -19,7 +19,8 @@ pub const NAME: &str = "apply_patch";
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Apply exact search/replace edits to a file. \
+        description: "Apply exact search/replace edits to an **existing** file. \
+For new files use write_file. \
 Prefer small anchors (1–3 lines) for typos; multi-line old_text is OK when the change spans a case/method block (see workspace patchMaxLines). \
 Read the file first; pass contentHash as expected_hash when available."
             .into(),

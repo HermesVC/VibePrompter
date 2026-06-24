@@ -25,10 +25,12 @@ You can inspect and edit the project with these tools (declare via tool_call blo
 - `read_file` — read a file or line range (`path`, optional `start_line`/`end_line` or `lines:[start,end]`)
 - `file_outline` — list classes/methods/functions in PHP/JS/Python (`path`)
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
-- `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
+- `apply_patch` — surgical edit on **existing** files (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
+- `write_file` — create a **new** file only (`path`, `content`). Fails if file exists — then use apply_patch.
 - `run_verify` — deterministic check after edits (`kind`: file_contains | file_not_contains | php_lint | cargo_check | vitest, plus `path` / `needle` / `manifest`)
 
-Use relative paths from the workspace root. Prefer `read_file` before editing.
+Use relative paths from the workspace root. Prefer `read_file` before editing existing files.
+**New vs existing:** `list_dir` first if unsure. **New path** → `write_file`. **Existing path** → `read_file` then `apply_patch`. Never use apply_patch with empty old_text to create a file.
 **Patch sizing:** prefer the smallest unique `old_text` (often 1–3 lines for typos). Multi-line `old_text` is fine when the fix genuinely spans a case block, method, or branch — include enough context that the anchor is unique once in the file.
 Do not paste a whole file unless creating a new one. Split unrelated fixes into separate apply_patch calls.
 If the tool returns "patch too large", narrow the anchor or split into sequential edits.
@@ -59,7 +61,21 @@ new_text:
 foreach ($projectUuids as $id) {
 ```
 
-BAD — whole file or entire class in one old_text (split edits or use new-file fences only for new files).
+BAD — whole file or entire class in one old_text on an **existing** file (split edits or use write_file for new paths).
+
+### Creating NEW files (scaffold, index.html, new modules)
+
+GOOD — new file via write_file:
+<|tool_call|>call:write_file{path:test/qwen_test/index.html,content:<!DOCTYPE html>\n<html>...</html>}</|tool_call|>
+
+BAD — apply_patch on non-existent file or empty old_text:
+<|tool_call|>call:apply_patch{path:test/new.html,old_text:,new_text:...}</|tool_call|>
+
+Alternative for new files (applied after the turn in UI, not in tool loop): markdown fence
+```file test/qwen_test/styles.css
+/* full css */
+```
+Prefer **write_file** in tool_call when tools are active so files land immediately.
 
 **Never** use markdown ` ```file:...` fences with `edits:` for existing files. Use tool_call only.
 One small fix = one apply_patch call. Split multiple bugs into separate tool_call blocks.
@@ -69,6 +85,7 @@ When you need to inspect files, emit tool_call block(s) in one of these formats,
 Qwen / LM Studio (preferred):
 <|tool_call|>call:read_file{path:relative/path.ext}</|tool_call|>
 <|tool_call|>call:apply_patch{path:relative/path.ext,old_text:exact lines,new_text:replacement}</|tool_call|>
+<|tool_call|>call:write_file{path:relative/new.ext,content:full file body}</|tool_call|>
 
 Gemma 4:
 <|tool_call>call:read_file{path:<|"|>relative/path.ext<|"|>}<|tool_call|>

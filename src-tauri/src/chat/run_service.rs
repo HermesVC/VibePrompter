@@ -29,6 +29,13 @@ Use one fence per file. Put no prose inside file fences. Use stable relative wor
 For plans, notes, and markdown context files (.md), use clear filenames (e.g. PLAN.md, notes/context.md) — the app remembers these paths in semantic memory.
 When workspace tools are active, prefer `apply_patch` (after read_file) for edits to existing files instead of full-file fences."#;
 
+/// When tools are on: edits via tool_call; new files via write_file (or fences as fallback).
+const NEW_FILES_WITH_TOOLS_PROTOCOL: &str = r#"## New files (tools active)
+- **Existing file** → read_file + apply_patch only.
+- **New file** (path not on disk) → write_file tool with full `content`. One file per call.
+- apply_patch cannot create files (empty old_text is rejected).
+- Optional fallback: ```file relative/path``` fences in assistant text (user applies in UI); prefer write_file in autonomous/tool loops."#;
+
 const DIAGNOSTIC_INSPECTION_PROTOCOL: &str = r#"Diagnostic/debug request in workspace scope:
 - First inspect the relevant files with workspace tool_call blocks. Do not output generated file fences, rewrites, or replacement code before tool results.
 - If you cannot call tools, say which exact files you need to read; do not invent file contents.
@@ -596,14 +603,16 @@ async fn resolve_chat_connection_row(
 }
 
 fn append_file_artifact_protocol(system_prompt: &mut Option<String>, tools_active: bool) {
-    if tools_active {
-        return;
-    }
+    let block = if tools_active {
+        NEW_FILES_WITH_TOOLS_PROTOCOL
+    } else {
+        FILE_ARTIFACT_PROTOCOL
+    };
     let mut sys = system_prompt.take().unwrap_or_default();
     if !sys.trim().is_empty() {
         sys.push_str("\n\n");
     }
-    sys.push_str(FILE_ARTIFACT_PROTOCOL);
+    sys.push_str(block);
     *system_prompt = Some(sys);
 }
 

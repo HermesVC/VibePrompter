@@ -7,5 +7,6 @@ pub mod logging;
 pub mod probe;
 pub mod setup;
 pub mod state;
+pub mod toolchain_probe;
 
 pub use state::AppState;
