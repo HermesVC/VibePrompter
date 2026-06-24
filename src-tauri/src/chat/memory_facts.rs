@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use crate::models::ChatMessage;
+
 const FACTS_HEADER: &str = "## FACTS (do not contradict)";
 const FACTS_CHAR_FRACTION: f64 = 0.15;
 
@@ -137,6 +139,31 @@ pub fn split_memory_facts(source: &str) -> MemoryFacts {
         atoms: dedupe_and_prioritize(atoms),
         narrative: narrative.join("\n").trim().to_string(),
     }
+}
+
+/// Collect structured facts from rolling memory plus every evicted turn.
+///
+/// Scans the full evicted batch (not only the tail sent to the compress LLM) so
+/// early `DECISION:` / `PLAN_CANONICAL` lines are not dropped on large evictions.
+pub fn collect_session_facts(prior_memory: &str, evicted: &[ChatMessage]) -> MemoryFacts {
+    let mut parts = Vec::new();
+    let prior = prior_memory.trim();
+    if !prior.is_empty() {
+        parts.push(prior.to_string());
+    }
+    for m in evicted {
+        let content = m.content.trim();
+        if !content.is_empty() {
+            parts.push(content.to_string());
+        }
+    }
+    if parts.is_empty() {
+        return MemoryFacts {
+            atoms: Vec::new(),
+            narrative: String::new(),
+        };
+    }
+    split_memory_facts(&parts.join("\n\n"))
 }
 
 pub fn merge_compressed_memory(
@@ -289,6 +316,32 @@ fn workspace_paths(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_session_facts_scans_oldest_evicted_turns() {
+        let evicted = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "DECISION: secret code VIBE-7749".into(),
+                images: vec![],
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "ok".into(),
+                images: vec![],
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "filler ".repeat(200),
+                images: vec![],
+            },
+        ];
+        let facts = collect_session_facts("", &evicted);
+        assert!(facts
+            .atoms
+            .iter()
+            .any(|a| a.kind == FactKind::Decision && a.text.contains("VIBE-7749")));
+    }
 
     #[test]
     fn split_keeps_atomic_facts_out_of_narrative() {

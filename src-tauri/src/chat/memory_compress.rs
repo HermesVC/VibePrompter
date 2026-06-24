@@ -15,7 +15,10 @@ pub const MEMORY_KEEP_FRACTION: f64 = 0.30;
 /// Trigger LLM compression when usage exceeds this fraction of the cap.
 pub const MEMORY_PRESSURE_FRACTION: f64 = 0.85;
 
-const COMPRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Internal compress calls may run on large local models (LM Studio) — allow
+/// longer than the user-facing chat timeout without changing global settings.
+const MIN_COMPRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const MAX_COMPRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(250);
 const MIN_SOURCE_CHARS: usize = 320;
 const MAX_COMPRESS_ATTEMPTS: usize = 5;
@@ -279,6 +282,12 @@ fn is_compress_retryable_error(err: &AppError) -> bool {
         || lower.contains("incomplete")
 }
 
+fn compress_request_timeout(cfg: &HttpConfig) -> std::time::Duration {
+    cfg.timeout
+        .max(MIN_COMPRESS_TIMEOUT)
+        .min(MAX_COMPRESS_TIMEOUT)
+}
+
 fn estimate_compress_input_tokens(system: &str, user_body: &str) -> u32 {
     let chars = system.chars().count() + user_body.chars().count();
     ((chars + 3) / 4) as u32 + 96
@@ -321,8 +330,12 @@ async fn single_compress_attempt(
         retry: Some(false),
     };
 
-    let compress_future = providers::complete(conn, messages, params, cfg);
-    match tokio::time::timeout(COMPRESS_TIMEOUT, compress_future).await {
+    let compress_timeout = compress_request_timeout(cfg);
+    let mut compress_cfg = cfg.clone();
+    compress_cfg.timeout = compress_timeout;
+
+    let compress_future = providers::complete(conn, messages, params, &compress_cfg);
+    match tokio::time::timeout(compress_timeout, compress_future).await {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(AppError::Validation("memory compression timed out".into())),
@@ -363,6 +376,32 @@ mod tests {
         assert!(out.starts_with('…'));
         assert!(out.contains("TAIL"));
         assert!(!out.contains("HEAD"));
+    }
+
+    #[test]
+    fn compress_timeout_at_least_ninety_seconds_even_when_http_is_thirty() {
+        let cfg = HttpConfig {
+            timeout: std::time::Duration::from_secs(30),
+            proxy: None,
+            log_raw: false,
+        };
+        assert_eq!(
+            compress_request_timeout(&cfg),
+            std::time::Duration::from_secs(90)
+        );
+    }
+
+    #[test]
+    fn compress_timeout_respects_higher_user_setting() {
+        let cfg = HttpConfig {
+            timeout: std::time::Duration::from_secs(180),
+            proxy: None,
+            log_raw: false,
+        };
+        assert_eq!(
+            compress_request_timeout(&cfg),
+            std::time::Duration::from_secs(180)
+        );
     }
 
     #[test]

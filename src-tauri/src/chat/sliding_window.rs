@@ -217,29 +217,18 @@ pub fn fallback_merge_memory(
     evicted: &[ChatMessage],
     context_limit: i64,
 ) -> String {
-    let mut excerpt = String::new();
-    for m in evicted.iter().rev().take(8).rev() {
-        let role = if m.role == "assistant" {
-            "Assistant"
-        } else {
-            "User"
-        };
-        let content: String = m.content.chars().take(400).collect();
-        excerpt.push_str(role);
-        excerpt.push_str(": ");
-        excerpt.push_str(content.trim());
-        if m.content.chars().count() > 400 {
-            excerpt.push('…');
-        }
-        excerpt.push('\n');
-    }
-    let prior = prior_memory.trim();
-    let merged = if prior.is_empty() {
-        excerpt
-    } else {
-        format!("{prior}\n{excerpt}")
-    };
-    trim_summary_to_budget(&merged, context_limit)
+    use super::memory_compress::compression_target_chars;
+    use super::memory_facts::{collect_session_facts, merge_compressed_memory};
+    use super::session_summary::{summary_budget_chars, trim_to_char_budget};
+
+    let facts = collect_session_facts(prior_memory.trim(), evicted);
+    let budget = summary_budget_chars(context_limit);
+    let target = compression_target_chars(facts.narrative.chars().count()).min(budget);
+    let narrative = trim_to_char_budget(&facts.narrative, target);
+    trim_summary_to_budget(
+        &merge_compressed_memory(&facts, &narrative, context_limit),
+        context_limit,
+    )
 }
 
 /// Call the same provider to merge evicted turns into rolling memory.
@@ -265,7 +254,8 @@ pub async fn compress_evicted_turns(
         turns
     );
 
-    super::memory_compress::compress_with_system_preserving_facts(
+    let facts = super::memory_facts::collect_session_facts(prior, evicted);
+    let compressed = super::memory_compress::compress_with_system_retries(
         conn,
         cfg,
         &user_body,
@@ -274,8 +264,11 @@ pub async fn compress_evicted_turns(
         COMPRESS_SYSTEM,
         false,
     )
-    .await
-    .map(|merged| trim_summary_to_budget(&merged, context_limit))
+    .await?;
+    Ok(trim_summary_to_budget(
+        &super::memory_facts::merge_compressed_memory(&facts, &compressed, context_limit),
+        context_limit,
+    ))
 }
 
 #[cfg(test)]
@@ -313,5 +306,17 @@ mod tests {
         );
         assert!(plan.evicted.is_empty());
         assert_eq!(plan.active.len(), 2);
+    }
+
+    #[test]
+    fn fallback_merge_preserves_decision_from_oldest_evicted() {
+        let evicted = vec![
+            msg("user", "DECISION: secret code VIBE-7749"),
+            msg("assistant", "accepted"),
+            msg("user", &"filler ".repeat(300)),
+        ];
+        let out = fallback_merge_memory("", &evicted, 8192);
+        assert!(out.contains("VIBE-7749"));
+        assert!(out.contains("## FACTS"));
     }
 }
