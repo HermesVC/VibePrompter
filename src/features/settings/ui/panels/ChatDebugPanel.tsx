@@ -1,0 +1,115 @@
+import { useCallback, useState } from 'react';
+import { Group, I, PhButton, SettingRow, useToast } from '@shared/ui';
+import {
+  runChatDebugScenario,
+  type ChatDebugScenarioOutput,
+} from '@shared/lib/chatDebugApi';
+import { errorMessage } from '@shared/lib/utils';
+
+const SAMPLE_SCENARIO = JSON.stringify(
+  {
+    modeId: 'developer',
+    sessionId: 'debug-agent-session',
+    chatContext: {
+      scope: {
+        kind: 'workspace',
+        treeSummary: 'src-tauri/src/commands/chat.rs\nsrc-tauri/src/chat/run_service.rs',
+      },
+      modifiers: ['developer'],
+      languageId: null,
+    },
+    messages: [
+      {
+        role: 'user',
+        content: 'Разберись, какие файлы нужно читать перед фиксом. Пока не меняй код.',
+        images: [],
+      },
+    ],
+  },
+  null,
+  2
+);
+
+export function ChatDebugPanel() {
+  const toast = useToast();
+  const [scenario, setScenario] = useState(SAMPLE_SCENARIO);
+  const [output, setOutput] = useState<ChatDebugScenarioOutput | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const runScenario = useCallback(async () => {
+    setBusy(true);
+    try {
+      const parsed = JSON.parse(scenario);
+      const result = await runChatDebugScenario(parsed);
+      setOutput(result);
+      if (result.error) {
+        toast.err(result.error, 'Agent scenario failed');
+      } else {
+        toast.ok(`${result.trace.length} trace event(s)`, 'Agent scenario complete');
+      }
+    } catch (e) {
+      toast.err(errorMessage(e), 'Invalid scenario');
+    } finally {
+      setBusy(false);
+    }
+  }, [scenario, toast]);
+
+  return (
+    <Group title="Agent scenario runner">
+      <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
+        Runs the same chat service as the floating UI and returns a compact trace for prompt,
+        memory, tool, and continuation debugging.
+      </p>
+
+      <SettingRow
+        icon={<I.code size={14} />}
+        label="Scenario JSON"
+        hint="Uses chat_debug_run_scenario. Keep prompts small unless you are testing context pressure."
+        control={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 420 }}>
+            <textarea
+              value={scenario}
+              onChange={(e) => setScenario(e.target.value)}
+              rows={12}
+              spellCheck={false}
+              style={{
+                width: '100%',
+                fontSize: 10,
+                fontFamily: 'var(--font-mono, monospace)',
+                padding: 8,
+                borderRadius: 6,
+                border: '.5px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--fg)',
+                resize: 'vertical',
+              }}
+            />
+            <PhButton size="sm" disabled={busy} onClick={() => void runScenario()}>
+              Run scenario
+            </PhButton>
+          </div>
+        }
+      />
+
+      {output && (
+        <pre
+          style={{
+            margin: '4px 0 0',
+            padding: 8,
+            maxHeight: 320,
+            overflow: 'auto',
+            fontSize: 10,
+            borderRadius: 6,
+            background: 'var(--surface-2)',
+            border: '.5px solid var(--border)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            color: 'var(--fg-mute)',
+          }}
+        >
+          {JSON.stringify(output, null, 2)}
+        </pre>
+      )}
+    </Group>
+  );
+}

@@ -9,6 +9,9 @@ use crate::utils::AppResult;
 use crate::workspace::ChatScope;
 
 const MAX_TOOL_ITERATIONS: usize = 6;
+const MAX_TOOL_AUTO_CONTINUES: usize = 3;
+const TOOL_CONTINUATION_TAIL_CHARS: usize = 6_000;
+const TOOL_STITCH_OVERLAP_CHARS: usize = 2_000;
 
 const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 
@@ -220,7 +223,7 @@ where
             images: vec![],
         });
 
-        result = crate::providers::complete_stream(
+        result = complete_stream_with_tool_auto_continue(
             row,
             messages.clone(),
             params.clone(),
@@ -238,6 +241,209 @@ where
     }
 
     Ok(result)
+}
+
+async fn complete_stream_with_tool_auto_continue<F, C>(
+    row: &crate::storage::repositories::ConnectionRow,
+    base_messages: Vec<crate::models::ChatMessage>,
+    params: crate::models::CompletionParams,
+    cfg: &crate::providers::HttpConfig,
+    on_token: &mut F,
+    should_cancel: C,
+) -> AppResult<crate::models::CompletionResult>
+where
+    F: FnMut(&str) + Send,
+    C: Fn() -> bool + Send + Sync + Clone,
+{
+    let max_output = params.max_tokens.unwrap_or(0);
+    let mut current_messages = base_messages.clone();
+    let mut accumulated = String::new();
+    let mut combined: Option<crate::models::CompletionResult> = None;
+
+    for continue_idx in 0..=MAX_TOOL_AUTO_CONTINUES {
+        let mut part = crate::providers::complete_stream(
+            row,
+            current_messages.clone(),
+            params.clone(),
+            cfg,
+            |delta| on_token(delta),
+            should_cancel.clone(),
+        )
+        .await?;
+
+        apply_tool_output_truncation(&mut part, max_output);
+        let part_text = std::mem::take(&mut part.text);
+        let before_len = accumulated.len();
+        accumulated = stitch_tool_continuation(&accumulated, &part_text);
+        let visible_progress = accumulated.len() > before_len;
+        merge_tool_completion_result(&mut combined, part, &accumulated);
+
+        let should_continue = combined
+            .as_ref()
+            .is_some_and(|r| should_continue_tool_completion(r, &accumulated));
+        if !should_continue || !visible_progress || should_cancel() {
+            break;
+        }
+        if continue_idx == MAX_TOOL_AUTO_CONTINUES {
+            break;
+        }
+
+        current_messages = tool_continuation_messages(&base_messages, &accumulated);
+    }
+
+    combined.ok_or_else(|| crate::utils::AppError::Validation("tool follow-up did not run".into()))
+}
+
+fn merge_tool_completion_result(
+    combined: &mut Option<crate::models::CompletionResult>,
+    mut part: crate::models::CompletionResult,
+    accumulated_text: &str,
+) {
+    if let Some(out) = combined.as_mut() {
+        out.text = accumulated_text.to_string();
+        out.latency_ms = out.latency_ms.saturating_add(part.latency_ms);
+        out.usage.input_tokens = out
+            .usage
+            .input_tokens
+            .saturating_add(part.usage.input_tokens);
+        out.usage.output_tokens = out
+            .usage
+            .output_tokens
+            .saturating_add(part.usage.output_tokens);
+        out.stream_incomplete |= part.stream_incomplete;
+        out.finish_reason = part.finish_reason.take();
+        out.output_truncated = part.output_truncated;
+    } else {
+        part.text = accumulated_text.to_string();
+        *combined = Some(part);
+    }
+}
+
+fn apply_tool_output_truncation(result: &mut crate::models::CompletionResult, max_output: u32) {
+    if result.output_truncated {
+        return;
+    }
+    if result.finish_reason.as_deref() == Some("length") {
+        result.output_truncated = true;
+        return;
+    }
+    if max_output == 0 || result.usage.output_tokens == 0 {
+        return;
+    }
+    if result.usage.output_tokens >= max_output.saturating_sub(64) {
+        result.output_truncated = true;
+    }
+}
+
+fn should_continue_tool_completion(
+    result: &crate::models::CompletionResult,
+    accumulated_text: &str,
+) -> bool {
+    result.output_truncated || tool_continuation_context(accumulated_text).inside_fence
+}
+
+fn tool_continuation_messages(
+    base: &[crate::models::ChatMessage],
+    accumulated: &str,
+) -> Vec<crate::models::ChatMessage> {
+    let mut messages = base.to_vec();
+    let ctx = tool_continuation_context(accumulated);
+    messages.push(crate::models::ChatMessage {
+        role: "assistant".into(),
+        content: tail_chars(accumulated, TOOL_CONTINUATION_TAIL_CHARS),
+        images: Vec::new(),
+    });
+    messages.push(crate::models::ChatMessage {
+        role: "user".into(),
+        content: tool_continuation_prompt(&ctx),
+        images: Vec::new(),
+    });
+    messages
+}
+
+fn stitch_tool_continuation(accumulated: &str, next: &str) -> String {
+    if accumulated.is_empty() || next.is_empty() {
+        return format!("{accumulated}{next}");
+    }
+    let suffix = tail_chars(accumulated, TOOL_STITCH_OVERLAP_CHARS);
+    let prefix: String = next.chars().take(TOOL_STITCH_OVERLAP_CHARS).collect();
+    let max = suffix.chars().count().min(prefix.chars().count());
+    for len in (8..=max).rev() {
+        let suffix_tail = tail_chars(&suffix, len);
+        let prefix_head: String = prefix.chars().take(len).collect();
+        if suffix_tail == prefix_head {
+            let rest: String = next.chars().skip(len).collect();
+            return format!("{accumulated}{rest}");
+        }
+    }
+    format!("{accumulated}{next}")
+}
+
+fn tail_chars(s: &str, max_chars: usize) -> String {
+    let len = s.chars().count();
+    if len <= max_chars {
+        return s.to_string();
+    }
+    s.chars().skip(len - max_chars).collect()
+}
+
+struct ToolContinuationContext {
+    inside_fence: bool,
+    fence_language: Option<String>,
+    last_line: String,
+}
+
+fn tool_continuation_context(text: &str) -> ToolContinuationContext {
+    let mut inside_fence = false;
+    let mut fence_language: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            inside_fence = !inside_fence;
+            if inside_fence {
+                let lang = rest.trim();
+                fence_language = if lang.is_empty() {
+                    None
+                } else {
+                    Some(lang.to_string())
+                };
+            }
+        }
+    }
+    ToolContinuationContext {
+        inside_fence,
+        fence_language,
+        last_line: text.lines().last().unwrap_or("").to_string(),
+    }
+}
+
+fn tool_continuation_prompt(ctx: &ToolContinuationContext) -> String {
+    let cursor = if ctx.last_line.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nThe cut happened after this exact line fragment:\n{}\n",
+            ctx.last_line
+        )
+    };
+    if ctx.inside_fence {
+        let lang = ctx
+            .fence_language
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("code");
+        if lang.starts_with("file ") || lang.contains("path=") || lang.contains("file=") {
+            return format!(
+                "/no_think\nYour previous assistant message was cut off inside a generated file fence (`{lang}`).{cursor}Continue from the very next character of the file content. Do not repeat the fragment. When this file is complete, close the markdown fence with ```; if more generated files are required, continue with the next ```file ... fence. Do not explain or summarize."
+            );
+        }
+        return format!(
+            "/no_think\nYour previous assistant message was cut off inside a `{lang}` code block.{cursor}Continue from the very next character of the code. Do not repeat the fragment. Close the markdown fence with ``` once the code block is complete. Do not explain or summarize."
+        );
+    }
+    format!(
+        "/no_think\nYour previous assistant message above was cut off.{cursor}Continue exactly from the next character where it stopped. Output only the continuation. Do not restart, summarize, explain, add a heading, wrap in a new code fence, or repeat completed text."
+    )
 }
 
 #[cfg(test)]
@@ -300,6 +506,58 @@ mod tests {
 
         assert!(system.contains("<|tool_call>call:read_file"));
         assert!(system.contains("Do not say \"I will inspect/read/check\""));
+    }
+
+    #[test]
+    fn tool_followup_detects_output_length_truncation() {
+        let mut result = crate::models::CompletionResult {
+            text: "partial".into(),
+            model: "test".into(),
+            latency_ms: 0,
+            usage: crate::models::TokenUsage {
+                input_tokens: 10,
+                output_tokens: 100,
+            },
+            context_window_size: None,
+            scoped_text: None,
+            session_summary: None,
+            memory_compressed: false,
+            evicted_turns: None,
+            context_recovered: false,
+            stream_incomplete: false,
+            finish_reason: Some("stop".into()),
+            output_truncated: false,
+            retrieved_memory: None,
+            vector_chunks_used: None,
+            vector_memory_compressed: false,
+        };
+
+        apply_tool_output_truncation(&mut result, 120);
+
+        assert!(result.output_truncated);
+        assert!(should_continue_tool_completion(&result, &result.text));
+    }
+
+    #[test]
+    fn tool_followup_continues_unclosed_file_fence() {
+        let text = "```file test/app.js\nexport const x = ";
+        let ctx = tool_continuation_context(text);
+        let prompt = tool_continuation_prompt(&ctx);
+
+        assert!(ctx.inside_fence);
+        assert!(prompt.contains("generated file fence"));
+        assert!(prompt.contains("close the markdown fence"));
+    }
+
+    #[test]
+    fn tool_followup_stitches_repeated_overlap() {
+        let a = "function demo() {\n  return ";
+        let b = "  return 1;\n}\n";
+
+        assert_eq!(
+            stitch_tool_continuation(a, b),
+            "function demo() {\n  return 1;\n}\n"
+        );
     }
 
     #[test]

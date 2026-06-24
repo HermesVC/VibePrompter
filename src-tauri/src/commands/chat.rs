@@ -44,6 +44,7 @@ pub async fn chat_hide(app: AppHandle) -> Result<(), AppError> {
 /// the full `messages` history; images ride on individual user turns via
 /// `ChatMessage::images`.
 #[tauri::command]
+#[allow(unreachable_code)]
 pub async fn chat_complete_stream(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -55,6 +56,80 @@ pub async fn chat_complete_stream(
     session_summary: Option<String>,
     session_id: Option<String>,
 ) -> Result<CompletionResult, AppError> {
+    let token_event = format!("chat:{stream_id}:token");
+    let done_event = format!("chat:{stream_id}:done");
+    let err_event = format!("chat:{stream_id}:error");
+    let status_event = format!("chat:{stream_id}:status");
+    let memory_event = format!("chat:{stream_id}:memory");
+
+    let registry = tauri::Manager::state::<crate::app::cancel::CancelRegistry>(&app);
+    let cancel_flag = registry.register(&stream_id);
+
+    struct TauriChatEvents {
+        app: AppHandle,
+        token_event: String,
+        status_event: String,
+        memory_event: String,
+    }
+
+    impl crate::chat::ChatRunEventSink for TauriChatEvents {
+        fn status(&mut self, status: crate::chat::ChatRunStatus) {
+            let _ = self.app.emit(&self.status_event, status);
+        }
+
+        fn token(&mut self, generation: u32, delta: &str) {
+            let _ = self.app.emit(
+                &self.token_event,
+                serde_json::json!({
+                    "generation": generation,
+                    "delta": delta,
+                }),
+            );
+        }
+
+        fn memory(&mut self, update: crate::chat::ChatRunMemoryUpdate) {
+            let _ = self.app.emit(&self.memory_event, update);
+        }
+    }
+
+    let mut events = TauriChatEvents {
+        app: app.clone(),
+        token_event,
+        status_event,
+        memory_event,
+    };
+    let result = crate::chat::run_chat(
+        &state,
+        crate::chat::ChatRunRequest {
+            messages: messages.clone(),
+            mode_id: mode_id.clone(),
+            connection_id: connection_id.clone(),
+            chat_context: chat_context.clone(),
+            session_summary: session_summary.clone(),
+            session_id: session_id.clone(),
+        },
+        cancel_flag.clone(),
+        &mut events,
+    )
+    .await;
+
+    tauri::Manager::state::<crate::app::cancel::CancelRegistry>(&app).forget(&stream_id);
+
+    return match result {
+        Ok(r) => {
+            let _ = app.emit(&done_event, &r);
+            Ok(r)
+        }
+        Err(e) => {
+            if is_cancelled_err(&e) {
+                let _ = app.emit(&err_event, "cancelled");
+            } else {
+                let _ = app.emit(&err_event, e.to_string());
+            }
+            Err(e)
+        }
+    };
+
     let mut chat_context = chat_context;
     if let Some(ctx) = chat_context.as_mut() {
         crate::workspace::normalize_chat_context(ctx);
@@ -599,6 +674,116 @@ pub async fn chat_complete_stream(
                 let _ = app.emit(&err_event, e.to_string());
             }
             Err(e)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatDebugRunScenarioInput {
+    messages: Vec<ChatMessage>,
+    mode_id: Option<String>,
+    connection_id: Option<String>,
+    chat_context: Option<crate::workspace::ChatContextPayload>,
+    session_summary: Option<String>,
+    session_id: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatDebugRunScenarioOutput {
+    trace: Vec<serde_json::Value>,
+    result: Option<CompletionResult>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn chat_debug_run_scenario(
+    state: State<'_, AppState>,
+    input: ChatDebugRunScenarioInput,
+) -> Result<ChatDebugRunScenarioOutput, AppError> {
+    struct TraceEvents {
+        trace: Vec<serde_json::Value>,
+        token_chars: usize,
+    }
+
+    impl crate::chat::ChatRunEventSink for TraceEvents {
+        fn status(&mut self, status: crate::chat::ChatRunStatus) {
+            self.trace.push(serde_json::json!({
+                "type": "status",
+                "status": status,
+            }));
+        }
+
+        fn token(&mut self, generation: u32, delta: &str) {
+            self.token_chars = self.token_chars.saturating_add(delta.chars().count());
+            self.trace.push(serde_json::json!({
+                "type": "token",
+                "generation": generation,
+                "chars": delta.chars().count(),
+                "totalChars": self.token_chars,
+                "preview": delta.chars().take(160).collect::<String>(),
+            }));
+        }
+
+        fn memory(&mut self, update: crate::chat::ChatRunMemoryUpdate) {
+            self.trace.push(serde_json::json!({
+                "type": "memory",
+                "contextWindowSize": update.context_window_size,
+                "summaryChars": update.session_summary.chars().count(),
+            }));
+        }
+    }
+
+    let mut events = TraceEvents {
+        trace: Vec::new(),
+        token_chars: 0,
+    };
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let result = crate::chat::run_chat(
+        &state,
+        crate::chat::ChatRunRequest {
+            messages: input.messages,
+            mode_id: input.mode_id,
+            connection_id: input.connection_id,
+            chat_context: input.chat_context,
+            session_summary: input.session_summary,
+            session_id: input.session_id,
+        },
+        cancel_flag,
+        &mut events,
+    )
+    .await;
+
+    match result {
+        Ok(result) => {
+            events.trace.push(serde_json::json!({
+                "type": "done",
+                "finishReason": result.finish_reason,
+                "outputTruncated": result.output_truncated,
+                "streamIncomplete": result.stream_incomplete,
+                "vectorChunksUsed": result.vector_chunks_used,
+                "memoryCompressed": result.memory_compressed,
+                "vectorMemoryCompressed": result.vector_memory_compressed,
+                "textChars": result.text.chars().count(),
+            }));
+            Ok(ChatDebugRunScenarioOutput {
+                trace: events.trace,
+                result: Some(result),
+                error: None,
+            })
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            events.trace.push(serde_json::json!({
+                "type": "error",
+                "message": msg,
+            }));
+            Ok(ChatDebugRunScenarioOutput {
+                trace: events.trace,
+                result: None,
+                error: Some(e.to_string()),
+            })
         }
     }
 }

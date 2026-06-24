@@ -2,6 +2,7 @@ import { Group, I, PanelHead, PhButton, PhInput, SettingRow, Toggle, useToast } 
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { useAppSettingsQuery, useSaveSettingsMutation } from '../../application/settings.query';
 import { AgentToolsPanel } from './AgentToolsPanel';
+import { ChatDebugPanel } from './ChatDebugPanel';
 
 const RETENTIONS = ['7d', '30d', '90d', 'Forever'];
 
@@ -178,6 +179,7 @@ export function AdvancedPanel() {
         />
       </Group>
 
+      <ChatDebugPanel />
       <AgentToolsPanel />
     </>
   );

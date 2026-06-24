@@ -43,17 +43,23 @@ fn parse_relaxed_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     let mut out = Vec::new();
     let mut rest = text;
     const OPEN: &str = "<tool_call>";
-    const CLOSE: &str = "</tool_call>";
+    const CLOSES: &[&str] = &["</tool_call>", "<|tool_call|>", "<|tool_call>"];
 
     while let Some(start) = rest.find(OPEN) {
         let after = &rest[start + OPEN.len()..];
-        let Some(close_idx) = after.find(CLOSE) else {
-            break;
+        let close = CLOSES
+            .iter()
+            .filter_map(|marker| after.find(marker).map(|idx| (idx, marker.len())))
+            .min_by_key(|(idx, _)| *idx);
+        let (segment, next_offset) = if let Some((close_idx, close_len)) = close {
+            (&after[..close_idx], close_idx + close_len)
+        } else {
+            (after, after.len())
         };
-        if let Some(call) = parse_relaxed_call_segment(&after[..close_idx]) {
+        if let Some(call) = parse_relaxed_call_segment(segment) {
             out.push(call);
         }
-        rest = &after[close_idx + CLOSE.len()..];
+        rest = &after[next_offset..];
     }
 
     out
@@ -67,11 +73,38 @@ fn parse_relaxed_call_segment(segment: &str) -> Option<ParsedToolCall> {
     if name.is_empty() {
         return None;
     }
-    let args = segment[brace..].trim();
+    let args_end = matching_brace_end(segment, brace)?;
+    let args = segment[brace..args_end].trim();
     Some(ParsedToolCall {
         name: name.to_string(),
         arguments: parse_relaxed_args(args).unwrap_or_else(|| Value::Object(Map::new())),
     })
+}
+
+fn matching_brace_end(s: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let tail = s.get(open_idx..)?;
+    for (offset, ch) in tail.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_idx + offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_relaxed_args(body: &str) -> Option<Value> {
@@ -201,5 +234,28 @@ mod tests {
         assert_eq!(calls[0].arguments["path"], "test/js/game.js");
         assert_eq!(calls[0].arguments["start_line"], 12);
         assert_eq!(calls[0].arguments["end_line"], 40);
+    }
+
+    #[test]
+    fn parses_mixed_qwen_tool_call_close_marker() {
+        let calls = OpenAiMessagesFormat.parse_tool_calls(
+            r#"<tool_call>call:read_file{path:test/single-page-games/index.html}<|tool_call>"#,
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(
+            calls[0].arguments["path"],
+            "test/single-page-games/index.html"
+        );
+    }
+
+    #[test]
+    fn parses_relaxed_tool_call_with_trailing_prose_after_args() {
+        let calls = OpenAiMessagesFormat
+            .parse_tool_calls(r#"<tool_call>call:read_file{path:test/index.html} now waiting"#);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "test/index.html");
     }
 }

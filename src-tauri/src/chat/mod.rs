@@ -9,6 +9,7 @@ mod context_recovery;
 mod memory_compress;
 mod memory_facts;
 mod retrieval_policy;
+mod run_service;
 mod session_summary;
 mod sliding_window;
 mod vector_memory;
@@ -20,6 +21,9 @@ pub use agent_tools::{
 pub use context_recovery::should_retry_for_context;
 pub use memory_compress::{
     compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
+};
+pub use run_service::{
+    run_chat, ChatRunEventSink, ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus,
 };
 pub use session_summary::append_memory_to_system;
 pub use sliding_window::{
