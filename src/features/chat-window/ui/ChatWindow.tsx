@@ -751,6 +751,449 @@ export function ChatWindow() {
     await promptApplyGeneratedFiles([file]);
   }, [promptApplyGeneratedFiles]);
 
+  const runAssistantCompletion = useCallback(
+    async (
+      apiMessages: Array<{
+        role: string;
+        content: string;
+        images?: Array<{ mimeType: string; dataBase64: string }>;
+      }>,
+      assistantId: string,
+      sid: string,
+      autonomousGoal: string | null
+    ) => {
+      const connForSend = resolveActiveConnection(conns, connectionId || activeConnIdRef.current);
+      const contextLimit = effectiveContextLimit(connForSend);
+      setContextTrimNotice(null);
+      setIsRecoveringContext(false);
+      setIsContinuingOutput(false);
+      setProviderRetryWarning(null);
+      setMemoryDebugLabel('Vector memory: checking...');
+      setTokenUsage(null);
+      setStreaming(true);
+
+      if (autonomousMode && autonomousGoal) {
+        try {
+          await sendAutonomous({
+            streamId: sid,
+            goal: autonomousGoal,
+            apiMessages,
+            modeId,
+            connectionId,
+            chatContext: chatContextRef.current,
+            sessionSummary: sessionSummaryRef.current,
+            sessionId: sessionIdRef.current,
+            onToken: (generation, delta) => {
+              if (generation !== streamGenerationRef.current || !delta) return;
+              setProviderRetryWarning(null);
+              bufRef.current += delta;
+              syncPlanFromStream(bufRef.current);
+              scheduleFlush(assistantId);
+            },
+            onChatStatus: (payload) => {
+              if (typeof payload.generation === 'number') {
+                streamGenerationRef.current = payload.generation;
+              }
+              if (payload.phase === 'provider_retry') {
+                setProviderRetryWarning(
+                  payload.message?.trim() ||
+                    `Prompt template error (retry ${payload.attempt ?? 1}/3)…`
+                );
+                return;
+              }
+              if (payload.phase === 'compressing_memory') {
+                const kind = payload.kind === 'vector' ? 'vector' : 'rolling';
+                setMemoryDebugLabel(`Memory compression: ${kind}`);
+                return;
+              }
+              if (payload.phase === 'tools') {
+                bufRef.current = '';
+                flushPendingRef.current = false;
+                setMemoryDebugLabel('Running workspace tools…');
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId ? { ...m, content: '', streaming: true } : m
+                  )
+                );
+                return;
+              }
+              if (payload.phase === 'recovering') {
+                bufRef.current = '';
+                flushPendingRef.current = false;
+                setIsRecoveringContext(true);
+                setIsContinuingOutput(false);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId ? { ...m, content: '', streaming: true } : m
+                  )
+                );
+                return;
+              }
+              if (payload.phase === 'continuing') {
+                setIsContinuingOutput(true);
+              }
+            },
+            onMemory: (payload) => {
+              applySessionSummaryFromPayload(
+                payload.sessionSummary,
+                payload.contextWindowSize ?? contextLimit
+              );
+            },
+            onComplete: (result) => {
+              if (cancelledRef.current) return;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        content: result.finalText,
+                        streaming: false,
+                        meta: { model: 'autonomous', latencyMs: 0 },
+                      }
+                    : m
+                )
+              );
+              void refreshFolderScope();
+              const inner = extractPlanStepSummary(result.finalText);
+              if (inner) {
+                void indexPlanStepSummary(sessionIdRef.current, inner, {
+                  connectionId: connectionId || undefined,
+                });
+              }
+            },
+            onError: (msg, cancelled) => {
+              setIsRecoveringContext(false);
+              setIsContinuingOutput(false);
+              setProviderRetryWarning(null);
+              if (cancelled) cancelledRef.current = true;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        content: cancelled ? stripVpSummaryForDisplay(bufRef.current) : '',
+                        streaming: false,
+                        error: cancelled ? 'Cancelled' : msg,
+                      }
+                    : m
+                )
+              );
+            },
+          });
+        } catch (e) {
+          if (!cancelledRef.current) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, streaming: false, error: errorMessage(e) }
+                  : m
+              )
+            );
+          }
+        } finally {
+          setStreaming(false);
+          setIsRecoveringContext(false);
+          setIsContinuingOutput(false);
+          setProviderRetryWarning(null);
+          setStreamId(null);
+          assistantIdRef.current = null;
+        }
+        return;
+      }
+
+      const tokenEvent = `chat:${sid}:token`;
+      const doneEvent = `chat:${sid}:done`;
+      const errEvent = `chat:${sid}:error`;
+      const statusEvent = `chat:${sid}:status`;
+      const memoryEvent = `chat:${sid}:memory`;
+
+      const unlistens: Array<() => void> = [];
+      try {
+        const listeners = await Promise.all([
+          listen<string | TokenPayload>(tokenEvent, (e) => {
+            if (assistantIdRef.current !== assistantId) return;
+            const { generation, delta } = parseTokenDelta(e.payload);
+            if (generation !== streamGenerationRef.current || !delta) return;
+            setProviderRetryWarning(null);
+            bufRef.current += delta;
+            scheduleFlush(assistantId);
+          }),
+          listen<StatusPayload>(statusEvent, (e) => {
+            if (assistantIdRef.current !== assistantId) return;
+            if (typeof e.payload.generation === 'number') {
+              streamGenerationRef.current = e.payload.generation;
+            }
+            if (e.payload.phase === 'provider_retry') {
+              setProviderRetryWarning(
+                e.payload.message?.trim() ||
+                  `Prompt template error (retry ${e.payload.attempt ?? 1}/3)…`
+              );
+              return;
+            }
+            if (e.payload.phase === 'compressing_memory') {
+              const kind = e.payload.kind === 'vector' ? 'vector' : 'rolling';
+              setMemoryDebugLabel(`Memory compression: ${kind}`);
+              return;
+            }
+            if (e.payload.phase === 'tools') {
+              bufRef.current = '';
+              flushPendingRef.current = false;
+              setMemoryDebugLabel('Running workspace tools…');
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: '', streaming: true }
+                    : m
+                )
+              );
+              return;
+            }
+            if (e.payload.phase === 'continuing') {
+              setIsContinuingOutput(true);
+              return;
+            }
+            if (e.payload.phase !== 'recovering') return;
+            if (typeof e.payload.generation !== 'number') {
+              streamGenerationRef.current += 1;
+            } else {
+              streamGenerationRef.current = e.payload.generation;
+            }
+            bufRef.current = '';
+            flushPendingRef.current = false;
+            setIsRecoveringContext(true);
+            setIsContinuingOutput(false);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: '', streaming: true } : m
+              )
+            );
+          }),
+          listen<MemoryPayload>(memoryEvent, (e) => {
+            if (assistantIdRef.current !== assistantId) return;
+            if (e.payload.contextWindowSize) {
+              setConns((prev) =>
+                applyCompletionContextUpdate(
+                  prev,
+                  activeConnIdRef.current,
+                  e.payload.contextWindowSize
+                )
+              );
+            }
+            applySessionSummaryFromPayload(
+              e.payload.sessionSummary,
+              e.payload.contextWindowSize ?? contextLimit
+            );
+          }),
+          listen<DonePayload>(doneEvent, (e) => {
+            if (assistantIdRef.current !== assistantId) return;
+            if (cancelledRef.current) return;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: e.payload.text,
+                      scopedText: e.payload.scopedText,
+                      streaming: false,
+                      meta: {
+                        model: e.payload.model,
+                        latencyMs: e.payload.latencyMs,
+                      },
+                    }
+                  : m
+              )
+            );
+            const usage = normalizeTokenUsage(e.payload.usage);
+            if (usage) setTokenUsage(usage);
+            if (e.payload.contextWindowSize) {
+              setConns((prev) =>
+                applyCompletionContextUpdate(
+                  prev,
+                  activeConnIdRef.current,
+                  e.payload.contextWindowSize
+                )
+              );
+            }
+            applySessionSummaryFromPayload(
+              e.payload.sessionSummary,
+              e.payload.contextWindowSize ?? contextLimit
+            );
+            applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
+            applyMemoryDebugFromPayload(e.payload);
+            applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
+            processScopedCompletion(e.payload);
+          }),
+          listen<string>(errEvent, (e) => {
+            if (assistantIdRef.current !== assistantId) return;
+            setIsRecoveringContext(false);
+            setIsContinuingOutput(false);
+            setProviderRetryWarning(null);
+            const cancelled = e.payload === 'cancelled';
+            if (cancelled) cancelledRef.current = true;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: cancelled
+                        ? stripVpSummaryForDisplay(bufRef.current)
+                        : '',
+                      streaming: false,
+                      error: cancelled ? 'Cancelled' : e.payload,
+                    }
+                  : m
+              )
+            );
+          }),
+        ]);
+        unlistens.push(...listeners);
+
+        const result = await invoke<DonePayload>('chat_complete_stream', {
+          streamId: sid,
+          messages: apiMessages,
+          modeId: modeId ?? undefined,
+          connectionId: connectionId || undefined,
+          chatContext: buildChatContextPayload(chatContextRef.current),
+          sessionSummary: sessionSummaryRef.current.trim() || undefined,
+          sessionId: sessionIdRef.current,
+        });
+
+        if (cancelledRef.current) return;
+
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: result.text,
+                  scopedText: result.scopedText,
+                  streaming: false,
+                  meta: { model: result.model, latencyMs: result.latencyMs },
+                }
+              : m
+          )
+        );
+        const usage = normalizeTokenUsage(result.usage);
+        if (usage) setTokenUsage(usage);
+        if (result.contextWindowSize) {
+          setConns((prev) =>
+            applyCompletionContextUpdate(
+              prev,
+              activeConnIdRef.current,
+              result.contextWindowSize
+            )
+          );
+        }
+        applySessionSummaryFromPayload(
+          result.sessionSummary,
+          result.contextWindowSize ?? contextLimit
+        );
+        applyRetrievedMemoryFromPayload(result.retrievedMemory);
+        applyMemoryDebugFromPayload(result);
+        applyContextNotice(result, result.contextWindowSize ?? contextLimit);
+        processScopedCompletion(result);
+      } catch (e) {
+        setIsRecoveringContext(false);
+        setIsContinuingOutput(false);
+        setProviderRetryWarning(null);
+        if (cancelledRef.current) return;
+        const msg = errorMessage(e);
+        if (msg.toLowerCase().includes('cancelled')) {
+          cancelledRef.current = true;
+          return;
+        }
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, streaming: false, error: msg } : m
+          )
+        );
+      } finally {
+        unlistens.forEach((u) => u());
+        setStreaming(false);
+        setIsRecoveringContext(false);
+        setIsContinuingOutput(false);
+        setProviderRetryWarning(null);
+        setStreamId(null);
+        assistantIdRef.current = null;
+      }
+    },
+    [
+      autonomousMode,
+      sendAutonomous,
+      syncPlanFromStream,
+      scheduleFlush,
+      connectionId,
+      conns,
+      modeId,
+      refreshFolderScope,
+      applySessionSummaryFromPayload,
+      applyRetrievedMemoryFromPayload,
+      applyMemoryDebugFromPayload,
+      applyContextNotice,
+      processScopedCompletion,
+    ]
+  );
+
+  const regenerateAssistant = useCallback(
+    async (assistantMessageId: string) => {
+      if (streaming) return;
+      const idx = messages.findIndex((m) => m.id === assistantMessageId);
+      if (idx < 1 || idx !== messages.length - 1) return;
+      const assistant = messages[idx];
+      if (assistant.role !== 'assistant' || assistant.streaming) return;
+      const user = messages[idx - 1];
+      if (user.role !== 'user') return;
+
+      if (voice.isListening) voice.stop();
+
+      const history = messages.slice(0, idx);
+      const apiMessages = history
+        .filter((m) => !m.streaming && !m.error)
+        .map((m) => ({
+          role: m.role,
+          content: m.content,
+          images: (m.images ?? []).map(({ mimeType, dataBase64 }) => ({
+            mimeType,
+            dataBase64,
+          })),
+        }));
+
+      const assistantId = crypto.randomUUID();
+      assistantIdRef.current = assistantId;
+      streamGenerationRef.current = 0;
+      cancelledRef.current = false;
+      const sid = crypto.randomUUID();
+      setStreamId(sid);
+      bufRef.current = '';
+      setAttachError(null);
+
+      if (autonomousMode) {
+        clearAutonomousUi();
+      }
+
+      setMessages([
+        ...history,
+        { id: assistantId, role: 'assistant', content: '', streaming: true },
+      ]);
+
+      const { userText } = splitUserMessageScope(user.content);
+      const autonomousGoal =
+        autonomousMode && (userText.trim() || user.content.trim())
+          ? userText.trim() || user.content.trim()
+          : null;
+
+      await runAssistantCompletion(apiMessages, assistantId, sid, autonomousGoal);
+    },
+    [
+      streaming,
+      messages,
+      voice,
+      autonomousMode,
+      clearAutonomousUi,
+      runAssistantCompletion,
+    ]
+  );
+
   const send = useCallback(async () => {
     const text = draft.trim();
     const scopeOnly =
@@ -793,15 +1236,6 @@ export function ChatWindow() {
         })),
       }));
 
-    const connForSend = resolveActiveConnection(conns, connectionId || activeConnIdRef.current);
-    const contextLimit = effectiveContextLimit(connForSend);
-    setContextTrimNotice(null);
-    setIsRecoveringContext(false);
-    setIsContinuingOutput(false);
-    setProviderRetryWarning(null);
-    setMemoryDebugLabel('Vector memory: checking...');
-    setTokenUsage(null);
-
     setMessages((prev) => [
       ...prev,
       userMsg,
@@ -810,370 +1244,21 @@ export function ChatWindow() {
     setDraft('');
     setPendingImages([]);
     setAttachError(null);
-    setStreaming(true);
 
-    if (autonomousMode && text) {
-      try {
-        await sendAutonomous({
-          streamId: sid,
-          goal: text,
-          apiMessages,
-          modeId,
-          connectionId,
-          chatContext: chatContextRef.current,
-          sessionSummary: sessionSummaryRef.current,
-          sessionId: sessionIdRef.current,
-          onToken: (generation, delta) => {
-            if (generation !== streamGenerationRef.current || !delta) return;
-            setProviderRetryWarning(null);
-            bufRef.current += delta;
-            syncPlanFromStream(bufRef.current);
-            scheduleFlush(assistantId);
-          },
-          onChatStatus: (payload) => {
-            if (typeof payload.generation === 'number') {
-              streamGenerationRef.current = payload.generation;
-            }
-            if (payload.phase === 'provider_retry') {
-              setProviderRetryWarning(
-                payload.message?.trim() ||
-                  `Prompt template error (retry ${payload.attempt ?? 1}/3)…`
-              );
-              return;
-            }
-            if (payload.phase === 'compressing_memory') {
-              const kind = payload.kind === 'vector' ? 'vector' : 'rolling';
-              setMemoryDebugLabel(`Memory compression: ${kind}`);
-              return;
-            }
-            if (payload.phase === 'tools') {
-              bufRef.current = '';
-              flushPendingRef.current = false;
-              setMemoryDebugLabel('Running workspace tools…');
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: '', streaming: true } : m
-                )
-              );
-              return;
-            }
-            if (payload.phase === 'recovering') {
-              bufRef.current = '';
-              flushPendingRef.current = false;
-              setIsRecoveringContext(true);
-              setIsContinuingOutput(false);
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: '', streaming: true } : m
-                )
-              );
-              return;
-            }
-            if (payload.phase === 'continuing') {
-              setIsContinuingOutput(true);
-            }
-          },
-          onMemory: (payload) => {
-            applySessionSummaryFromPayload(
-              payload.sessionSummary,
-              payload.contextWindowSize ?? contextLimit
-            );
-          },
-          onComplete: (result) => {
-            if (cancelledRef.current) return;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? {
-                      ...m,
-                      content: result.finalText,
-                      streaming: false,
-                      meta: { model: 'autonomous', latencyMs: 0 },
-                    }
-                  : m
-              )
-            );
-            void refreshFolderScope();
-            const inner = extractPlanStepSummary(result.finalText);
-            if (inner) {
-              void indexPlanStepSummary(sessionIdRef.current, inner, {
-                connectionId: connectionId || undefined,
-              });
-            }
-          },
-          onError: (msg, cancelled) => {
-            setIsRecoveringContext(false);
-            setIsContinuingOutput(false);
-            setProviderRetryWarning(null);
-            if (cancelled) cancelledRef.current = true;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? {
-                      ...m,
-                      content: cancelled ? stripVpSummaryForDisplay(bufRef.current) : '',
-                      streaming: false,
-                      error: cancelled ? 'Cancelled' : msg,
-                    }
-                  : m
-              )
-            );
-          },
-        });
-      } catch (e) {
-        if (!cancelledRef.current) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, streaming: false, error: errorMessage(e) }
-                : m
-            )
-          );
-        }
-      } finally {
-        setStreaming(false);
-        setIsRecoveringContext(false);
-        setIsContinuingOutput(false);
-        setProviderRetryWarning(null);
-        setStreamId(null);
-        assistantIdRef.current = null;
-      }
-      return;
-    }
-
-    const tokenEvent = `chat:${sid}:token`;
-    const doneEvent = `chat:${sid}:done`;
-    const errEvent = `chat:${sid}:error`;
-    const statusEvent = `chat:${sid}:status`;
-    const memoryEvent = `chat:${sid}:memory`;
-
-    const unlistens: Array<() => void> = [];
-    try {
-      const listeners = await Promise.all([
-        listen<string | TokenPayload>(tokenEvent, (e) => {
-          if (assistantIdRef.current !== assistantId) return;
-          const { generation, delta } = parseTokenDelta(e.payload);
-          if (generation !== streamGenerationRef.current || !delta) return;
-          setProviderRetryWarning(null);
-          bufRef.current += delta;
-          scheduleFlush(assistantId);
-        }),
-        listen<StatusPayload>(statusEvent, (e) => {
-          if (assistantIdRef.current !== assistantId) return;
-          if (typeof e.payload.generation === 'number') {
-            streamGenerationRef.current = e.payload.generation;
-          }
-          if (e.payload.phase === 'provider_retry') {
-            setProviderRetryWarning(
-              e.payload.message?.trim() ||
-                `Prompt template error (retry ${e.payload.attempt ?? 1}/3)…`
-            );
-            return;
-          }
-          if (e.payload.phase === 'compressing_memory') {
-            const kind = e.payload.kind === 'vector' ? 'vector' : 'rolling';
-            setMemoryDebugLabel(`Memory compression: ${kind}`);
-            return;
-          }
-          if (e.payload.phase === 'tools') {
-            bufRef.current = '';
-            flushPendingRef.current = false;
-            setMemoryDebugLabel('Running workspace tools…');
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: '', streaming: true }
-                  : m
-              )
-            );
-            return;
-          }
-          if (e.payload.phase === 'continuing') {
-            setIsContinuingOutput(true);
-            return;
-          }
-          if (e.payload.phase !== 'recovering') return;
-          if (typeof e.payload.generation !== 'number') {
-            streamGenerationRef.current += 1;
-          } else {
-            streamGenerationRef.current = e.payload.generation;
-          }
-          bufRef.current = '';
-          flushPendingRef.current = false;
-          setIsRecoveringContext(true);
-          setIsContinuingOutput(false);
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: '', streaming: true } : m
-            )
-          );
-        }),
-        listen<MemoryPayload>(memoryEvent, (e) => {
-          if (assistantIdRef.current !== assistantId) return;
-          if (e.payload.contextWindowSize) {
-            setConns((prev) =>
-              applyCompletionContextUpdate(
-                prev,
-                activeConnIdRef.current,
-                e.payload.contextWindowSize
-              )
-            );
-          }
-          applySessionSummaryFromPayload(
-            e.payload.sessionSummary,
-            e.payload.contextWindowSize ?? contextLimit
-          );
-        }),
-        listen<DonePayload>(doneEvent, (e) => {
-          if (assistantIdRef.current !== assistantId) return;
-          if (cancelledRef.current) return;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content: e.payload.text,
-                    scopedText: e.payload.scopedText,
-                    streaming: false,
-                    meta: { model: e.payload.model, latencyMs: e.payload.latencyMs },
-                  }
-                : m
-            )
-          );
-          const usage = normalizeTokenUsage(e.payload.usage);
-          if (usage) setTokenUsage(usage);
-          if (e.payload.contextWindowSize) {
-            setConns((prev) =>
-              applyCompletionContextUpdate(
-                prev,
-                activeConnIdRef.current,
-                e.payload.contextWindowSize
-              )
-            );
-          }
-          applySessionSummaryFromPayload(
-            e.payload.sessionSummary,
-            e.payload.contextWindowSize ?? contextLimit
-          );
-          applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
-          applyMemoryDebugFromPayload(e.payload);
-          applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
-          processScopedCompletion(e.payload);
-        }),
-        listen<string>(errEvent, (e) => {
-          if (assistantIdRef.current !== assistantId) return;
-          setIsRecoveringContext(false);
-          setIsContinuingOutput(false);
-          setProviderRetryWarning(null);
-          const cancelled = e.payload === 'cancelled';
-          if (cancelled) cancelledRef.current = true;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content: cancelled
-                      ? stripVpSummaryForDisplay(bufRef.current)
-                      : '',
-                    streaming: false,
-                    error: cancelled ? 'Cancelled' : e.payload,
-                  }
-                : m
-            )
-          );
-        }),
-      ]);
-      unlistens.push(...listeners);
-
-      const result = await invoke<DonePayload>('chat_complete_stream', {
-        streamId: sid,
-        messages: apiMessages,
-        modeId: modeId ?? undefined,
-        connectionId: connectionId || undefined,
-        chatContext: buildChatContextPayload(chatContextRef.current),
-        sessionSummary: sessionSummaryRef.current.trim() || undefined,
-        sessionId: sessionIdRef.current,
-      });
-
-      if (cancelledRef.current) return;
-
-      // Authoritative completion payload — the event listener can race with
-      // cleanup in `finally` when Tauri delivers `done` after invoke resolves.
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: result.text,
-                scopedText: result.scopedText,
-                streaming: false,
-                meta: { model: result.model, latencyMs: result.latencyMs },
-              }
-            : m
-        )
-      );
-      const usage = normalizeTokenUsage(result.usage);
-      if (usage) setTokenUsage(usage);
-      if (result.contextWindowSize) {
-        setConns((prev) =>
-          applyCompletionContextUpdate(
-            prev,
-            activeConnIdRef.current,
-            result.contextWindowSize
-          )
-        );
-      }
-      applySessionSummaryFromPayload(
-        result.sessionSummary,
-        result.contextWindowSize ?? contextLimit
-      );
-      applyRetrievedMemoryFromPayload(result.retrievedMemory);
-      applyMemoryDebugFromPayload(result);
-      applyContextNotice(result, result.contextWindowSize ?? contextLimit);
-      processScopedCompletion(result);
-    } catch (e) {
-      setIsRecoveringContext(false);
-      setIsContinuingOutput(false);
-      setProviderRetryWarning(null);
-      if (cancelledRef.current) return;
-      const msg = errorMessage(e);
-      if (msg.toLowerCase().includes('cancelled')) {
-        cancelledRef.current = true;
-        return;
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, streaming: false, error: msg } : m
-        )
-      );
-    } finally {
-      unlistens.forEach((u) => u());
-      setStreaming(false);
-      setIsRecoveringContext(false);
-      setIsContinuingOutput(false);
-      setProviderRetryWarning(null);
-      setStreamId(null);
-      assistantIdRef.current = null;
-    }
+    await runAssistantCompletion(
+      apiMessages,
+      assistantId,
+      sid,
+      autonomousMode && text ? text : null
+    );
   }, [
     draft,
     pendingImages,
     streaming,
     messages,
-    modeId,
-    connectionId,
-    conns,
-    scheduleFlush,
     voice,
     autonomousMode,
-    sendAutonomous,
-    syncPlanFromStream,
-    clearAutonomousUi,
-    processScopedCompletion,
-    applySessionSummaryFromPayload,
-    applyRetrievedMemoryFromPayload,
-    applyMemoryDebugFromPayload,
-    applyContextNotice,
+    runAssistantCompletion,
   ]);
 
   const applyIngestResult = useCallback(
@@ -1794,7 +1879,7 @@ export function ChatWindow() {
               </span>
             </div>
           )}
-          {messages.map((m) => (
+          {messages.map((m, i) => (
             <MessageBubble
               key={m.id}
               message={m}
@@ -1809,6 +1894,14 @@ export function ChatWindow() {
               onApply={
                 m.role === 'assistant' && !m.streaming && !m.error && m.content
                   ? () => void promptApplyScoped(m.content, m.scopedText)
+                  : undefined
+              }
+              onRegenerate={
+                !streaming &&
+                i === messages.length - 1 &&
+                m.role === 'assistant' &&
+                !m.streaming
+                  ? () => void regenerateAssistant(m.id)
                   : undefined
               }
               onApplyGeneratedFile={(file) => void promptApplyGeneratedFile(file)}
@@ -2158,6 +2251,7 @@ function MessageBubble({
   scopeKind,
   scopeWorking,
   onApply,
+  onRegenerate,
   onApplyGeneratedFile,
   onApplyGeneratedFiles,
 }: {
@@ -2165,6 +2259,7 @@ function MessageBubble({
   scopeKind?: string;
   scopeWorking?: string;
   onApply?: () => void;
+  onRegenerate?: () => void;
   onApplyGeneratedFile?: (file: GeneratedFileBlock) => void;
   onApplyGeneratedFiles?: (files: GeneratedFileBlock[]) => void;
 }) {
@@ -2249,23 +2344,48 @@ function MessageBubble({
             {m.meta.model} · {m.meta.latencyMs}ms
           </div>
         )}
-        {showApply && (
-          <button
-            type="button"
-            onClick={onApply}
-            style={{
-              marginTop: 8,
-              fontSize: 10.5,
-              padding: '4px 8px',
-              borderRadius: 6,
-              border: '.5px solid var(--border-strong)',
-              background: 'var(--surface)',
-              color: 'var(--accent)',
-              cursor: 'pointer',
-            }}
-          >
-            {scopeKind === 'file' ? 'Apply to file…' : 'Apply snippet…'}
-          </button>
+        {(showApply || onRegenerate) && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {onRegenerate && (
+              <button
+                type="button"
+                onClick={onRegenerate}
+                title="Повторить ответ"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 10.5,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: '.5px solid var(--border-strong)',
+                  background: 'var(--surface)',
+                  color: 'var(--fg-dim)',
+                  cursor: 'pointer',
+                }}
+              >
+                <I.refresh size={11} />
+                Повторить
+              </button>
+            )}
+            {showApply && (
+              <button
+                type="button"
+                onClick={onApply}
+                style={{
+                  fontSize: 10.5,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: '.5px solid var(--border-strong)',
+                  background: 'var(--surface)',
+                  color: 'var(--accent)',
+                  cursor: 'pointer',
+                }}
+              >
+                {scopeKind === 'file' ? 'Apply to file…' : 'Apply snippet…'}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
