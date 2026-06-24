@@ -19,8 +19,8 @@ pub const NAME: &str = "apply_patch";
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Apply minimal exact search/replace edits to a file. \
-Each old_text must appear exactly once and stay small (typically 1–3 lines). \
+        description: "Apply exact search/replace edits to a file. \
+Prefer small anchors (1–3 lines) for typos; multi-line old_text is OK when the change spans a case/method block (see workspace patchMaxLines). \
 Read the file first; pass contentHash as expected_hash when available."
             .into(),
         parameters: json!({
@@ -42,11 +42,11 @@ Read the file first; pass contentHash as expected_hash when available."
                         "properties": {
                             "old_text": {
                                 "type": "string",
-                                "description": "Exact substring to replace (unique, few lines only)"
+                                "description": "Exact substring to replace (unique). Often 1–3 lines; may be longer when the fix spans a block."
                             },
                             "new_text": {
                                 "type": "string",
-                                "description": "Replacement — change only what differs from old_text"
+                                "description": "Replacement text for old_text"
                             }
                         },
                         "required": ["old_text", "new_text"]

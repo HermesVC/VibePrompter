@@ -1075,7 +1075,7 @@ mod tests {
         }];
         let mut system = Some("base".to_string());
 
-        append_diagnostic_inspection_protocol(&mut system, &messages, Some(&ctx));
+        append_diagnostic_inspection_protocol(&mut system, &messages, Some(&ctx), true);
         let system = system.unwrap();
 
         assert!(system.contains("Diagnostic/debug request in workspace scope"));

@@ -155,15 +155,15 @@ export function WorkspacePanel() {
         ))}
         <SettingRow
           label="Max old_text lines"
-          hint="Per edit in strict/warn mode (default 15)"
+          hint="Per edit in strict/warn mode (default 40)"
           control={
             <input
               type="number"
               min={1}
               max={200}
-              value={draft.patchMaxLines ?? 15}
+              value={draft.patchMaxLines ?? 40}
               onChange={(e) =>
-                update({ patchMaxLines: Math.max(1, parseInt(e.target.value, 10) || 15) })
+                update({ patchMaxLines: Math.max(1, parseInt(e.target.value, 10) || 40) })
               }
               style={{ ...inputStyle, width: 72 }}
             />

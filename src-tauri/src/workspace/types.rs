@@ -38,7 +38,7 @@ fn default_patch_policy() -> String {
 }
 
 fn default_patch_max_lines() -> u32 {
-    15
+    40
 }
 
 fn default_memory_llm_summarize() -> bool {

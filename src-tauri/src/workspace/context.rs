@@ -255,7 +255,7 @@ pub fn compose_system_prompt_with_opts(
                      - Do NOT paste the file body, a rewritten file, or ```file:``` fences for this path.\n\
                      - To inspect or fix: emit <|tool_call|> read_file / apply_patch only (see Workspace file tools below).\n\
                      - Questions: answer in plain language; quote short fragments only after read_file.\n\
-                     - Code fixes: apply_patch with 1–3 line old_text — never whole methods, switch blocks, or files."
+                     - Code fixes: apply_patch — prefer small anchors; multi-line old_text is OK when the change spans a block. Never replace whole files."
                 ));
             } else {
                 parts.push(format!(

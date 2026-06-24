@@ -26,3 +26,24 @@ export async function runChatDebugScenario(
 ): Promise<ChatDebugScenarioOutput> {
   return invoke<ChatDebugScenarioOutput>('chat_debug_run_scenario', { input });
 }
+
+export interface HarnessDeterministicReport {
+  checks: Array<{ id: string; pass: boolean; detail: string }>;
+  allPass: boolean;
+}
+
+export async function runHarnessDeterministic(): Promise<HarnessDeterministicReport> {
+  return invoke<HarnessDeterministicReport>('harness_run_deterministic');
+}
+
+export async function harnessCheckWorkspaceFiles(
+  paths: string[]
+): Promise<{ present: string[]; missing: string[] }> {
+  return invoke<{ present: string[]; missing: string[] }>('harness_check_workspace_files', {
+    paths,
+  });
+}
+
+export async function harnessApplyGeneratedFences(text: string): Promise<string[]> {
+  return invoke<string[]>('harness_apply_generated_fences', { text });
+}

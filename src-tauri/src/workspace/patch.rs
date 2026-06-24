@@ -22,11 +22,11 @@ pub struct PatchLimits {
 impl Default for PatchLimits {
     fn default() -> Self {
         Self {
-            max_old_lines: 15,
-            max_new_lines: 20,
-            max_old_chars: 2_500,
-            rewrite_min_lines: 8,
-            rewrite_change_ratio: 0.70,
+            max_old_lines: 40,
+            max_new_lines: 55,
+            max_old_chars: 8_000,
+            rewrite_min_lines: 24,
+            rewrite_change_ratio: 0.88,
         }
     }
 }
@@ -190,10 +190,15 @@ use super::types::WorkspaceSettings;
 impl WorkspaceSettings {
     pub fn patch_limits(&self) -> PatchLimits {
         let max_old = self.patch_max_lines.clamp(1, 200) as usize;
+        let defaults = PatchLimits::default();
         PatchLimits {
             max_old_lines: max_old,
-            max_new_lines: max_old.saturating_add(5),
-            ..PatchLimits::default()
+            max_new_lines: max_old.saturating_add(15),
+            max_old_chars: max_old
+                .saturating_mul(200)
+                .clamp(1_500, 20_000),
+            rewrite_min_lines: (max_old.saturating_mul(3) / 5).clamp(12, 50),
+            rewrite_change_ratio: defaults.rewrite_change_ratio,
         }
     }
 
@@ -214,26 +219,26 @@ pub fn validate_patch_edits(edits: &[PatchEdit], limits: PatchLimits) -> PatchVa
         }
         if m.old_lines > limits.max_old_lines {
             violations.push(format!(
-                "edit #{edit_index}: old_text is {} lines (max {}). Narrow to the smallest unique fragment — only the changed lines plus 1–2 lines of context.",
+                "edit #{edit_index}: old_text is {} lines (max {}). Narrow the anchor or split into sequential edits.",
                 m.old_lines, limits.max_old_lines
             ));
         }
         if m.new_lines > limits.max_new_lines {
             violations.push(format!(
-                "edit #{edit_index}: new_text is {} lines (max {}). Keep the replacement minimal.",
+                "edit #{edit_index}: new_text is {} lines (max {}). Split into smaller edits if possible.",
                 m.new_lines, limits.max_new_lines
             ));
         }
         if m.old_chars > limits.max_old_chars {
             violations.push(format!(
-                "edit #{edit_index}: old_text is {} chars (max {}). Use a shorter unique anchor.",
+                "edit #{edit_index}: old_text is {} chars (max {}). Use a shorter unique anchor or split edits.",
                 m.old_chars, limits.max_old_chars
             ));
         }
         if m.likely_rewrite {
             violations.push(format!(
-                "edit #{edit_index}: looks like a block rewrite ({} of {} old lines changed). \
-Change only what is necessary — e.g. a single line or identifier.",
+                "edit #{edit_index}: looks like a large block rewrite ({} of {} old lines changed). \
+Prefer smaller anchors when possible; split unrelated changes into separate apply_patch calls.",
                 m.changed_lines, m.old_lines
             ));
         }
@@ -372,7 +377,7 @@ mod tests {
 
     #[test]
     fn rejects_oversized_old_text() {
-        let big = (0..30).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let big = (0..50).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
         let v = validate_patch_edits(
             &[PatchEdit {
                 old_text: big.clone(),
@@ -380,16 +385,34 @@ mod tests {
             }],
             PatchLimits::default(),
         );
-        assert!(v.violations.iter().any(|m| m.contains("old_text is 30 lines")));
+        assert!(v.violations.iter().any(|m| m.contains("old_text is 50 lines")));
+    }
+
+    #[test]
+    fn allows_multi_line_case_sized_edit() {
+        let old = (0..18)
+            .map(|i| format!("    case 'item_{i}':"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut new = old.clone();
+        new = new.replace("item_3", "item_3_fixed");
+        let v = validate_patch_edits(
+            &[PatchEdit {
+                old_text: old,
+                new_text: new,
+            }],
+            PatchLimits::default(),
+        );
+        assert!(v.violations.is_empty(), "{:?}", v.violations);
     }
 
     #[test]
     fn rejects_likely_rewrite() {
-        let old = (0..10)
+        let old = (0..30)
             .map(|i| format!("    stmt_{i}();"))
             .collect::<Vec<_>>()
             .join("\n");
-        let new = (0..10)
+        let new = (0..30)
             .map(|i| format!("    new_stmt_{i}();"))
             .collect::<Vec<_>>()
             .join("\n");
@@ -398,10 +421,7 @@ mod tests {
                 old_text: old,
                 new_text: new,
             }],
-            PatchLimits {
-                max_old_lines: 20,
-                ..PatchLimits::default()
-            },
+            PatchLimits::default(),
         );
         assert!(v.violations.iter().any(|m| m.contains("block rewrite")));
     }

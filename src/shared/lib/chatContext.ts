@@ -258,6 +258,6 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   allowExtensions: ['.php', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.rs'],
   denyGlobs: ['.env', '**/.env', '**/vendor/**', '**/node_modules/**'],
   patchPolicy: 'strict',
-  patchMaxLines: 15,
+  patchMaxLines: 40,
   memoryLlmSummarize: true,
 };

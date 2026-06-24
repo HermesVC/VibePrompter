@@ -18,7 +18,7 @@ const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 **Mandatory output format**
 - For inspect/fix tasks on existing files: your first output must be `<|tool_call|>call:read_file{...}</|tool_call|>` (or apply_patch after you have read_file results). No prose before tool_call.
 - Never paste a rewritten file body, ```file:``` fences, `edits:`, or labeled `old_text:` / `new_text:` blocks for existing files — those are not executed.
-- One-line fixes = one apply_patch with 1–3 line old_text. Wait for tool results before explaining to the user.
+- One-line fixes = one apply_patch with a short old_text. Wait for tool results before explaining to the user.
 
 You can inspect and edit the project with these tools (declare via tool_call blocks):
 - `list_dir` — list files under a path (`path`, optional `depth`)
@@ -28,10 +28,9 @@ You can inspect and edit the project with these tools (declare via tool_call blo
 - `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
 
 Use relative paths from the workspace root. Prefer `read_file` before editing.
-**Minimal patches only:** `old_text` and `new_text` must differ as little as possible — often a single line or identifier.
-Include 1–2 lines of context so `old_text` is unique; never paste a whole method, case block, or file.
-If the tool returns "patch too large", shrink `old_text` to the smallest unique fragment and retry.
-For typo / one-line fixes, `old_text` should be 1–3 lines. Do not paste whole files unless creating new ones.
+**Patch sizing:** prefer the smallest unique `old_text` (often 1–3 lines for typos). Multi-line `old_text` is fine when the fix genuinely spans a case block, method, or branch — include enough context that the anchor is unique once in the file.
+Do not paste a whole file unless creating a new one. Split unrelated fixes into separate apply_patch calls.
+If the tool returns "patch too large", narrow the anchor or split into sequential edits.
 
 ### Correct vs wrong (existing files)
 
@@ -42,6 +41,9 @@ GOOD — read then patch:
 <|tool_call|>call:read_file{path:vp/src/api/Foo.php}</|tool_call|>
 (then after tool results)
 <|tool_call|>call:apply_patch{path:vp/src/api/Foo.php,old_text:exact unique lines,new_text:fixed lines}</|tool_call|>
+
+GOOD — multi-line block when the bug spans several lines (unique anchor):
+<|tool_call|>call:apply_patch{path:vp/src/api/Foo.php,old_text:"    case 'a':\n        break;\n    case 'b':",new_text:"    case 'a':\n        break;\n    case 'b_fixed':"}</|tool_call|>
 
 BAD — not executed as tools (do NOT use for patches):
 ```file:path/to/File.php
@@ -56,7 +58,7 @@ new_text:
 foreach ($projectUuids as $id) {
 ```
 
-BAD — whole case/method in old_text (rejected by patch size limits).
+BAD — whole file or entire class in one old_text (split edits or use new-file fences only for new files).
 
 **Never** use markdown ` ```file:...` fences with `edits:` for existing files. Use tool_call only.
 One small fix = one apply_patch call. Split multiple bugs into separate tool_call blocks.

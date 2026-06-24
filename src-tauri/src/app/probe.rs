@@ -180,6 +180,24 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
         return Ok((false, format!("read_file failed: {}", read.message)));
     }
 
+    let content = read
+        .output
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !content.contains(OLD) {
+        if content.contains(NEW) {
+            return Ok((
+                true,
+                "ProjectsAPI already contains fix; read_file OK (patch smoke skipped)".into(),
+            ));
+        }
+        return Ok((
+            false,
+            format!("old_text needle not in file and fix not found: {OLD:?}"),
+        ));
+    }
+
     let patch = tools::execute_tool(
         &ctx,
         "apply_patch",

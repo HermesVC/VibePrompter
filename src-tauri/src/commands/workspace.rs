@@ -219,3 +219,30 @@ pub fn compose_chat_context_prompt(
         crate::workspace::ComposeSystemOptions { tools_active },
     ))
 }
+
+#[tauri::command]
+pub async fn harness_run_deterministic(
+    state: State<'_, AppState>,
+) -> Result<crate::app::harness::HarnessDeterministicReport, AppError> {
+    crate::app::harness::run_deterministic_checks(&state).await
+}
+
+#[tauri::command]
+pub async fn harness_check_workspace_files(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, AppError> {
+    let settings = state.workspace.get_settings().await?;
+    let root = settings.workspace_root.trim();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let (present, missing) = crate::app::harness::check_workspace_files(root, &refs);
+    Ok(serde_json::json!({ "present": present, "missing": missing }))
+}
+
+#[tauri::command]
+pub async fn harness_apply_generated_fences(
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<Vec<String>, AppError> {
+    crate::app::harness::harness_apply_generated_fences(&state, &text).await
+}
