@@ -325,6 +325,7 @@ pub async fn build_tool_context(
 pub struct ToolLoopMemoryHook<'a> {
     pub session_id: &'a str,
     pub memory: &'a crate::services::ChatMemoryService,
+    pub connections: &'a crate::services::ConnectionService,
     pub conn: &'a crate::storage::repositories::ConnectionRow,
     pub cfg: &'a crate::providers::HttpConfig,
     pub indexed_hashes: &'a mut std::collections::HashSet<String>,
@@ -409,6 +410,7 @@ where
         if let Some(hook) = memory_hook.as_mut() {
             crate::chat::index_tool_results(
                 hook.memory,
+                hook.connections,
                 hook.conn,
                 hook.cfg,
                 hook.session_id,
@@ -488,6 +490,7 @@ where
         if let Some(hook) = memory_hook.as_mut() {
             crate::chat::index_turn_memory_after_tools(
                 hook.memory,
+                hook.connections,
                 hook.conn,
                 hook.cfg,
                 hook.session_id,

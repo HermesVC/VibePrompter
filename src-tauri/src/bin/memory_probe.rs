@@ -174,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let rolling_memory =
-        match compress_evicted_turns(&row, &cfg, "", &plan.evicted, context_limit).await {
+        match compress_evicted_turns(&state.connections, &row, "", &plan.evicted, context_limit).await {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("compress_evicted_turns failed ({e}), using fallback merge");
@@ -190,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
         .collect();
     let vector_compressed = index_evicted_messages(
         &state.chat_memory,
+        &state.connections,
         &row,
         &cfg,
         &session_id,

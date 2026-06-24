@@ -266,7 +266,7 @@ pub async fn chat_complete_stream(
     let cancel_flag = registry.register(&stream_id);
     let cancel_check = cancel_flag.clone();
 
-    let _permit = state.connections.acquire_permit().await;
+    let _slot = state.connections.acquire_provider_slot(&row.base_url).await;
 
     const MAX_CONTEXT_RETRIES: usize = 2;
     let mut result: Result<CompletionResult, AppError> =
@@ -312,7 +312,14 @@ pub async fn chat_complete_stream(
                     "kind": "rolling",
                 }),
             );
-            match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await {
+            match crate::chat::compress_session_memory(
+                &state.connections,
+                &row,
+                &memory,
+                context_limit,
+            )
+            .await
+            {
                 Ok(compressed) => {
                     memory = compressed;
                     memory_compressed = true;
@@ -342,8 +349,8 @@ pub async fn chat_complete_stream(
                 }),
             );
             match crate::chat::compress_evicted_turns(
+                &state.connections,
                 &row,
-                &cfg,
                 &memory,
                 &evicted_for_compression,
                 context_limit,
@@ -378,7 +385,13 @@ pub async fn chat_complete_stream(
                         "kind": "rolling",
                     }),
                 );
-                match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await
+                match crate::chat::compress_session_memory(
+                    &state.connections,
+                    &row,
+                    &memory,
+                    context_limit,
+                )
+                .await
                 {
                     Ok(compressed) => {
                         memory = compressed;
@@ -398,6 +411,7 @@ pub async fn chat_complete_stream(
         if !window_plan.evicted.is_empty() && !session_id.trim().is_empty() {
             if crate::chat::index_evicted_messages(
                 &state.chat_memory,
+                &state.connections,
                 &row,
                 &cfg,
                 &session_id,
@@ -421,6 +435,7 @@ pub async fn chat_complete_stream(
         } else {
             crate::chat::retrieve_relevant(
                 &state.chat_memory,
+                &state.connections,
                 &row,
                 &cfg,
                 &session_id,
@@ -527,6 +542,7 @@ pub async fn chat_complete_stream(
                             Some(crate::chat::ToolLoopMemoryHook {
                                 session_id: &session_id,
                                 memory: &state.chat_memory,
+                                connections: &state.connections,
                                 conn: &row,
                                 cfg: &cfg,
                                 indexed_hashes: &mut indexed_chunk_hashes,
@@ -632,6 +648,7 @@ pub async fn chat_complete_stream(
                     {
                         crate::chat::index_plan_step_summary(
                             &state.chat_memory,
+                            &state.connections,
                             &row,
                             &cfg,
                             &session_id,
@@ -1145,6 +1162,7 @@ pub async fn chat_index_context_artifacts(
 
     crate::chat::index_context_artifacts(
         &state.chat_memory,
+        &state.connections,
         &row,
         &cfg,
         &session_id,
@@ -1188,6 +1206,7 @@ pub async fn chat_index_folder_outline(
 
     crate::chat::index_folder_outline(
         &state.chat_memory,
+        &state.connections,
         &row,
         &cfg,
         &session_id,
@@ -1225,6 +1244,7 @@ pub async fn chat_index_plan_step_summary(
 
     crate::chat::index_plan_step_summary(
         &state.chat_memory,
+        &state.connections,
         &row,
         &cfg,
         &session_id,
@@ -1265,6 +1285,7 @@ pub async fn chat_index_plan_canonical(
 
     crate::chat::upsert_plan_canonical_from_plan_markdown(
         &state.chat_memory,
+        &state.connections,
         &row,
         &cfg,
         &session_id,

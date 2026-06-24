@@ -580,7 +580,7 @@ async fn run_stream(
     };
 
     let cfg = state.connections.http_config().await;
-    let _permit = state.connections.acquire_permit().await;
+    let _slot = state.connections.acquire_provider_slot(&row.base_url).await;
     // Honor the user's Stream-AI-response preference. When streaming is off,
     // call the blocking endpoint and emit the whole text as one delta so the
     // overlay UI fills in once (rather than always animating token-by-token).
@@ -908,7 +908,7 @@ async fn run_followup_stream(
     };
 
     let cfg = state.connections.http_config().await;
-    let _permit = state.connections.acquire_permit().await;
+    let _slot = state.connections.acquire_provider_slot(&row.base_url).await;
     let stream_pref = state
         .settings
         .get()

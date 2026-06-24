@@ -269,6 +269,7 @@ where
             } else {
                 let retrieved = crate::chat::retrieve_relevant(
                     &state.chat_memory,
+                    &state.connections,
                     &row,
                     &cfg,
                     &session_id,
@@ -324,7 +325,7 @@ where
                     attempt: None,
                     message: None,
                 });
-                memory = compress_session_memory_timed(&row, &cfg, &memory, context_limit).await;
+                memory = compress_session_memory_timed(&state.connections, &row, &memory, context_limit).await;
                 memory_compressed = true;
                 emit_chat_memory_update(events, &memory, context_limit);
             }
@@ -345,8 +346,8 @@ where
                     message: None,
                 });
                 memory = compress_evicted_turns_timed(
+                    &state.connections,
                     &row,
-                    &cfg,
                     &memory,
                     &evicted_for_compression,
                     context_limit,
@@ -367,7 +368,7 @@ where
                         message: None,
                     });
                     memory =
-                        compress_session_memory_timed(&row, &cfg, &memory, context_limit).await;
+                        compress_session_memory_timed(&state.connections, &row, &memory, context_limit).await;
                     memory_compressed = true;
                     emit_chat_memory_update(events, &memory, context_limit);
                 }
@@ -378,6 +379,7 @@ where
                 && !session_id.trim().is_empty()
                 && crate::chat::index_evicted_messages(
                     &state.chat_memory,
+                    &state.connections,
                     &row,
                     &cfg,
                     &session_id,
@@ -459,7 +461,7 @@ where
             attempt: None,
             message: Some("Waiting for provider slot".into()),
         });
-        let _permit = acquire_provider_permit(state, cancel_flag.clone()).await?;
+        let _permit = acquire_provider_slot(state, &row.base_url, cancel_flag.clone()).await?;
 
         let mut stream_out = complete_stream_with_auto_continue(
             events,
@@ -504,6 +506,7 @@ where
                             Some(crate::chat::ToolLoopMemoryHook {
                                 session_id: &session_id,
                                 memory: &state.chat_memory,
+                                connections: &state.connections,
                                 conn: &row,
                                 cfg: &cfg,
                                 indexed_hashes: &mut indexed_chunk_hashes,
@@ -615,6 +618,7 @@ where
                 {
                     crate::chat::index_plan_step_summary(
                         &state.chat_memory,
+                        &state.connections,
                         &row,
                         &cfg,
                         &session_id,
@@ -1100,14 +1104,14 @@ async fn resolve_context_limit(
 }
 
 async fn compress_session_memory_timed(
+    connections: &crate::services::ConnectionService,
     row: &crate::storage::repositories::ConnectionRow,
-    cfg: &crate::providers::HttpConfig,
     memory: &str,
     context_limit: i64,
 ) -> String {
     match tokio::time::timeout(
         MEMORY_COMPRESS_TIMEOUT,
-        crate::chat::compress_session_memory(row, cfg, memory, context_limit),
+        crate::chat::compress_session_memory(connections, row, memory, context_limit),
     )
     .await
     {
@@ -1127,15 +1131,15 @@ async fn compress_session_memory_timed(
 }
 
 async fn compress_evicted_turns_timed(
+    connections: &crate::services::ConnectionService,
     row: &crate::storage::repositories::ConnectionRow,
-    cfg: &crate::providers::HttpConfig,
     memory: &str,
     evicted: &[ChatMessage],
     context_limit: i64,
 ) -> String {
     match tokio::time::timeout(
         MEMORY_COMPRESS_TIMEOUT,
-        crate::chat::compress_evicted_turns(row, cfg, memory, evicted, context_limit),
+        crate::chat::compress_evicted_turns(connections, row, memory, evicted, context_limit),
     )
     .await
     {
@@ -1190,11 +1194,12 @@ fn effective_chat_max_tokens(mode_floor: i64, input_estimate: u32, context_limit
     floor.max(scaled).min(remaining).min(16_000).max(256) as u32
 }
 
-async fn acquire_provider_permit(
+async fn acquire_provider_slot(
     state: &AppState,
+    base_url: &str,
     cancel_flag: Arc<AtomicBool>,
-) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
-    let mut acquire = Box::pin(state.connections.acquire_permit());
+) -> Result<crate::services::connection_service::ProviderSlot, AppError> {
+    let mut acquire = Box::pin(state.connections.acquire_provider_slot(base_url));
     let mut timeout = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(15)));
     loop {
         if cancel_flag.load(Ordering::SeqCst) {

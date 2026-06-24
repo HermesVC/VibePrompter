@@ -1,7 +1,8 @@
 //! LLM compression when rolling or vector memory nears its cap (keep ~30% of source).
 
 use crate::models::{ChatMessage, CompletionParams, CompletionResult};
-use crate::providers::{self, HttpConfig};
+use crate::providers::HttpConfig;
+use crate::services::ConnectionService;
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
@@ -41,8 +42,8 @@ pub fn session_memory_needs_compression(memory: &str, context_limit: i64) -> boo
 
 /// Compress rolling session memory via LLM (~30% of current text).
 pub async fn compress_session_memory(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     memory: &str,
     context_limit: i64,
 ) -> AppResult<String> {
@@ -56,7 +57,8 @@ pub async fn compress_session_memory(
     }
     let budget = summary_budget_chars(context_limit);
     let target = compression_target_chars(source_chars).min(budget);
-    let compressed = compress_text_via_llm(conn, cfg, trimmed, target, context_limit).await?;
+    let compressed =
+        compress_text_via_llm(connections, conn, trimmed, target, context_limit).await?;
     Ok(trim_to_char_budget(&compressed, budget))
 }
 
@@ -83,8 +85,8 @@ pub fn fallback_compress_text(source: &str, context_limit: i64) -> String {
 
 /// Shared LLM pass with retries when the compress prompt overflows context or returns empty.
 pub async fn compress_text_via_llm(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     source: &str,
     target_chars: usize,
     context_limit: i64,
@@ -96,8 +98,8 @@ Do not invent or restate PLAN_CANONICAL, DECISION, REPO, path, or PLAN_PROGRESS 
 Drop filler and repetition. Target length: about TARGET characters (~30% of the input).\n\
 Use the same language as the source. Output ONLY the compressed memory — no markdown, no labels.\n";
     compress_with_system_preserving_facts(
+        connections,
         conn,
-        cfg,
         source,
         target_chars,
         context_limit,
@@ -108,8 +110,8 @@ Use the same language as the source. Output ONLY the compressed memory — no ma
 }
 
 pub async fn compress_with_system_preserving_facts(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     source: &str,
     target_chars: usize,
     context_limit: i64,
@@ -119,8 +121,8 @@ pub async fn compress_with_system_preserving_facts(
     let facts = split_memory_facts(source);
     if facts.atoms.is_empty() {
         return compress_with_system_retries(
+            connections,
             conn,
-            cfg,
             source,
             target_chars,
             context_limit,
@@ -139,8 +141,8 @@ pub async fn compress_with_system_preserving_facts(
     }
 
     let compressed = compress_with_system_retries(
+        connections,
         conn,
-        cfg,
         narrative,
         target_chars,
         context_limit,
@@ -156,8 +158,8 @@ pub async fn compress_with_system_preserving_facts(
 
 /// Like [`compress_text_via_llm`] but caller supplies a custom system prompt and raw user body.
 pub async fn compress_with_system_retries(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     source: &str,
     target_chars: usize,
     context_limit: i64,
@@ -203,8 +205,14 @@ pub async fn compress_with_system_retries(
             system.to_string()
         };
 
-        let outcome =
-            single_compress_attempt(conn, cfg, &user_body, attempt_target, &system_prompt).await;
+        let outcome = single_compress_attempt(
+            connections,
+            conn,
+            &user_body,
+            attempt_target,
+            &system_prompt,
+        )
+        .await;
 
         match outcome {
             Ok(result) => {
@@ -315,8 +323,8 @@ Rules:
 
 /// Optional LLM summary after a tool loop (findings / patches).
 pub async fn summarize_turn_for_memory(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     assistant_excerpt: &str,
     tool_trace: &str,
     context_limit: i64,
@@ -348,12 +356,13 @@ pub async fn summarize_turn_for_memory(
         disable_thinking: Some(true),
         retry: Some(false),
     };
-    let compress_timeout = compress_request_timeout(cfg);
+    let cfg = connections.http_config().await;
+    let compress_timeout = compress_request_timeout(&cfg);
     let mut compress_cfg = cfg.clone();
     compress_cfg.timeout = compress_timeout.min(std::time::Duration::from_secs(45));
     let result = match tokio::time::timeout(
         compress_cfg.timeout,
-        providers::complete(conn, messages, params, &compress_cfg),
+        connections.complete_gated_with_cfg(conn, messages, params, &compress_cfg),
     )
     .await
     {
@@ -376,8 +385,8 @@ pub async fn summarize_turn_for_memory(
 }
 
 async fn single_compress_attempt(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     user_content: &str,
     target_chars: usize,
     system: &str,
@@ -399,11 +408,13 @@ async fn single_compress_attempt(
         retry: Some(false),
     };
 
-    let compress_timeout = compress_request_timeout(cfg);
+    let cfg = connections.http_config().await;
+    let compress_timeout = compress_request_timeout(&cfg);
     let mut compress_cfg = cfg.clone();
     compress_cfg.timeout = compress_timeout;
 
-    let compress_future = providers::complete(conn, messages, params, &compress_cfg);
+    let compress_future =
+        connections.complete_gated_with_cfg(conn, messages, params, &compress_cfg);
     match tokio::time::timeout(compress_timeout, compress_future).await {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => Err(e),

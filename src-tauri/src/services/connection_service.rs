@@ -12,7 +12,7 @@ use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionInfo, ConnectionInput,
     ConnectionKind,
 };
-use crate::providers::{self, HttpConfig};
+use crate::providers::{self, HttpConfig, InferenceGate};
 use crate::security::{connection_account, SecretStore};
 use crate::services::SettingsService;
 use crate::storage::repositories::{ConnectionRepo, ConnectionRow};
@@ -31,6 +31,14 @@ pub struct ConnectionService {
     /// Mirror of the semaphore's original capacity so we can return it
     /// without touching tokio's internal accounting.
     permits_cap: u32,
+    /// One inference call at a time per local provider origin (chat + embed).
+    inference_gate: InferenceGate,
+}
+
+/// Holds global + per-endpoint permits for the duration of a provider call.
+pub struct ProviderSlot {
+    _endpoint: Option<tokio::sync::OwnedSemaphorePermit>,
+    _global: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl ConnectionService {
@@ -47,7 +55,63 @@ impl ConnectionService {
             settings,
             permits: Arc::new(Semaphore::new(n)),
             permits_cap: n as u32,
+            inference_gate: InferenceGate::default(),
         }
+    }
+
+    pub fn inference_gate(&self) -> &InferenceGate {
+        &self.inference_gate
+    }
+
+    /// Serialize chat, embed, and compress LLM calls on the same local endpoint.
+    pub async fn acquire_provider_slot(&self, base_url: &str) -> ProviderSlot {
+        let endpoint = self.inference_gate.acquire(base_url).await;
+        let global = self
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
+        ProviderSlot {
+            _endpoint: endpoint,
+            _global: global,
+        }
+    }
+
+    /// OpenAI-compatible embeddings with endpoint inference lock.
+    pub async fn embed_texts(
+        &self,
+        conn: &ConnectionRow,
+        texts: &[String],
+        model: Option<&str>,
+    ) -> AppResult<Vec<Vec<f32>>> {
+        let cfg = self.http_config().await;
+        let _slot = self.acquire_provider_slot(&conn.base_url).await;
+        providers::embed_texts(conn, &cfg, texts, model).await
+    }
+
+    /// Non-streaming completion with endpoint inference lock.
+    pub async fn complete_gated(
+        &self,
+        conn: &ConnectionRow,
+        messages: Vec<ChatMessage>,
+        params: CompletionParams,
+    ) -> AppResult<CompletionResult> {
+        let cfg = self.http_config().await;
+        self.complete_gated_with_cfg(conn, messages, params, &cfg)
+            .await
+    }
+
+    /// Like [`complete_gated`] but allows a caller-specific HTTP config (e.g. longer compress timeout).
+    pub async fn complete_gated_with_cfg(
+        &self,
+        conn: &ConnectionRow,
+        messages: Vec<ChatMessage>,
+        params: CompletionParams,
+        cfg: &HttpConfig,
+    ) -> AppResult<CompletionResult> {
+        let _slot = self.acquire_provider_slot(&conn.base_url).await;
+        providers::complete(conn, messages, params, cfg).await
     }
 
     /// Best-effort observation of how many outbound calls are currently
@@ -429,8 +493,8 @@ impl ConnectionService {
         params: CompletionParams,
     ) -> AppResult<CompletionResult> {
         let row = self.hydrate(self.repo.get(id).await?);
+        let _slot = self.acquire_provider_slot(&row.base_url).await;
         let cfg = self.http_config().await;
-        let _permit = self.permits.acquire().await.expect("semaphore closed");
         match providers::complete(&row, messages, params, &cfg).await {
             Ok(mut result) => {
                 self.enrich_completion_context(&row, &mut result).await;
@@ -466,8 +530,8 @@ impl ConnectionService {
             .ok_or_else(|| AppError::Validation("no default connection configured".into()))?;
         let id = row.id.clone();
         let row = self.hydrate(row);
+        let _slot = self.acquire_provider_slot(&row.base_url).await;
         let cfg = self.http_config().await;
-        let _permit = self.permits.acquire().await.expect("semaphore closed");
         match providers::complete(&row, messages, params, &cfg).await {
             Ok(mut result) => {
                 self.enrich_completion_context(&row, &mut result).await;

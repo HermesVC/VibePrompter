@@ -7,12 +7,13 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 
 use crate::models::ChatMessage;
-use crate::providers::{self, HttpConfig};
+use crate::providers::HttpConfig;
+use crate::services::ConnectionService;
 use crate::services::ChatMemoryService;
 use crate::storage::repositories::{ConnectionRow, MemoryChunkRow, NewMemoryChunk};
 
 use super::memory_compress::{
-    compress_text_via_llm, compression_target_chars, fallback_compress_text,
+    compression_target_chars, fallback_compress_text,
     MEMORY_PRESSURE_FRACTION,
 };
 use super::retrieval_policy::is_plan_continuation_query;
@@ -33,15 +34,15 @@ const EMBED_QUERY_MAX_CHARS: usize = 4_000;
 const VECTOR_EMBED_TIMEOUT: Duration = Duration::from_secs(6);
 
 async fn embed_texts_best_effort(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     texts: &[String],
     model: Option<&str>,
     op: &str,
 ) -> Option<Vec<Vec<f32>>> {
     match tokio::time::timeout(
         VECTOR_EMBED_TIMEOUT,
-        providers::embed_texts(conn, cfg, texts, model),
+        connections.embed_texts(conn, texts, model),
     )
     .await
     {
@@ -128,6 +129,7 @@ impl MemoryKind {
 /// Skips chunks whose hash is already in `indexed_hashes` (DB + this request).
 pub async fn index_evicted_messages(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -157,7 +159,8 @@ pub async fn index_evicted_messages(
 
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
-        let Some(embeddings) = embed_texts_best_effort(conn, cfg, &texts, None, "index").await
+        let Some(embeddings) =
+            embed_texts_best_effort(connections, conn, &texts, None, "index").await
         else {
             return false;
         };
@@ -173,7 +176,7 @@ pub async fn index_evicted_messages(
             }
         }
     }
-    match maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+    match maintain_vector_session(memory, connections, conn, cfg, session_id, indexed_hashes).await {
         Ok(compressed) => compressed,
         Err(e) => {
             tracing::warn!("vector memory maintain: {e}");
@@ -185,6 +188,7 @@ pub async fn index_evicted_messages(
 /// Index contextual file artifacts (plans, markdown notes, etc.) into session memory.
 pub async fn index_context_artifacts(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -219,7 +223,7 @@ pub async fn index_context_artifacts(
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
         let Some(embeddings) =
-            embed_texts_best_effort(conn, cfg, &texts, None, "context artifact index").await
+            embed_texts_best_effort(connections, conn, &texts, None, "context artifact index").await
         else {
             return;
         };
@@ -235,7 +239,7 @@ pub async fn index_context_artifacts(
             }
         }
     }
-    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+    if let Err(e) = maintain_vector_session(memory, connections, conn, cfg, session_id, indexed_hashes).await {
         tracing::warn!("vector memory maintain: {e}");
     }
 }
@@ -243,6 +247,7 @@ pub async fn index_context_artifacts(
 /// Index folder symbol outline into session vector memory.
 pub async fn index_folder_outline(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -264,6 +269,7 @@ pub async fn index_folder_outline(
     }
     insert_single_chunk(
         memory,
+        connections,
         conn,
         cfg,
         session_id,
@@ -278,6 +284,7 @@ pub async fn index_folder_outline(
 /// Index a brief plan-step summary block into session vector memory.
 pub async fn index_plan_step_summary(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -294,7 +301,7 @@ pub async fn index_plan_step_summary(
     }
 
     if let Some(canonical) = crate::workspace::plan_memory::canonical_from_step_summary(inner) {
-        upsert_plan_canonical(memory, conn, cfg, session_id, canonical, indexed_hashes).await;
+        upsert_plan_canonical(memory, connections, conn, cfg, session_id, canonical, indexed_hashes).await;
     } else {
         let hash = chunk_content_hash("plan-step", &text);
         if indexed_hashes.contains(&hash) {
@@ -302,6 +309,7 @@ pub async fn index_plan_step_summary(
         }
         insert_single_chunk(
             memory,
+            connections,
             conn,
             cfg,
             session_id,
@@ -316,6 +324,7 @@ pub async fn index_plan_step_summary(
 
 pub async fn upsert_plan_canonical_from_plan_markdown(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -329,11 +338,12 @@ pub async fn upsert_plan_canonical_from_plan_markdown(
     else {
         return;
     };
-    upsert_plan_canonical(memory, conn, cfg, session_id, canonical, indexed_hashes).await;
+    upsert_plan_canonical(memory, connections, conn, cfg, session_id, canonical, indexed_hashes).await;
 }
 
 async fn upsert_plan_canonical(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -347,7 +357,7 @@ async fn upsert_plan_canonical(
         &Utc::now().to_rfc3339(),
     );
     let Some(embeddings) =
-        embed_texts_best_effort(conn, cfg, &[text.clone()], None, "plan canonical index").await
+        embed_texts_best_effort(connections, conn, &[text.clone()], None, "plan canonical index").await
     else {
         return;
     };
@@ -408,6 +418,7 @@ fn compressible_chunks(chunks: &[MemoryChunkRow]) -> Vec<MemoryChunkRow> {
 /// Index workspace tool read results (read_file, read_symbol, file_outline).
 pub async fn index_tool_results(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -489,7 +500,7 @@ pub async fn index_tool_results(
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
         let Some(embeddings) =
-            embed_texts_best_effort(conn, cfg, &texts, None, "workspace tool index").await
+            embed_texts_best_effort(connections, conn, &texts, None, "workspace tool index").await
         else {
             return;
         };
@@ -505,7 +516,7 @@ pub async fn index_tool_results(
             }
         }
     }
-    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+    if let Err(e) = maintain_vector_session(memory, connections, conn, cfg, session_id, indexed_hashes).await {
         tracing::warn!("vector memory maintain: {e}");
     }
 }
@@ -513,6 +524,7 @@ pub async fn index_tool_results(
 /// When the chunk store nears its cap, LLM-compress the full extract to ~30% and replace chunks.
 pub async fn maybe_compress_vector_session(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -548,12 +560,20 @@ pub async fn maybe_compress_vector_session(
 
     let context_limit = conn.context_window_size.max(8192);
     let compressed =
-        match compress_text_via_llm(conn, cfg, &full_text, target_chars, context_limit).await {
+        match super::memory_compress::compress_text_via_llm(
+            connections,
+            conn,
+            &full_text,
+            target_chars,
+            context_limit,
+        )
+        .await
+        {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(
-                "vector memory LLM compression failed after retries: {e}, using truncate fallback"
-            );
+                    "vector memory LLM compression failed after retries: {e}, using truncate fallback"
+                );
                 fallback_compress_text(&full_text, context_limit)
             }
         };
@@ -564,7 +584,7 @@ pub async fn maybe_compress_vector_session(
         return Ok(false);
     }
     let Some(embeddings) =
-        embed_texts_best_effort(conn, cfg, &parts, None, "re-index after compression").await
+        embed_texts_best_effort(connections, conn, &parts, None, "re-index after compression").await
     else {
         return Ok(false);
     };
@@ -605,13 +625,21 @@ pub async fn maybe_compress_vector_session(
 
 async fn maintain_vector_session(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
     indexed_hashes: &mut HashSet<String>,
 ) -> Result<bool, crate::utils::AppError> {
-    let compressed =
-        maybe_compress_vector_session(memory, conn, cfg, session_id, indexed_hashes).await?;
+    let compressed = maybe_compress_vector_session(
+        memory,
+        connections,
+        conn,
+        cfg,
+        session_id,
+        indexed_hashes,
+    )
+    .await?;
     let count = memory.count_chunks(session_id).await?;
     if count > MAX_SESSION_CHUNKS {
         memory.prune_session(session_id, MAX_SESSION_CHUNKS).await?;
@@ -664,6 +692,7 @@ async fn reload_indexed_hashes(
 
 async fn insert_single_chunk(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -674,7 +703,7 @@ async fn insert_single_chunk(
 ) {
     let text_batch = [text.to_string()];
     let Some(embeddings) =
-        embed_texts_best_effort(conn, cfg, &text_batch, None, "single chunk index").await
+        embed_texts_best_effort(connections, conn, &text_batch, None, "single chunk index").await
     else {
         return;
     };
@@ -690,7 +719,7 @@ async fn insert_single_chunk(
         }
         Err(e) => tracing::warn!("workspace memory insert: {e}"),
     }
-    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+    if let Err(e) = maintain_vector_session(memory, connections, conn, cfg, session_id, indexed_hashes).await {
         tracing::warn!("vector memory maintain: {e}");
     }
 }
@@ -699,8 +728,9 @@ async fn insert_single_chunk(
 /// Reuses `query_emb_cache` across context-recovery retries for the same query.
 pub async fn retrieve_relevant(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
+    _cfg: &HttpConfig,
     session_id: &str,
     query: &str,
     context_limit: i64,
@@ -716,7 +746,7 @@ pub async fn retrieve_relevant(
         cached.clone()
     } else {
         let query_batch = [query_for_embed];
-        let emb = match embed_texts_best_effort(conn, cfg, &query_batch, None, "retrieve").await {
+        let emb = match embed_texts_best_effort(connections, conn, &query_batch, None, "retrieve").await {
             Some(v) => v.into_iter().next(),
             None => return Vec::new(),
         };
@@ -975,6 +1005,7 @@ fn format_apply_patch_memory_note(r: &crate::tools::ToolExecutionResult) -> Stri
 /// Optional LLM summary after a tool loop; deterministic patch notes are indexed separately.
 pub async fn index_turn_memory_after_tools(
     memory: &ChatMemoryService,
+    connections: &ConnectionService,
     conn: &ConnectionRow,
     cfg: &HttpConfig,
     session_id: &str,
@@ -997,8 +1028,8 @@ pub async fn index_turn_memory_after_tools(
     let tool_trace = format_tool_results_trace(tool_results);
     let assistant_excerpt = compact_excerpt(assistant_text, 600);
     let Some(summary) = super::memory_compress::summarize_turn_for_memory(
+        connections,
         conn,
-        cfg,
         &assistant_excerpt,
         &tool_trace,
         context_limit,
@@ -1017,6 +1048,7 @@ pub async fn index_turn_memory_after_tools(
     }
     insert_single_chunk(
         memory,
+        connections,
         conn,
         cfg,
         session_id,

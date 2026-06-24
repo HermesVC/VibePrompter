@@ -17,11 +17,13 @@ use serde::Deserialize;
 use serde_json::json;
 
 pub mod embeddings;
+pub mod inference_gate;
 pub mod lmstudio;
 pub mod prompt_format;
 mod provider_errors;
 
 pub use embeddings::embed_texts;
+pub use inference_gate::InferenceGate;
 
 use crate::models::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionKind, Settings, TokenUsage,

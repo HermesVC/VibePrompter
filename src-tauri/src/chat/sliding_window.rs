@@ -1,7 +1,7 @@
 //! Sliding context window — keep recent turns in the prompt, compress older ones via LLM.
 
 use crate::models::ChatMessage;
-use crate::providers::HttpConfig;
+use crate::services::ConnectionService;
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::AppResult;
 
@@ -233,8 +233,8 @@ pub fn fallback_merge_memory(
 
 /// Call the same provider to merge evicted turns into rolling memory.
 pub async fn compress_evicted_turns(
+    connections: &ConnectionService,
     conn: &ConnectionRow,
-    cfg: &HttpConfig,
     prior_memory: &str,
     evicted: &[ChatMessage],
     context_limit: i64,
@@ -256,8 +256,8 @@ pub async fn compress_evicted_turns(
 
     let facts = super::memory_facts::collect_session_facts(prior, evicted);
     let compressed = super::memory_compress::compress_with_system_retries(
+        connections,
         conn,
-        cfg,
         &user_body,
         target_chars,
         context_limit,
