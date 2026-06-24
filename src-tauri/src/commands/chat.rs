@@ -508,6 +508,7 @@ pub async fn chat_complete_stream(
                         params.clone(),
                         &cfg,
                         &row,
+                        context_limit,
                         out.result.clone(),
                         move |delta| {
                             let _ = app_for_tokens.emit(

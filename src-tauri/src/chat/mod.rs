@@ -6,6 +6,7 @@
 
 mod agent_tools;
 mod autonomous;
+mod completion_recovery;
 mod context_recovery;
 mod memory_compress;
 mod memory_facts;

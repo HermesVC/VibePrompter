@@ -406,6 +406,7 @@ where
                         params.clone(),
                         &cfg,
                         &row,
+                        context_limit,
                         out.result.clone(),
                         |delta| events.token(stream_generation, delta),
                         move || cancel_for_stream.load(Ordering::SeqCst),

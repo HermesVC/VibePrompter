@@ -12,6 +12,10 @@ const MAX_TOOL_ITERATIONS: usize = 6;
 const MAX_TOOL_AUTO_CONTINUES: usize = 3;
 const TOOL_CONTINUATION_TAIL_CHARS: usize = 6_000;
 const TOOL_STITCH_OVERLAP_CHARS: usize = 2_000;
+/// Max chars per tool result body in follow-up user message (read_file content etc.).
+pub const TOOL_RESULT_MAX_CHARS: usize = 12_000;
+/// Max total chars for all tool results in one follow-up turn.
+pub const TOOL_RESULT_TURN_MAX_CHARS: usize = 24_000;
 
 const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 
@@ -180,8 +184,18 @@ pub fn format_tool_followup_user_message(
     prompt_format_id: &str,
     results: &[ToolExecutionResult],
 ) -> String {
-    if prompt_format_id == "gemma4" {
-        results
+    let capped: Vec<ToolExecutionResult> = results
+        .iter()
+        .map(|r| ToolExecutionResult {
+            name: r.name.clone(),
+            ok: r.ok,
+            output: cap_tool_output_for_followup(&r.name, &r.output, r.ok),
+            message: r.message.clone(),
+        })
+        .collect();
+
+    let body = if prompt_format_id == "gemma4" {
+        capped
             .iter()
             .map(|r| {
                 prompt_format::gemma4::format_tool_response(
@@ -196,7 +210,7 @@ pub fn format_tool_followup_user_message(
             .collect::<Vec<_>>()
             .join("")
     } else {
-        results
+        capped
             .iter()
             .map(|r| {
                 format!(
@@ -212,7 +226,88 @@ pub fn format_tool_followup_user_message(
             })
             .collect::<Vec<_>>()
             .join("\n")
+    };
+
+    cap_tool_followup_turn_text(body)
+}
+
+/// Shrink tool JSON before it enters the follow-up user message.
+pub fn cap_tool_output_for_followup(
+    name: &str,
+    output: &serde_json::Value,
+    ok: bool,
+) -> serde_json::Value {
+    if !ok {
+        return output.clone();
     }
+    match name {
+        "read_file" => cap_read_file_tool_output(output),
+        "apply_patch" => summarize_patch_tool_output(output),
+        "write_file" => summarize_write_tool_output(output),
+        _ => cap_generic_tool_output(output),
+    }
+}
+
+fn cap_read_file_tool_output(output: &serde_json::Value) -> serde_json::Value {
+    let mut out = output.clone();
+    let Some(content) = out.get("content").and_then(|v| v.as_str()) else {
+        return cap_generic_tool_output(output);
+    };
+    if content.chars().count() <= TOOL_RESULT_MAX_CHARS {
+        return out;
+    }
+    let truncated: String = content.chars().take(TOOL_RESULT_MAX_CHARS).collect();
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert(
+            "content".into(),
+            json!(format!(
+                "{truncated}\n… [truncated — use read_file with lines:[start,end] for more]"
+            )),
+        );
+        obj.insert("truncated".into(), json!(true));
+    }
+    out
+}
+
+fn summarize_patch_tool_output(output: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "path": output.get("path"),
+        "contentHash": output.get("contentHash").or_else(|| output.get("content_hash")),
+        "editsApplied": output.get("editsApplied").or_else(|| output.get("edits_applied")),
+        "lineCount": output.get("lineCount").or_else(|| output.get("line_count")),
+        "ok": true,
+    })
+}
+
+fn summarize_write_tool_output(output: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "path": output.get("path"),
+        "contentHash": output.get("contentHash").or_else(|| output.get("content_hash")),
+        "lineCount": output.get("lineCount").or_else(|| output.get("line_count")),
+        "created": output.get("created").unwrap_or(&json!(true)),
+    })
+}
+
+fn cap_generic_tool_output(output: &serde_json::Value) -> serde_json::Value {
+    let serialized = serde_json::to_string(output).unwrap_or_default();
+    if serialized.chars().count() <= TOOL_RESULT_MAX_CHARS {
+        return output.clone();
+    }
+    json!({
+        "truncated": true,
+        "preview": serialized.chars().take(TOOL_RESULT_MAX_CHARS).collect::<String>(),
+        "hint": "output too large for follow-up — use narrower tool args",
+    })
+}
+
+fn cap_tool_followup_turn_text(body: String) -> String {
+    if body.chars().count() <= TOOL_RESULT_TURN_MAX_CHARS {
+        return body;
+    }
+    let truncated: String = body.chars().take(TOOL_RESULT_TURN_MAX_CHARS).collect();
+    format!(
+        "{truncated}\n… [tool results truncated for context — re-read with lines/ranges if needed]"
+    )
 }
 
 pub async fn build_tool_context(
@@ -247,6 +342,7 @@ pub async fn run_tool_followup_loop<F, C>(
     params: crate::models::CompletionParams,
     cfg: &crate::providers::HttpConfig,
     row: &crate::storage::repositories::ConnectionRow,
+    context_limit: i64,
     mut result: crate::models::CompletionResult,
     mut on_token: F,
     should_cancel: C,
@@ -339,6 +435,7 @@ where
             messages.clone(),
             params.clone(),
             cfg,
+            context_limit,
             &mut on_token,
             should_cancel.clone(),
         )
@@ -436,6 +533,7 @@ async fn complete_stream_with_tool_auto_continue<F, C>(
     base_messages: Vec<crate::models::ChatMessage>,
     params: crate::models::CompletionParams,
     cfg: &crate::providers::HttpConfig,
+    context_limit: i64,
     on_token: &mut F,
     should_cancel: C,
 ) -> AppResult<crate::models::CompletionResult>
@@ -443,8 +541,79 @@ where
     F: FnMut(&str) + Send,
     C: Fn() -> bool + Send + Sync + Clone,
 {
-    let max_output = params.max_tokens.unwrap_or(0);
-    let mut current_messages = base_messages.clone();
+    let max_output = params.max_tokens.unwrap_or(256);
+    let reserve_output = max_output.max(256);
+    use crate::chat::completion_recovery::MAX_COMPLETION_CONTEXT_RETRIES;
+    use crate::chat::{should_retry_for_context, WindowAggression};
+
+    let mut aggression = WindowAggression::Normal;
+    let mut last_result: AppResult<crate::models::CompletionResult> =
+        Err(crate::utils::AppError::Validation("tool follow-up did not run".into()));
+
+    for attempt in 0..=MAX_COMPLETION_CONTEXT_RETRIES {
+        if should_cancel() {
+            return Err(crate::utils::AppError::Validation("cancelled".into()));
+        }
+        if attempt > 0 {
+            aggression = aggression.next();
+            tracing::warn!(
+                "tool follow-up context recovery attempt {attempt}/{MAX_COMPLETION_CONTEXT_RETRIES} (aggression={aggression:?})"
+            );
+        }
+
+        let window = crate::chat::plan_sliding_window_with_aggression(
+            base_messages.clone(),
+            context_limit,
+            "",
+            reserve_output,
+            aggression,
+        );
+        let input_estimate = crate::chat::completion_recovery::estimate_completion_input_tokens(
+            &window.active,
+            params.system.as_deref(),
+        );
+
+        last_result = complete_stream_with_tool_auto_continue_inner(
+            row,
+            &base_messages,
+            window.active,
+            params.clone(),
+            cfg,
+            max_output,
+            on_token,
+            should_cancel.clone(),
+        )
+        .await;
+
+        let retry = attempt < MAX_COMPLETION_CONTEXT_RETRIES
+            && should_retry_for_context(
+                last_result.as_ref().map_err(|e| e),
+                input_estimate,
+                context_limit,
+            );
+        if !retry {
+            break;
+        }
+    }
+
+    last_result
+}
+
+async fn complete_stream_with_tool_auto_continue_inner<F, C>(
+    row: &crate::storage::repositories::ConnectionRow,
+    base_messages: &[crate::models::ChatMessage],
+    window_messages: Vec<crate::models::ChatMessage>,
+    params: crate::models::CompletionParams,
+    cfg: &crate::providers::HttpConfig,
+    max_output: u32,
+    on_token: &mut F,
+    should_cancel: C,
+) -> AppResult<crate::models::CompletionResult>
+where
+    F: FnMut(&str) + Send,
+    C: Fn() -> bool + Send + Sync + Clone,
+{
+    let mut current_messages = window_messages;
     let mut accumulated = String::new();
     let mut combined: Option<crate::models::CompletionResult> = None;
 
@@ -663,6 +832,19 @@ mod tests {
         };
         assert!(scope_enables_tools(&scope));
         assert_eq!(scope_path_for_tools(&scope).as_deref(), Some("src/lib"));
+    }
+
+    #[test]
+    fn caps_read_file_in_followup_message() {
+        let huge = "x".repeat(TOOL_RESULT_MAX_CHARS + 500);
+        let out = cap_tool_output_for_followup(
+            "read_file",
+            &json!({ "path": "a.php", "content": huge }),
+            true,
+        );
+        let content = out["content"].as_str().unwrap_or("");
+        assert!(content.contains("truncated"));
+        assert!(content.chars().count() < huge.chars().count());
     }
 
     #[test]
