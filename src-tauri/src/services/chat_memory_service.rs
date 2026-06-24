@@ -42,6 +42,17 @@ impl ChatMemoryService {
         self.repo.replace_session_chunks(session_id, chunks).await
     }
 
+    pub async fn replace_session_role_chunks(
+        &self,
+        session_id: &str,
+        role: &str,
+        chunks: &[NewMemoryChunk],
+    ) -> AppResult<()> {
+        self.repo
+            .replace_session_role_chunks(session_id, role, chunks)
+            .await
+    }
+
     pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
         self.repo.prune_session(session_id, keep_latest).await
     }

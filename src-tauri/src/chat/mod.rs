@@ -27,7 +27,7 @@ pub use sliding_window::{
 pub use vector_memory::{
     append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
     index_evicted_messages, index_folder_outline, index_plan_step_summary, index_tool_results,
-    retrieve_relevant,
+    retrieve_relevant, upsert_plan_canonical_from_plan_markdown,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

@@ -168,6 +168,7 @@ pub fn run() {
             commands::chat_clear_session_memory,
             commands::chat_index_context_artifacts,
             commands::chat_index_folder_outline,
+            commands::chat_index_plan_canonical,
             commands::chat_index_plan_step_summary,
             commands::write_clipboard_text,
             commands::read_clipboard_text,

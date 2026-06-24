@@ -162,6 +162,7 @@ next: следующий пункт или «готово»
 </plan-step-summary>
 
 The app stores this block in semantic memory — after context reload you must still know current step, what is done, and what is next. Keep it extremely brief.
+Canonical plan status is PLAN.md **Status** plus the `<plan-step-summary>` block. Do not duplicate a conflicting current-step narrative elsewhere; if you need to refer to plan progress in prose, refer to PLAN_CANONICAL.
 4. Update PLAN.md: mark step `[x]`, update **Status** (`Current step`, `Last completed`).
 5. Stop after one step unless the user explicitly asked for full autopilot.
 
@@ -437,6 +438,7 @@ mod tests {
         assert!(sys.contains("PLAN.md"));
         assert!(sys.contains("Plan-driven developer workflow"));
         assert!(sys.contains("<plan-step-summary>"));
+        assert!(sys.contains("PLAN_CANONICAL"));
 
         let no_dev = ChatContextPayload {
             scope: folder_scope.clone(),

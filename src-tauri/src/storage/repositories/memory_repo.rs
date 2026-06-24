@@ -122,6 +122,42 @@ impl MemoryRepo {
         Ok(())
     }
 
+    pub async fn replace_session_role_chunks(
+        &self,
+        session_id: &str,
+        role: &str,
+        chunks: &[NewMemoryChunk],
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await.map_err(AppError::Database)?;
+        sqlx::query("DELETE FROM chat_memory_chunks WHERE session_id = ?1 AND role = ?2")
+            .bind(session_id)
+            .bind(role)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::Database)?;
+
+        for chunk in chunks {
+            let blob = embedding_to_blob(&chunk.embedding);
+            sqlx::query(
+                "INSERT INTO chat_memory_chunks
+                 (session_id, role, content, content_hash, embedding, dims)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(session_id)
+            .bind(&chunk.role)
+            .bind(&chunk.content)
+            .bind(&chunk.content_hash)
+            .bind(blob)
+            .bind(chunk.embedding.len() as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::Database)?;
+        }
+
+        tx.commit().await.map_err(AppError::Database)?;
+        Ok(())
+    }
+
     pub async fn prune_session(&self, session_id: &str, keep_latest: i64) -> AppResult<()> {
         if keep_latest <= 0 {
             return self.delete_session(session_id).await;
@@ -284,5 +320,38 @@ mod tests {
         let s1 = repo.list_session_chunks("s1").await.unwrap();
         assert_eq!(s1.len(), 1);
         assert_eq!(s1[0].content, "old");
+    }
+
+    #[tokio::test]
+    async fn replace_session_role_chunks_preserves_other_roles_and_replaces_target_role() {
+        let repo = repo().await;
+        repo.insert_chunk("s1", "plan-canonical", "old plan", "old-plan", &[1.0])
+            .await
+            .unwrap();
+        repo.insert_chunk("s1", "decision", "keep decision", "decision", &[1.0])
+            .await
+            .unwrap();
+
+        repo.replace_session_role_chunks(
+            "s1",
+            "plan-canonical",
+            &[NewMemoryChunk {
+                role: "plan-canonical".into(),
+                content: "new plan".into(),
+                content_hash: "new-plan".into(),
+                embedding: vec![0.5],
+            }],
+        )
+        .await
+        .unwrap();
+
+        let chunks = repo.list_session_chunks("s1").await.unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks
+            .iter()
+            .any(|row| row.role == "plan-canonical" && row.content == "new plan"));
+        assert!(chunks
+            .iter()
+            .any(|row| row.role == "decision" && row.content == "keep decision"));
     }
 }

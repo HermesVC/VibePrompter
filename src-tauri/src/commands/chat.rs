@@ -951,6 +951,46 @@ pub async fn chat_index_plan_step_summary(
     Ok(())
 }
 
+/// Best-effort canonical plan state from an applied PLAN.md.
+#[tauri::command]
+pub async fn chat_index_plan_canonical(
+    state: State<'_, AppState>,
+    session_id: String,
+    connection_id: Option<String>,
+    mode_id: Option<String>,
+    path: String,
+    content: String,
+) -> Result<(), AppError> {
+    if session_id.trim().is_empty()
+        || content.trim().is_empty()
+        || !crate::workspace::plan_memory::is_plan_markdown_path(&path)
+    {
+        return Ok(());
+    }
+
+    let row = resolve_chat_connection_row(&state, connection_id, mode_id).await?;
+    let cfg = state.connections.http_config().await;
+    let mut indexed_hashes: std::collections::HashSet<String> = state
+        .chat_memory
+        .list_content_hashes(&session_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    crate::chat::upsert_plan_canonical_from_plan_markdown(
+        &state.chat_memory,
+        &row,
+        &cfg,
+        &session_id,
+        &content,
+        &mut indexed_hashes,
+    )
+    .await;
+
+    Ok(())
+}
+
 async fn resolve_chat_connection_row(
     state: &AppState,
     connection_id: Option<String>,

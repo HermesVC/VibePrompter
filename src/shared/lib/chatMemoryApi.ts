@@ -50,3 +50,20 @@ export async function indexPlanStepSummary(
     summary,
   });
 }
+
+/** Upsert canonical plan state from an applied PLAN.md. */
+export async function indexPlanCanonical(
+  sessionId: string,
+  path: string,
+  content: string,
+  opts?: { connectionId?: string; modeId?: string }
+): Promise<void> {
+  if (!sessionId.trim() || !path.trim() || !content.trim()) return;
+  await invoke('chat_index_plan_canonical', {
+    sessionId,
+    connectionId: opts?.connectionId,
+    modeId: opts?.modeId,
+    path,
+    content,
+  });
+}

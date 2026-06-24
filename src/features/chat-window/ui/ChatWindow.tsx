@@ -24,7 +24,7 @@ import {
   stripVpSummaryForDisplay,
   trimSummaryToBudget,
 } from '@shared/lib/chatSessionSummary';
-import { indexContextArtifacts, indexPlanStepSummary } from '@shared/lib/chatMemoryApi';
+import { indexContextArtifacts, indexPlanCanonical, indexPlanStepSummary } from '@shared/lib/chatMemoryApi';
 import {
   parseGeneratedFileBlocks,
   extractContextArtifacts,
@@ -471,6 +471,14 @@ export function ChatWindow() {
         connectionId: connectionId || undefined,
         modeId: modeId ?? undefined,
       }).catch(() => {});
+      for (const artifact of artifacts) {
+        if (artifact.path.replace(/\\/g, '/').split('/').pop()?.toLowerCase() === 'plan.md') {
+          void indexPlanCanonical(sessionIdRef.current, artifact.path, artifact.content, {
+            connectionId: connectionId || undefined,
+            modeId: modeId ?? undefined,
+          }).catch(() => {});
+        }
+      }
     },
     [connectionId, modeId]
   );
