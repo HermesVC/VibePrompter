@@ -105,6 +105,22 @@ pub struct StepResultTag {
     pub summary: String,
 }
 
+/// All `<step-result>` blocks in assistant text (last wins per step when applied).
+pub fn parse_all_step_results(text: &str) -> Vec<StepResultTag> {
+    let lower = text.to_ascii_lowercase();
+    let open_tag = format!("<{STEP_RESULT_TAG}");
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while let Some(rel) = lower[start..].find(&open_tag) {
+        let at = start + rel;
+        if let Some(r) = parse_step_result(&text[at..]) {
+            out.push(r);
+        }
+        start = at + open_tag.len();
+    }
+    out
+}
+
 /// Parse `<step-result step="N" status="done|failed">...</step-result>`.
 pub fn parse_step_result(text: &str) -> Option<StepResultTag> {
     let lower = text.to_ascii_lowercase();
@@ -183,5 +199,15 @@ Patched foreach line.
         let r = parse_step_result(text).expect("tag");
         assert_eq!(r.step_id, 2);
         assert_eq!(r.status, StepStatus::Done);
+    }
+
+    #[test]
+    fn parses_multiple_step_results() {
+        let text = r#"<step-result step="1" status="done">ok</step-result>
+<step-result step="2" status="done">ok2</step-result>"#;
+        let all = parse_all_step_results(text);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].step_id, 1);
+        assert_eq!(all[1].step_id, 2);
     }
 }

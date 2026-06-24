@@ -28,6 +28,8 @@ export interface StepSnapshot {
 
 export interface AutonomousPlanSnapshot {
   progress: string;
+  /** Orchestrator step id (in_progress or next pending). */
+  currentStepId?: number | null;
   steps: StepSnapshot[];
 }
 

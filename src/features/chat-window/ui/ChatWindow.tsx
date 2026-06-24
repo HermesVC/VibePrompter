@@ -224,6 +224,7 @@ export function ChatWindow() {
     phase: autonomousPhase,
     phaseDetail: autonomousPhaseDetail,
     sendAutonomous,
+    syncPlanFromStream,
     clearAutonomousUi,
   } = useAutonomousChatRun();
 
@@ -826,6 +827,7 @@ export function ChatWindow() {
             if (generation !== streamGenerationRef.current || !delta) return;
             setProviderRetryWarning(null);
             bufRef.current += delta;
+            syncPlanFromStream(bufRef.current);
             scheduleFlush(assistantId);
           },
           onChatStatus: (payload) => {
@@ -1165,6 +1167,7 @@ export function ChatWindow() {
     voice,
     autonomousMode,
     sendAutonomous,
+    syncPlanFromStream,
     clearAutonomousUi,
     processScopedCompletion,
     applySessionSummaryFromPayload,
@@ -1255,6 +1258,37 @@ export function ChatWindow() {
     if (files.length) void addFiles(files);
   };
 
+  const clearChatHistory = () => {
+    if (streaming) cancelStream();
+    voice.stop();
+    const oldSessionId = sessionIdRef.current;
+    if (oldSessionId) {
+      void invoke('chat_clear_session_memory', { sessionId: oldSessionId }).catch(() => {});
+    }
+    const preservedContext = chatContextRef.current;
+    const preservedConnection = connectionId;
+    const newSessionId = createChatSessionId();
+    setSessionId(newSessionId);
+    setMessages([]);
+    setDraft('');
+    setPendingImages([]);
+    setAttachError(null);
+    setTokenUsage(null);
+    setContextTrimNotice(null);
+    setIsContinuingOutput(false);
+    setSessionSummary('');
+    setRetrievedMemory(null);
+    setMemoryDebugLabel('Vector memory: idle');
+    clearAutonomousUi();
+    saveChatSession({
+      sessionId: newSessionId,
+      messages: [],
+      chatContext: preservedContext,
+      connectionId: preservedConnection,
+      sessionSummary: undefined,
+    });
+  };
+
   const clearChat = () => {
     if (streaming) cancelStream();
     voice.stop();
@@ -1274,6 +1308,7 @@ export function ChatWindow() {
     setRetrievedMemory(null);
     setMemoryDebugLabel('Vector memory: idle');
     setChatContext(DEFAULT_CHAT_CONTEXT);
+    clearAutonomousUi();
     clearChatSession();
   };
 
@@ -1510,9 +1545,21 @@ export function ChatWindow() {
             data-no-drag
             onPointerDown={(e) => {
               e.preventDefault();
+              clearChatHistory();
+            }}
+            title="Clear history (keep scope & attachments)"
+            style={iconBtnStyle()}
+          >
+            <I.history size={12} />
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            onPointerDown={(e) => {
+              e.preventDefault();
               clearChat();
             }}
-            title="New chat"
+            title="New chat (clear messages, memory, and scope)"
             style={iconBtnStyle()}
           >
             <I.plus size={12} />

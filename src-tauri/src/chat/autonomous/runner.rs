@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    parse_autonomous_plan, parse_step_result, AutonomousPlan, PlanStep, StepStatus,
+    parse_all_step_results, parse_autonomous_plan, parse_step_result, AutonomousPlan, PlanStep,
+    StepStatus,
 };
 use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_user_message, replan_user_message,
@@ -65,6 +66,7 @@ pub struct AutonomousRunResult {
 #[serde(rename_all = "camelCase")]
 pub struct AutonomousPlanSnapshot {
     pub progress: String,
+    pub current_step_id: Option<u32>,
     pub steps: Vec<StepSnapshot>,
 }
 
@@ -235,21 +237,23 @@ where
         final_text = result.text.clone();
         steps_executed += 1;
 
-        let mut step_status = parse_step_result(&result.text)
-            .filter(|r| r.step_id == step.id)
-            .map(|r| {
-                if !r.summary.is_empty() {
-                    plan.mark(step.id, r.status, Some(r.summary.clone()));
-                }
-                r.status
-            })
-            .unwrap_or_else(|| {
-                if tool_results_indicate_failure(&result.text) {
-                    StepStatus::Failed
-                } else {
-                    StepStatus::Done
-                }
-            });
+        for r in parse_all_step_results(&result.text) {
+            if r.step_id != step.id && !r.summary.is_empty() {
+                tracing::warn!(
+                    "step-result for step {} while executing step {} — model may be ahead of orchestrator",
+                    r.step_id,
+                    step.id
+                );
+            }
+            plan.mark(
+                r.step_id,
+                r.status,
+                (!r.summary.is_empty()).then_some(r.summary.clone()),
+            );
+        }
+        emit_plan_snapshot(events, &plan);
+
+        let mut step_status = resolve_current_step_status(&result.text, step.id);
         if tool_results_indicate_failure(&result.text) {
             step_status = StepStatus::Failed;
         }
@@ -485,12 +489,21 @@ fn wrap_with_protocol(user_content: &str, protocol: Option<&str>) -> String {
     }
 }
 
+fn current_step_id(plan: &AutonomousPlan) -> Option<u32> {
+    plan.steps
+        .iter()
+        .find(|s| s.status == StepStatus::InProgress)
+        .map(|s| s.id)
+        .or_else(|| plan.next_pending().map(|s| s.id))
+}
+
 fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
     events: &mut E,
     plan: &AutonomousPlan,
 ) {
     events.autonomous_plan(AutonomousPlanSnapshot {
         progress: plan.progress_label(),
+        current_step_id: current_step_id(plan),
         steps: plan
             .steps
             .iter()
@@ -501,6 +514,22 @@ fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
             })
             .collect(),
     });
+}
+
+/// Require `<step-result step="N">` for the orchestrator step — no silent done.
+fn resolve_current_step_status(text: &str, executing_step_id: u32) -> StepStatus {
+    match parse_step_result(text).filter(|r| r.step_id == executing_step_id) {
+        Some(r) => r.status,
+        None => {
+            if let Some(wrong) = parse_step_result(text) {
+                tracing::warn!(
+                    "missing step-result for step {executing_step_id}; got step {}",
+                    wrong.step_id
+                );
+            }
+            StepStatus::Failed
+        }
+    }
 }
 
 fn preview(text: &str) -> String {

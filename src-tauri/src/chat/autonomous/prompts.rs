@@ -47,11 +47,12 @@ pub fn execution_user_message(plan: &AutonomousPlan, step: &PlanStep) -> String 
     format!(
         "{plan_block}\n\n\
          Execute **only step {}**: {}\n\
+         Do **not** start the next plan step in this turn — one step per orchestrator turn. \
          Use workspace tools as needed. Wait for `[Tool result: …]` before claiming success. \
          If a tool returns ERROR, set step status=\"failed\". \
          When finished, output `<{STEP_RESULT_TAG} step=\"{}\" status=\"done|failed\">` \
-         with a one-line summary.",
-        step.id, step.title, step.id
+         (step id must be {}) and `<plan-step-summary>` with `step: {} / {}`.",
+        step.id, step.title, step.id, step.id, step.id, plan.steps.len()
     )
 }
 

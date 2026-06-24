@@ -7,6 +7,7 @@ import {
   type AutonomousRunResult,
 } from '@shared/lib/autonomousRunApi';
 import { buildChatContextPayload, type ChatContextState } from '@shared/lib/chatContext';
+import { applyStreamPlanProgress } from '@shared/lib/planMemory';
 import { errorMessage } from '@shared/lib/utils';
 
 interface ChatStatusPayload {
@@ -38,11 +39,25 @@ export function useAutonomousChatRun() {
   const [plan, setPlan] = useState<AutonomousPlanSnapshot | null>(null);
   const [phase, setPhase] = useState<AutonomousPhase | null>(null);
   const [phaseDetail, setPhaseDetail] = useState<string | null>(null);
+  const [streamPhaseDetail, setStreamPhaseDetail] = useState<string | null>(null);
 
   const clearAutonomousUi = useCallback(() => {
     setPlan(null);
     setPhase(null);
     setPhaseDetail(null);
+    setStreamPhaseDetail(null);
+  }, []);
+
+  const syncPlanFromStream = useCallback((streamText: string) => {
+    setPlan((prev) => {
+      const updated = applyStreamPlanProgress(prev, streamText);
+      if (!updated?.currentStepId) return updated ?? prev;
+      const step = updated.steps.find((s) => s.id === updated.currentStepId);
+      if (step) {
+        setStreamPhaseDetail(`Step ${step.id}: ${step.title}`);
+      }
+      return updated;
+    });
   }, []);
 
   const sendAutonomous = useCallback(async (params: AutonomousSendParams) => {
@@ -56,6 +71,7 @@ export function useAutonomousChatRun() {
 
     setPhase('planning');
     setPhaseDetail(null);
+    setStreamPhaseDetail(null);
     setPlan(null);
 
     const unlistens: Array<() => void> = [];
@@ -72,10 +88,20 @@ export function useAutonomousChatRun() {
         }),
         listen<AutonomousPlanSnapshot>(planEvent, (e) => {
           setPlan(e.payload);
+          setStreamPhaseDetail(null);
+          if (e.payload.currentStepId) {
+            const step = e.payload.steps.find((s) => s.id === e.payload.currentStepId);
+            if (step) {
+              setPhaseDetail(`Step ${step.id}: ${step.title}`);
+            }
+          }
         }),
         listen<{ phase: AutonomousPhase; detail?: string | null }>(phaseEvent, (e) => {
           setPhase(e.payload.phase);
-          setPhaseDetail(e.payload.detail?.trim() || null);
+          if (e.payload.detail?.trim()) {
+            setPhaseDetail(e.payload.detail.trim());
+            setStreamPhaseDetail(null);
+          }
         }),
         listen<string>(errEvent, (e) => {
           const cancelled = e.payload === 'cancelled';
@@ -102,8 +128,20 @@ export function useAutonomousChatRun() {
       });
 
       setPhase(result.phase);
+      setStreamPhaseDetail(null);
       if (result.plan?.steps?.length) {
-        setPlan({ progress: '', steps: result.plan.steps });
+        const done = result.plan.steps.filter(
+          (s) => s.status === 'done' || s.status === 'skipped'
+        ).length;
+        const currentStepId =
+          result.plan.steps.find((s) => s.status === 'in_progress')?.id ??
+          result.plan.steps.find((s) => s.status === 'pending')?.id ??
+          null;
+        setPlan({
+          progress: `${done}/${result.plan.steps.length}`,
+          currentStepId,
+          steps: result.plan.steps,
+        });
       }
       params.onComplete(result);
     } catch (e) {
@@ -115,13 +153,16 @@ export function useAutonomousChatRun() {
     }
   }, []);
 
+  const displayPhaseDetail = streamPhaseDetail ?? phaseDetail;
+
   return {
     autonomousMode,
     setAutonomousMode,
     plan,
     phase,
-    phaseDetail,
+    phaseDetail: displayPhaseDetail,
     sendAutonomous,
+    syncPlanFromStream,
     clearAutonomousUi,
   };
 }

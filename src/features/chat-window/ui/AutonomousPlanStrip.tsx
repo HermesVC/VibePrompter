@@ -28,6 +28,11 @@ const PHASE_LABEL: Record<AutonomousPhase, string> = {
 export function AutonomousPlanStrip({ phase, phaseDetail, plan }: AutonomousPlanStripProps) {
   if (!phase && !plan) return null;
 
+  const activeId =
+    plan?.currentStepId ??
+    plan?.steps.find((s) => s.status === 'in_progress')?.id ??
+    plan?.steps.find((s) => s.status === 'pending')?.id;
+
   return (
     <div
       style={{
@@ -64,9 +69,10 @@ export function AutonomousPlanStrip({ phase, phaseDetail, plan }: AutonomousPlan
                     ? 'var(--danger)'
                     : s.status === 'done'
                       ? 'var(--fg-dim)'
-                      : s.status === 'in_progress'
+                      : s.id === activeId || s.status === 'in_progress'
                         ? 'var(--fg)'
                         : 'var(--fg-dim)',
+                fontWeight: s.id === activeId ? 600 : 400,
               }}
             >
               {STATUS_MARK[s.status]} {s.title}
