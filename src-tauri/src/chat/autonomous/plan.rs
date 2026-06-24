@@ -82,6 +82,58 @@ impl AutonomousPlan {
     }
 }
 
+/// Default multi-step plan when the model returns 0–1 steps or JSON is unusable.
+pub fn synthesize_plan_from_goal(goal: &str) -> AutonomousPlan {
+    let short = goal
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(goal)
+        .chars()
+        .take(160)
+        .collect::<String>();
+    AutonomousPlan {
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: format!("Осмотр workspace (list_dir) и подготовка путей для задачи"),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            },
+            PlanStep {
+                id: 2,
+                title: format!("Основная реализация: {short}"),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            },
+            PlanStep {
+                id: 3,
+                title: "Стили, полировка и мелкие правки".into(),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            },
+            PlanStep {
+                id: 4,
+                title: "Проверка результата (read_file / run_verify)".into(),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            },
+        ],
+    }
+}
+
+/// Ensure at least 2 concrete steps — never run with a single catch-all step.
+pub fn normalize_plan_for_goal(plan: AutonomousPlan, goal: &str) -> AutonomousPlan {
+    if plan.steps.len() >= 2 {
+        return plan;
+    }
+    synthesize_plan_from_goal(goal)
+}
+
 /// Extract the best (most steps) plan from all `<autonomous-plan>` blocks in text.
 pub fn parse_autonomous_plan(text: &str) -> Option<AutonomousPlan> {
     parse_best_autonomous_plan(text)
@@ -123,7 +175,13 @@ struct RawPlanStep {
 
 fn parse_steps_json(inner: &str) -> Option<Vec<PlanStep>> {
     let body = normalize_plan_json_body(inner);
-    let raw: Vec<RawPlanStep> = serde_json::from_str(&body).ok()?;
+    if let Ok(raw) = serde_json::from_str::<Vec<RawPlanStep>>(&body) {
+        return steps_from_raw(raw);
+    }
+    parse_steps_regex_fallback(&body)
+}
+
+fn steps_from_raw(raw: Vec<RawPlanStep>) -> Option<Vec<PlanStep>> {
     let steps: Vec<PlanStep> = raw
         .into_iter()
         .map(|r| PlanStep {
@@ -143,6 +201,38 @@ fn parse_steps_json(inner: &str) -> Option<Vec<PlanStep>> {
     }
 }
 
+/// Fallback when strict JSON fails (unescaped quotes, minor model drift).
+fn parse_steps_regex_fallback(body: &str) -> Option<Vec<PlanStep>> {
+    let mut steps = Vec::new();
+    let re = regex::Regex::new(
+        r#"\{\s*"id"\s*:\s*(\d+)\s*,\s*"title"\s*:\s*"((?:\\.|[^"\\])*)""#,
+    )
+    .ok()?;
+    for cap in re.captures_iter(body) {
+        let id: u32 = cap.get(1)?.as_str().parse().ok()?;
+        let title = cap
+            .get(2)?
+            .as_str()
+            .replace("\\\"", "\"")
+            .replace("\\n", "\n");
+        if title.trim().is_empty() {
+            continue;
+        }
+        steps.push(PlanStep {
+            id,
+            title,
+            status: StepStatus::Pending,
+            verify: None,
+            note: None,
+        });
+    }
+    if steps.len() >= 2 {
+        Some(steps)
+    } else {
+        None
+    }
+}
+
 fn normalize_plan_json_body(inner: &str) -> String {
     let mut s = inner.trim().to_string();
     if s.starts_with("```") {
@@ -155,6 +245,11 @@ fn normalize_plan_json_body(inner: &str) -> String {
             }
         }
     }
+    let s = s
+        .replace('\u{201c}', "\"")
+        .replace('\u{201d}', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'");
     fix_trailing_commas(s.trim())
 }
 
@@ -171,6 +266,11 @@ fn extract_all_tag_inners(text: &str, tag: &str) -> Vec<String> {
     while let Some(rel) = lower[search_from..].find(&open) {
         let content_start = search_from + rel + open.len();
         let Some(close_rel) = lower[content_start..].find(&close) else {
+            // Unclosed tag (stream cut-off) — still try to parse partial JSON.
+            let partial = text[content_start..].trim();
+            if partial.starts_with('[') {
+                out.push(partial.to_string());
+            }
             break;
         };
         let content_end = content_start + close_rel;
@@ -336,5 +436,26 @@ Patched foreach line.
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].step_id, 1);
         assert_eq!(all[1].step_id, 2);
+    }
+
+    #[test]
+    fn synthesize_plan_has_four_steps() {
+        let plan = synthesize_plan_from_goal("neon snake index.html");
+        assert_eq!(plan.steps.len(), 4);
+    }
+
+    #[test]
+    fn normalize_replaces_single_step() {
+        let one = AutonomousPlan {
+            steps: vec![PlanStep {
+                id: 1,
+                title: "only".into(),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            }],
+        };
+        let out = normalize_plan_for_goal(one, "build game");
+        assert!(out.steps.len() >= 4);
     }
 }

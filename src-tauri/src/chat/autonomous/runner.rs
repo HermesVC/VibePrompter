@@ -10,8 +10,9 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    best_autonomous_plan_from_texts, format_plan_for_prompt, parse_all_step_results,
-    parse_autonomous_plan, parse_step_result, AutonomousPlan, PlanStep, StepStatus,
+    best_autonomous_plan_from_texts, format_plan_for_prompt, normalize_plan_for_goal,
+    parse_all_step_results, parse_autonomous_plan, parse_step_result, synthesize_plan_from_goal,
+    AutonomousPlan, PlanStep, StepStatus,
 };
 use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_retry_user_message,
@@ -343,10 +344,7 @@ where
             step_warning.as_deref(),
         );
 
-        let mut step_status = resolve_current_step_status(&result.text, step.id);
-        if tool_results_indicate_failure(&result.text) {
-            step_status = StepStatus::Failed;
-        }
+        let mut step_status = resolve_step_status(&result.text, step.id);
 
         let mut verify_ok = None;
         let mut verify_message = None;
@@ -578,7 +576,7 @@ where
     .await?;
     *final_text = result.text.clone();
     if let Some(updated) = parse_autonomous_plan(&result.text) {
-        *plan = updated;
+        *plan = normalize_plan_for_goal(updated, goal);
         Ok(true)
     } else {
         Ok(false)
@@ -615,12 +613,12 @@ where
     *final_text = result.text.clone();
 
     if let Some(plan) = best_autonomous_plan_from_texts(&[&result.text]) {
-        if plan.steps.len() > 1 {
+        if plan.steps.len() >= 2 {
             return Ok((plan, None));
         }
     }
 
-    tracing::warn!("planning: no multi-step plan yet, retrying with stricter prompt");
+    tracing::warn!("planning: need multi-step plan, retrying with stricter prompt");
     messages.push(ChatMessage {
         role: "user".into(),
         content: wrap_with_protocol(
@@ -645,41 +643,33 @@ where
     *final_text = result2.text.clone();
 
     if let Some(plan) = best_autonomous_plan_from_texts(&[&result.text, &result2.text]) {
-        let warning = if plan.steps.len() <= 1 {
-            Some(
-                "План содержит только один шаг — проверьте разбиение задачи.".into(),
-            )
-        } else if parse_autonomous_plan(&result2.text).is_none() {
-            Some("Использован план из первой попытки планирования.".into())
+        let normalized = normalize_plan_for_goal(plan, goal);
+        let warning = if normalized.steps.len() < 2 {
+            Some("План схлопнут до шаблона — проверьте разбиение.".into())
+        } else if parse_autonomous_plan(&result2.text)
+            .map(|p| p.steps.len())
+            .unwrap_or(0)
+            < 2
+        {
+            Some("Использован синтезированный многшаговый план (модель вернула < 2 шагов).".into())
         } else {
             None
         };
-        return Ok((plan, warning));
+        return Ok((normalized, warning));
     }
 
     let hinted = count_plan_tag_blocks(&result.text).max(count_plan_tag_blocks(&result2.text));
     tracing::warn!(
-        "planning: fallback single-step plan for goal (saw {hinted} autonomous-plan block(s))"
+        "planning: synthesizing default plan (saw {hinted} autonomous-plan block(s))"
     );
     let warning = Some(if hinted > 0 {
         format!(
-            "Не удалось разобрать план ({hinted} блок(ов) в ответе) — выполняем одним шагом."
+            "Не удалось разобрать план ({hinted} блок(ов)) — используем шаблон из 4 шагов."
         )
     } else {
-        "Модель не вернула <autonomous-plan> — выполняем одним шагом.".into()
+        "Модель не вернула <autonomous-plan> — используем шаблон из 4 шагов.".into()
     });
-    Ok((
-        AutonomousPlan {
-            steps: vec![PlanStep {
-                id: 1,
-                title: goal.to_string(),
-                status: StepStatus::Pending,
-                verify: None,
-                note: None,
-            }],
-        },
-        warning,
-    ))
+    Ok((synthesize_plan_from_goal(goal), warning))
 }
 
 fn count_plan_tag_blocks(text: &str) -> usize {
@@ -824,36 +814,65 @@ fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
     });
 }
 
-/// Require `<step-result step="N">` for the orchestrator step — no silent done.
-fn resolve_current_step_status(text: &str, executing_step_id: u32) -> StepStatus {
-    match parse_all_step_results(text)
+/// Resolve step outcome: explicit tag, tool errors, or inferred file output.
+fn resolve_step_status(text: &str, executing_step_id: u32) -> StepStatus {
+    if let Some(r) = parse_all_step_results(text)
         .into_iter()
         .rev()
         .find(|r| r.step_id == executing_step_id)
     {
-        Some(r) => r.status,
-        None => {
-            if let Some(wrong) = parse_step_result(text) {
-                tracing::warn!(
-                    "missing step-result for step {executing_step_id}; got step {}",
-                    wrong.step_id
-                );
-            }
-            StepStatus::Failed
-        }
+        return r.status;
     }
+
+    if tool_results_indicate_failure(text) {
+        return StepStatus::Failed;
+    }
+
+    if assistant_produced_files(text) || tool_results_indicate_successful_write(text) {
+        tracing::info!(
+            "step {executing_step_id}: inferred done from file output (no step-result tag)"
+        );
+        return StepStatus::Done;
+    }
+
+    if let Some(wrong) = parse_step_result(text) {
+        tracing::warn!(
+            "missing step-result for step {executing_step_id}; got step {}",
+            wrong.step_id
+        );
+    }
+    StepStatus::Failed
+}
+
+fn assistant_produced_files(text: &str) -> bool {
+    crate::app::harness::extract_generated_file_fences(text)
+        .iter()
+        .any(|(_, content)| content.trim().len() > 20)
+}
+
+fn tool_results_indicate_successful_write(text: &str) -> bool {
+    text.split("[Tool result:").skip(1).any(|chunk| {
+        if !chunk.contains("write_file") {
+            return false;
+        }
+        let head: String = chunk.lines().take(10).collect::<Vec<_>>().join("\n");
+        !head.contains("\"ok\": false")
+            && !head.contains("\"ok\":false")
+            && !head.contains("ERROR:")
+    })
 }
 
 fn preview(text: &str) -> String {
     text.chars().take(400).collect()
 }
 
-/// Assistant turn included at least one failed tool execution.
+/// Assistant turn included at least one failed tool execution (header only — not file body).
 fn tool_results_indicate_failure(text: &str) -> bool {
     text.split("[Tool result:").skip(1).any(|chunk| {
-        chunk.contains("ERROR:")
-            || chunk.contains("\"ok\": false")
-            || chunk.contains("\"ok\":false")
+        let head: String = chunk.lines().take(10).collect::<Vec<_>>().join("\n");
+        head.contains("\"ok\": false")
+            || head.contains("\"ok\":false")
+            || head.lines().any(|l| l.trim_start().starts_with("ERROR:"))
     })
 }
 
@@ -1041,7 +1060,7 @@ mod tests {
 <step-result step="3" status="done">future</step-result>
 <step-result step="2" status="done">current</step-result>
 "#;
-        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Done);
+        assert_eq!(resolve_step_status(text, 2), StepStatus::Done);
     }
 
     #[test]
@@ -1050,12 +1069,18 @@ mod tests {
 <step-result step="2" status="failed">old failure</step-result>
 <step-result step="2" status="done">fixed</step-result>
 "#;
-        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Done);
+        assert_eq!(resolve_step_status(text, 2), StepStatus::Done);
     }
 
     #[test]
-    fn wrong_step_result_does_not_count_as_current_success() {
+    fn infers_done_from_file_fence_without_step_result() {
+        let text = "```file:test/index.html\n<!DOCTYPE html>\n<html>body</html>\n```";
+        assert_eq!(resolve_step_status(text, 1), StepStatus::Done);
+    }
+
+    #[test]
+    fn wrong_step_result_without_file_output_fails() {
         let text = r#"<step-result step="9" status="done">wrong</step-result>"#;
-        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Failed);
+        assert_eq!(resolve_step_status(text, 2), StepStatus::Failed);
     }
 }
