@@ -6,6 +6,7 @@ use crate::storage::repositories::ConnectionRow;
 use crate::utils::AppResult;
 
 use super::session_summary::{summary_budget_chars, trim_summary_to_budget, SUMMARY_FRACTION};
+use super::memory_compress::enforce_memory_shrink;
 const MIN_ACTIVE_TURNS: usize = 2;
 const COMPRESS_TURN_MAX_CHARS: usize = 1_200;
 const COMPRESS_MAX_TURNS: usize = 24;
@@ -226,7 +227,11 @@ pub fn fallback_merge_memory(
     let target = compression_target_chars(facts.narrative.chars().count()).min(budget);
     let narrative = trim_to_char_budget(&facts.narrative, target);
     trim_summary_to_budget(
-        &merge_compressed_memory(&facts, &narrative, context_limit),
+        &enforce_memory_shrink(
+            prior_memory,
+            &merge_compressed_memory(&facts, &narrative, context_limit),
+            context_limit,
+        ),
         context_limit,
     )
 }
@@ -265,8 +270,12 @@ pub async fn compress_evicted_turns(
         false,
     )
     .await?;
-    Ok(trim_summary_to_budget(
-        &super::memory_facts::merge_compressed_memory(&facts, &compressed, context_limit),
+    Ok(enforce_memory_shrink(
+        prior_memory,
+        &trim_summary_to_budget(
+            &super::memory_facts::merge_compressed_memory(&facts, &compressed, context_limit),
+            context_limit,
+        ),
         context_limit,
     ))
 }

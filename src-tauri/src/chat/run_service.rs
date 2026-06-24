@@ -196,24 +196,21 @@ where
     let mut vector_chunks_used: Option<u32> = None;
     let mut vector_memory_compressed = false;
     let mut vector_available = false;
-    let mut indexed_chunk_hashes: HashSet<String> =
-        if session_id.trim().is_empty() || request.disable_vector_retrieval {
-            HashSet::new()
-        } else {
-            match state.chat_memory.list_content_hashes(&session_id).await {
-                Ok(hashes) => {
-                    vector_available = true;
-                    hashes.into_iter().collect()
-                }
-                Err(e) => {
-                    tracing::warn!("vector memory unavailable for session {session_id}: {e}");
-                    HashSet::new()
-                }
+    let mut indexed_chunk_hashes: HashSet<String> = HashSet::new();
+    if !session_id.trim().is_empty() {
+        match state.chat_memory.list_content_hashes(&session_id).await {
+            Ok(hashes) => {
+                vector_available = true;
+                indexed_chunk_hashes = hashes.into_iter().collect();
             }
-        };
+            Err(e) => {
+                tracing::warn!("vector memory store unavailable for session {session_id}: {e}");
+            }
+        }
+    }
     let mut compressed_evicted_keys: HashSet<String> = HashSet::new();
     let mut query_emb_cache: Option<Vec<f32>> = None;
-    let mut vector_chunks_indexed = 0u32;
+    let mut vector_chunks_indexed = indexed_chunk_hashes.len() as u32;
     let mut retrieval_query_preview: Option<String> = None;
     let mut input_estimate_first = 0u32;
     let mut input_estimate_final = 0u32;
@@ -398,9 +395,8 @@ where
                 }
             }
 
-            if !effective_disable_vector
+            if !session_id.trim().is_empty()
                 && !window_plan.evicted.is_empty()
-                && !session_id.trim().is_empty()
                 && crate::chat::index_evicted_messages(
                     &state.chat_memory,
                     &state.connections,
@@ -412,9 +408,9 @@ where
                 )
                 .await
             {
+                vector_available = true;
                 vector_memory_compressed = true;
-                vector_chunks_indexed =
-                    vector_chunks_indexed.saturating_add(window_plan.evicted.len() as u32);
+                vector_chunks_indexed = indexed_chunk_hashes.len() as u32;
             }
         }
         skip_memory_commit = false;

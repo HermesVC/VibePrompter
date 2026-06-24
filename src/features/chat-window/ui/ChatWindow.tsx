@@ -140,6 +140,7 @@ interface MemoryDiagnostics {
   vectorAvailable?: boolean;
   vectorChunksIndexed?: number;
   vectorChunksRetrieved?: number;
+  vectorRetrievalDisabled?: boolean;
   retrievalQueryPreview?: string;
   retrievedMemoryChars?: number;
   degradeLevelUsed?: number;
@@ -164,19 +165,26 @@ function formatMemoryDebugLabel(payload: MemoryDebugSource): string {
   const parts: string[] = [];
   const retrieved =
     payload.vectorChunksUsed ?? diag?.vectorChunksRetrieved ?? 0;
-  if (retrieved > 0) {
-    parts.push(`vector: ${retrieved}/4 retrieved`);
+  const indexed = diag?.vectorChunksIndexed ?? 0;
+  if (diag?.vectorRetrievalDisabled) {
+    parts.push('vector: retrieval off');
   } else if (diag?.vectorAvailable === false) {
-    parts.push('vector: unavailable');
+    parts.push('vector: store error');
+  } else if (retrieved > 0) {
+    parts.push(`vector: ${retrieved}/4 retrieved`);
+  } else if (indexed > 0) {
+    parts.push(`vector: ${indexed} indexed · none matched`);
+  } else if (diag?.vectorAvailable) {
+    parts.push('vector: empty');
   } else {
-    parts.push('vector: none matched');
+    parts.push('vector: no session');
   }
   const rollingChars = diag?.rollingSummaryChars ?? 0;
   if (rollingChars > 0) {
     parts.push(`rolling: ~${estimateTokensFromChars(rollingChars)} tok`);
   }
-  if (diag?.vectorChunksIndexed && diag.vectorChunksIndexed > 0) {
-    parts.push(`indexed: ${diag.vectorChunksIndexed}`);
+  if (indexed > 0 && retrieved > 0) {
+    parts.push(`indexed: ${indexed}`);
   }
   if (payload.memoryCompressed || diag?.evictedTurns) {
     const evicted = payload.evictedTurns ?? diag?.evictedTurns ?? 0;

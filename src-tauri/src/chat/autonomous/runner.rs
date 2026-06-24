@@ -793,7 +793,7 @@ where
             degrade_start,
             force_context_limit: base.force_context_limit,
             disable_rolling_memory: base.disable_rolling_memory,
-            disable_vector_retrieval: base.disable_vector_retrieval || attempt > 0 || msg_len > 20_000,
+            disable_vector_retrieval: base.disable_vector_retrieval || attempt > 0,
             retrieval_query_override: if attempt == 0 {
                 retrieval_query_override.clone()
             } else {

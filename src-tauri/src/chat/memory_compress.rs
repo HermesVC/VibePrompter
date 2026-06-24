@@ -31,6 +31,27 @@ pub fn compression_target_chars(source_char_count: usize) -> usize {
     target.max(128)
 }
 
+/// After LLM/fallback merge, never let rolling memory grow vs the prior snapshot.
+pub fn enforce_memory_shrink(prior: &str, candidate: &str, context_limit: i64) -> String {
+    use super::session_summary::{summary_budget_chars, trim_summary_to_budget, trim_to_char_budget};
+
+    let budget = summary_budget_chars(context_limit);
+    let capped = trim_summary_to_budget(candidate, context_limit);
+    let prior_n = prior.trim().chars().count();
+    let cand_n = capped.chars().count();
+    if prior_n == 0 || cand_n <= prior_n {
+        return capped;
+    }
+    let target = compression_target_chars(prior_n).min(budget);
+    tracing::warn!(
+        "rolling memory grew after compression ({} → {} chars); clamping to {}",
+        prior_n,
+        cand_n,
+        target
+    );
+    trim_to_char_budget(&capped, target.max(256))
+}
+
 pub fn session_memory_needs_compression(memory: &str, context_limit: i64) -> bool {
     let budget = summary_budget_chars(context_limit);
     if budget == 0 {
@@ -59,12 +80,20 @@ pub async fn compress_session_memory(
     let target = compression_target_chars(source_chars).min(budget);
     let compressed =
         compress_text_via_llm(connections, conn, trimmed, target, context_limit).await?;
-    Ok(trim_to_char_budget(&compressed, budget))
+    Ok(enforce_memory_shrink(
+        trimmed,
+        &trim_to_char_budget(&compressed, budget),
+        context_limit,
+    ))
 }
 
 /// Fallback when all compression LLM attempts fail — hard trim toward the 30% target.
 pub fn fallback_compress_session_memory(memory: &str, context_limit: i64) -> String {
-    fallback_compress_text(memory, context_limit)
+    enforce_memory_shrink(
+        memory,
+        &fallback_compress_text(memory, context_limit),
+        context_limit,
+    )
 }
 
 /// Fallback for vector / generic text blobs.
@@ -425,6 +454,14 @@ async fn single_compress_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enforce_memory_shrink_clamps_growth() {
+        let prior = "a".repeat(2000);
+        let bloated = format!("{prior}\n{}", "b".repeat(2500));
+        let out = enforce_memory_shrink(&prior, &bloated, 8192);
+        assert!(out.chars().count() <= prior.chars().count());
+    }
 
     #[test]
     fn compression_target_is_thirty_percent() {
