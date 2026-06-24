@@ -158,6 +158,7 @@ pub async fn chat_complete_stream(
     let session_id = session_id.unwrap_or_default();
     let mut retrieved_preview: Option<String> = None;
     let mut vector_chunks_used: Option<u32> = None;
+    let mut vector_memory_compressed = false;
     let mut indexed_chunk_hashes: std::collections::HashSet<String> =
         if session_id.trim().is_empty() {
             std::collections::HashSet::new()
@@ -314,7 +315,7 @@ pub async fn chat_complete_stream(
         }
 
         if !window_plan.evicted.is_empty() && !session_id.trim().is_empty() {
-            crate::chat::index_evicted_messages(
+            if crate::chat::index_evicted_messages(
                 &state.chat_memory,
                 &row,
                 &cfg,
@@ -322,7 +323,10 @@ pub async fn chat_complete_stream(
                 &window_plan.evicted,
                 &mut indexed_chunk_hashes,
             )
-            .await;
+            .await
+            {
+                vector_memory_compressed = true;
+            }
         }
 
         let api_messages = window_plan.active;
@@ -518,6 +522,7 @@ pub async fn chat_complete_stream(
             r.context_recovered = context_recovered;
             r.retrieved_memory = retrieved_preview.clone();
             r.vector_chunks_used = vector_chunks_used;
+            r.vector_memory_compressed = vector_memory_compressed;
             if let Some(ctx) = chat_context.as_ref() {
                 use crate::workspace::ChatScope;
                 let user_edit_intent = messages

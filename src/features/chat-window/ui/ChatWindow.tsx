@@ -94,12 +94,14 @@ interface DonePayload {
   finishReason?: string;
   retrievedMemory?: string;
   vectorChunksUsed?: number;
+  vectorMemoryCompressed?: boolean;
 }
 
 interface StatusPayload {
-  phase: 'recovering' | 'continuing';
+  phase: 'recovering' | 'continuing' | 'compressing_memory' | 'tools';
   generation?: number;
   attempt?: number;
+  kind?: 'rolling' | 'vector';
 }
 
 interface TokenPayload {
@@ -180,6 +182,7 @@ export function ChatWindow() {
     () => initialSession?.sessionId ?? createChatSessionId()
   );
   const [retrievedMemory, setRetrievedMemory] = useState<string | null>(null);
+  const [memoryDebugLabel, setMemoryDebugLabel] = useState('Vector memory: idle');
   const [applyDialog, setApplyDialog] = useState<{
     title: string;
     path?: string;
@@ -391,6 +394,31 @@ export function ChatWindow() {
     const trimmed = preview?.trim();
     setRetrievedMemory(trimmed || null);
   }, []);
+
+  const applyMemoryDebugFromPayload = useCallback(
+    (
+      payload: Pick<
+        DonePayload,
+        'vectorChunksUsed' | 'memoryCompressed' | 'evictedTurns' | 'vectorMemoryCompressed'
+      >
+    ) => {
+      const parts: string[] = [];
+      if (payload.vectorChunksUsed && payload.vectorChunksUsed > 0) {
+        parts.push(`vector used: ${payload.vectorChunksUsed}`);
+      } else {
+        parts.push('vector unused');
+      }
+      if (payload.memoryCompressed) {
+        const suffix = payload.evictedTurns ? ` (${payload.evictedTurns} turns)` : '';
+        parts.push(`rolling compressed${suffix}`);
+      }
+      if (payload.vectorMemoryCompressed) {
+        parts.push('vector compressed');
+      }
+      setMemoryDebugLabel(parts.join(' · '));
+    },
+    []
+  );
 
   const applyContextNotice = useCallback(
     (
@@ -703,6 +731,7 @@ export function ChatWindow() {
     setContextTrimNotice(null);
     setIsRecoveringContext(false);
     setIsContinuingOutput(false);
+    setMemoryDebugLabel('Vector memory: checking...');
 
     setMessages((prev) => [
       ...prev,
@@ -734,6 +763,15 @@ export function ChatWindow() {
           if (assistantIdRef.current !== assistantId) return;
           if (typeof e.payload.generation === 'number') {
             streamGenerationRef.current = e.payload.generation;
+          }
+          if (e.payload.phase === 'compressing_memory') {
+            const kind = e.payload.kind === 'vector' ? 'vector' : 'rolling';
+            setMemoryDebugLabel(`Memory compression: ${kind}`);
+            return;
+          }
+          if (e.payload.phase === 'tools') {
+            setMemoryDebugLabel('Vector memory: tools may index reads');
+            return;
           }
           if (e.payload.phase === 'continuing') {
             setIsContinuingOutput(true);
@@ -803,6 +841,7 @@ export function ChatWindow() {
             e.payload.contextWindowSize ?? contextLimit
           );
           applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
+          applyMemoryDebugFromPayload(e.payload);
           applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
           processScopedCompletion(e.payload);
         }),
@@ -873,6 +912,7 @@ export function ChatWindow() {
         result.contextWindowSize ?? contextLimit
       );
       applyRetrievedMemoryFromPayload(result.retrievedMemory);
+      applyMemoryDebugFromPayload(result);
       applyContextNotice(result, result.contextWindowSize ?? contextLimit);
       processScopedCompletion(result);
     } catch (e) {
@@ -910,6 +950,7 @@ export function ChatWindow() {
     processScopedCompletion,
     applySessionSummaryFromPayload,
     applyRetrievedMemoryFromPayload,
+    applyMemoryDebugFromPayload,
     applyContextNotice,
   ]);
 
@@ -1012,6 +1053,7 @@ export function ChatWindow() {
     setIsContinuingOutput(false);
     setSessionSummary('');
     setRetrievedMemory(null);
+    setMemoryDebugLabel('Vector memory: idle');
     setChatContext(DEFAULT_CHAT_CONTEXT);
     clearChatSession();
   };
@@ -1262,6 +1304,35 @@ export function ChatWindow() {
             {contextTrimNotice}
           </div>
         )}
+
+        <div
+          data-no-drag
+          title="Lightweight memory debug"
+          style={{
+            margin: contextTrimNotice ? '4px 12px 0' : '0 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 10,
+            lineHeight: 1.3,
+            color: 'var(--fg-dim)',
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 999,
+              background: retrievedMemory
+                ? 'var(--accent)'
+                : memoryDebugLabel.includes('compressed')
+                  ? 'var(--warn)'
+                  : 'var(--border-strong)',
+              flexShrink: 0,
+            }}
+          />
+          <span>{memoryDebugLabel}</span>
+        </div>
 
         {sessionSummary.trim() && (
           <details

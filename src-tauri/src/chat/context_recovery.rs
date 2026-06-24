@@ -119,6 +119,7 @@ mod tests {
             output_truncated: false,
             retrieved_memory: None,
             vector_chunks_used: None,
+            vector_memory_compressed: false,
         }
     }
 

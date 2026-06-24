@@ -102,13 +102,13 @@ pub async fn index_evicted_messages(
     session_id: &str,
     evicted: &[ChatMessage],
     indexed_hashes: &mut HashSet<String>,
-) {
+) -> bool {
     if session_id.trim().is_empty() || evicted.is_empty() {
-        return;
+        return false;
     }
     let chunks = messages_to_chunks(evicted);
     if chunks.is_empty() {
-        return;
+        return false;
     }
 
     let pending: Vec<(String, String, String)> = chunks
@@ -121,7 +121,7 @@ pub async fn index_evicted_messages(
         .collect();
 
     if pending.is_empty() {
-        return;
+        return false;
     }
 
     for batch in pending.chunks(INDEX_BATCH) {
@@ -130,7 +130,7 @@ pub async fn index_evicted_messages(
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("vector memory index skipped: {e}");
-                return;
+                return false;
             }
         };
         for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
@@ -145,8 +145,12 @@ pub async fn index_evicted_messages(
             }
         }
     }
-    if let Err(e) = maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
-        tracing::warn!("vector memory maintain: {e}");
+    match maintain_vector_session(memory, conn, cfg, session_id, indexed_hashes).await {
+        Ok(compressed) => compressed,
+        Err(e) => {
+            tracing::warn!("vector memory maintain: {e}");
+            false
+        }
     }
 }
 
@@ -482,28 +486,28 @@ pub async fn maybe_compress_vector_session(
     cfg: &HttpConfig,
     session_id: &str,
     indexed_hashes: &mut HashSet<String>,
-) -> Result<(), crate::utils::AppError> {
+) -> Result<bool, crate::utils::AppError> {
     let count = memory.count_chunks(session_id).await?;
     let threshold = vector_compress_chunk_threshold();
     if count < threshold {
-        return Ok(());
+        return Ok(false);
     }
 
     let chunks = memory.list_chunks(session_id).await?;
     if chunks.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let preserved = preserved_plan_canonical_chunks(&chunks);
     let compressible = compressible_chunks(&chunks);
     if compressible.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let full_text = format_chunks_for_compression(&compressible);
     let source_chars = full_text.chars().count();
     if source_chars < 320 {
-        return Ok(());
+        return Ok(false);
     }
 
     let target_chars = compression_target_chars(source_chars);
@@ -526,13 +530,13 @@ pub async fn maybe_compress_vector_session(
     let body = format!("COMPRESSED_MEMORY:\n{compressed}");
     let parts: Vec<String> = split_text_chunks(&body, CHUNK_MAX_CHARS);
     if parts.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let embeddings = match providers::embed_texts(conn, cfg, &parts, None).await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("vector memory re-index after compression failed: {e}");
-            return Ok(());
+            return Ok(false);
         }
     };
     if embeddings.len() != parts.len() {
@@ -541,7 +545,7 @@ pub async fn maybe_compress_vector_session(
             embeddings.len(),
             parts.len()
         );
-        return Ok(());
+        return Ok(false);
     }
 
     let mut replacement = preserved;
@@ -567,7 +571,7 @@ pub async fn maybe_compress_vector_session(
         .await?;
 
     reload_indexed_hashes(memory, session_id, indexed_hashes).await;
-    Ok(())
+    Ok(true)
 }
 
 async fn maintain_vector_session(
@@ -576,14 +580,15 @@ async fn maintain_vector_session(
     cfg: &HttpConfig,
     session_id: &str,
     indexed_hashes: &mut HashSet<String>,
-) -> Result<(), crate::utils::AppError> {
-    maybe_compress_vector_session(memory, conn, cfg, session_id, indexed_hashes).await?;
+) -> Result<bool, crate::utils::AppError> {
+    let compressed =
+        maybe_compress_vector_session(memory, conn, cfg, session_id, indexed_hashes).await?;
     let count = memory.count_chunks(session_id).await?;
     if count > MAX_SESSION_CHUNKS {
         memory.prune_session(session_id, MAX_SESSION_CHUNKS).await?;
         reload_indexed_hashes(memory, session_id, indexed_hashes).await;
     }
-    Ok(())
+    Ok(compressed)
 }
 
 fn vector_compress_chunk_threshold() -> i64 {

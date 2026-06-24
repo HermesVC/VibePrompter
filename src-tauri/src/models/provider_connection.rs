@@ -242,4 +242,11 @@ pub struct CompletionResult {
         skip_serializing_if = "Option::is_none"
     )]
     pub vector_chunks_used: Option<u32>,
+    /// True when session vector memory was compacted during this reply.
+    #[serde(
+        rename = "vectorMemoryCompressed",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub vector_memory_compressed: bool,
 }

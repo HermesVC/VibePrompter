@@ -364,6 +364,7 @@ pub async fn complete(
         output_truncated: false,
         retrieved_memory: None,
         vector_chunks_used: None,
+        vector_memory_compressed: false,
     })
 }
 
@@ -658,6 +659,7 @@ where
                 output_truncated: false,
                 retrieved_memory: None,
                 vector_chunks_used: None,
+                vector_memory_compressed: false,
             });
         }
         let event = match event {
@@ -792,6 +794,7 @@ where
         output_truncated,
         retrieved_memory: None,
         vector_chunks_used: None,
+        vector_memory_compressed: false,
     })
 }
 
