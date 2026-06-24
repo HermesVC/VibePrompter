@@ -1,6 +1,6 @@
 //! Pluggable chat prompt formats — render local templates or defer to wire JSON.
 
-mod gemma4;
+pub mod gemma4;
 mod openai_messages;
 mod types;
 

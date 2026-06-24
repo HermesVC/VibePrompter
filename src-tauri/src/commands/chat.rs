@@ -140,6 +140,14 @@ pub async fn chat_complete_stream(
         }
     };
 
+    if let Some(ctx) = chat_context.as_ref() {
+        crate::chat::augment_system_for_tools(
+            &mut system_prompt,
+            &row.prompt_format,
+            &ctx.scope,
+        );
+    }
+
     let cfg = state.connections.http_config().await;
     let context_limit = resolve_context_limit(&row, &cfg).await;
 
@@ -334,19 +342,63 @@ pub async fn chat_complete_stream(
         };
 
         let max_out_for_post = effective_max_tokens;
-        let stream_out = complete_stream_with_auto_continue(
+        let mut stream_out = complete_stream_with_auto_continue(
             &app,
             &status_event,
             &token_event,
             &row,
-            api_messages,
-            params,
+            api_messages.clone(),
+            params.clone(),
             &cfg,
             stream_generation,
             cancel_check.clone(),
             max_out_for_post,
         )
         .await;
+
+        if let Ok(ref mut out) = stream_out {
+            if let Some(ctx) = chat_context.as_ref() {
+                if crate::chat::scope_enables_tools(&ctx.scope) {
+                    let scope_path = crate::chat::scope_path_for_tools(&ctx.scope);
+                    let app_for_tokens = app.clone();
+                    let tokens_for_stream = token_event.clone();
+                    let cancel_for_stream = cancel_check.clone();
+                    let gen = stream_generation;
+                    let _ = app.emit(
+                        &status_event,
+                        serde_json::json!({
+                            "phase": "tools",
+                            "generation": stream_generation,
+                        }),
+                    );
+                    match crate::chat::run_tool_followup_loop(
+                        &state,
+                        &row.prompt_format,
+                        scope_path,
+                        api_messages.clone(),
+                        params.clone(),
+                        &cfg,
+                        &row,
+                        out.result.clone(),
+                        move |delta| {
+                            let _ = app_for_tokens.emit(
+                                &tokens_for_stream,
+                                serde_json::json!({
+                                    "generation": gen,
+                                    "delta": delta,
+                                }),
+                            );
+                        },
+                        move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
+                    )
+                    .await
+                    {
+                        Ok(followup) => out.result = followup,
+                        Err(e) => tracing::warn!("tool follow-up loop failed: {e}"),
+                    }
+                }
+            }
+        }
 
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
             result = Err(AppError::Validation("cancelled".into()));

@@ -104,6 +104,15 @@ fn format_tool_declaration(tool: &ToolDefinition) -> String {
     format!("<|tool>declaration:{}{}<|tool|>", tool.name, body)
 }
 
+/// Concatenate Gemma 4 tool declaration blocks for injection into the system turn.
+pub fn format_tool_declarations(tools: &[ToolDefinition]) -> String {
+    tools
+        .iter()
+        .map(format_tool_declaration)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn encode_tool_schema(tool: &ToolDefinition) -> String {
     let mut parts = vec![format!("description:{}", gemma_quote(&tool.description))];
 

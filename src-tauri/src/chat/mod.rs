@@ -4,11 +4,15 @@
 //! capture, no blur-to-dismiss, no clipboard handoff. The frontend owns the
 //! message history; the backend only streams completions.
 
+mod agent_tools;
 mod context_recovery;
 mod session_summary;
 mod sliding_window;
 mod vector_memory;
 
+pub use agent_tools::{
+    augment_system_for_tools, run_tool_followup_loop, scope_enables_tools, scope_path_for_tools,
+};
 pub use context_recovery::should_retry_for_context;
 pub use session_summary::append_memory_to_system;
 pub use sliding_window::{
