@@ -24,17 +24,19 @@ Rules:
 
 Verify kinds (optional per step): `file_contains`, `file_not_contains`, `php_lint`, `cargo_check`, `vitest`.
 
-**After each step** — end your message with:
+**After each step** — end your message with a **separate structured block** (no prose after it):
 <step-result step="N" status="done|failed">
 One-line summary of what you did.
 </step-result>
 
-Also include (for memory):
+Immediately before that, include:
 <plan-step-summary>
 step: N / total
 done: what finished
 next: next step title or "done"
 </plan-step-summary>
+
+Do not bury plan progress inside normal prose — always emit these tags as the final lines of the turn.
 
 If a spec file exists, implementation steps may include:
 <spec-compliance>
@@ -71,8 +73,8 @@ pub fn execution_user_message(
          Do **not** start the next plan step in this turn — one step per orchestrator turn. \
          Use workspace tools (`write_file` for new files). Wait for `[Tool result: …]` before claiming success. \
          If a tool returns ERROR, set step status=\"failed\". \
-         When finished, you **must** output `<{STEP_RESULT_TAG} step=\"{}\" status=\"done|failed\">` \
-         (step id must be {}) and `<plan-step-summary>` with `step: {} / {}`.",
+         When finished, you **must** end with `<{STEP_RESULT_TAG} step=\"{}\" status=\"done|failed\">` \
+         (step id must be {}) and `<plan-step-summary>` with `step: {} / {}` as the **last lines** — no text after these tags.",
         step.id,
         step.title,
         step.id,

@@ -198,8 +198,8 @@ fn parse_edits(arguments: &Value) -> AppResult<Vec<PatchEdit>> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     Ok(vec![PatchEdit {
-        old_text: old_text.to_string(),
-        new_text: new_text.to_string(),
+        old_text: crate::workspace::patch::normalize_patch_literal_for_tool(old_text),
+        new_text: crate::workspace::patch::normalize_patch_literal_for_tool(new_text),
     }])
 }
 
@@ -210,8 +210,8 @@ fn parse_edit_object(item: &Value) -> AppResult<PatchEdit> {
         .ok_or_else(|| AppError::Validation("edit.old_text is required".into()))?;
     let new_text = item.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
     Ok(PatchEdit {
-        old_text: old_text.to_string(),
-        new_text: new_text.to_string(),
+        old_text: crate::workspace::patch::normalize_patch_literal_for_tool(old_text),
+        new_text: crate::workspace::patch::normalize_patch_literal_for_tool(new_text),
     })
 }
 

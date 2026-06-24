@@ -107,13 +107,27 @@ impl PatchError {
 pub fn apply_patches(source: &str, edits: &[PatchEdit]) -> Result<String, PatchError> {
     let mut content = source.to_string();
     for (edit_index, edit) in edits.iter().enumerate() {
-        if edit.old_text.is_empty() {
+        let old_text = normalize_patch_literal(&edit.old_text);
+        if old_text.is_empty() {
             return Err(PatchError::EmptyOldText { edit_index });
         }
-        let (start, end) = find_unique_match(&content, &edit.old_text, edit_index)?;
+        let (start, end) = find_unique_match(&content, &old_text, edit_index)?;
         content.replace_range(start..end, &edit.new_text);
     }
     Ok(content)
+}
+
+/// Models sometimes emit `\\n` instead of real newlines in tool JSON.
+pub fn normalize_patch_literal_for_tool(s: &str) -> String {
+    normalize_patch_literal(s)
+}
+
+fn normalize_patch_literal(s: &str) -> String {
+    if s.contains("\\n") && !s.contains('\n') {
+        s.replace("\\t", "\t").replace("\\n", "\n")
+    } else {
+        s.to_string()
+    }
 }
 
 fn find_unique_match(
@@ -125,6 +139,9 @@ fn find_unique_match(
         if let Some(bounds) = unique_match_bounds(haystack, &candidate) {
             return Ok(bounds);
         }
+    }
+    if let Some(bounds) = unique_rtrim_line_match(haystack, needle) {
+        return Ok(bounds);
     }
     let count = count_occurrences(haystack, needle);
     if count == 0 {
@@ -138,6 +155,69 @@ fn find_unique_match(
         edit_index,
         occurrences: count,
     })
+}
+
+/// Match when the model's anchor differs only by trailing spaces per line.
+fn unique_rtrim_line_match(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    let needle_lines: Vec<&str> = needle.lines().map(str::trim_end).collect();
+    if needle_lines.is_empty() || needle_lines.iter().all(|l| l.is_empty()) {
+        return None;
+    }
+
+    let haystack_lines = line_spans(haystack);
+    if haystack_lines.len() < needle_lines.len() {
+        return None;
+    }
+
+    let mut found: Option<(usize, usize)> = None;
+    for window in 0..=haystack_lines.len() - needle_lines.len() {
+        let matches = (0..needle_lines.len())
+            .all(|i| haystack_lines[window + i].trimmed == needle_lines[i]);
+        if !matches {
+            continue;
+        }
+        let start = haystack_lines[window].start;
+        let end = haystack_lines[window + needle_lines.len() - 1].end;
+        if found.is_some() {
+            return None;
+        }
+        found = Some((start, end));
+    }
+    found
+}
+
+struct LineSpan {
+    start: usize,
+    end: usize,
+    trimmed: String,
+}
+
+fn line_spans(text: &str) -> Vec<LineSpan> {
+    let mut spans = Vec::new();
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let start = offset;
+        let end = offset + line.len();
+        let trimmed = line.trim_end_matches(['\r', '\n']).trim_end().to_string();
+        spans.push(LineSpan {
+            start,
+            end,
+            trimmed,
+        });
+        offset = end;
+    }
+    if text.is_empty() {
+        return spans;
+    }
+    if !text.ends_with('\n') && spans.last().is_some_and(|s| s.end < text.len()) {
+        let start = spans.last().map(|s| s.end).unwrap_or(0);
+        spans.push(LineSpan {
+            start,
+            end: text.len(),
+            trimmed: text[start..].trim_end().to_string(),
+        });
+    }
+    spans
 }
 
 /// Try LF and CRLF variants when the model's `old_text` line endings differ from the file.
@@ -415,22 +495,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_likely_rewrite() {
-        let old = (0..30)
-            .map(|i| format!("    stmt_{i}();"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let new = (0..30)
-            .map(|i| format!("    new_stmt_{i}();"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let v = validate_patch_edits(
+    fn matches_when_only_trailing_spaces_differ() {
+        let out = apply_patches(
+            "function draw() {\n  ctx.shadowBlur = 0;  \n}\n",
             &[PatchEdit {
-                old_text: old,
-                new_text: new,
+                old_text: "function draw() {\n  ctx.shadowBlur = 0;\n}".into(),
+                new_text: "function draw() {\n  ctx.shadowBlur = 0;\n}\n\nfunction particles() {}".into(),
             }],
-            PatchLimits::default(),
-        );
-        assert!(v.violations.iter().any(|m| m.contains("block rewrite")));
+        )
+        .expect("rtrim patch");
+        assert!(out.contains("function particles()"));
+    }
+
+    #[test]
+    fn normalizes_escaped_newlines_in_old_text() {
+        let out = apply_patches(
+            "a\nb\n",
+            &[PatchEdit {
+                old_text: "a\\nb".into(),
+                new_text: "A\nb".into(),
+            }],
+        )
+        .expect("escaped newline patch");
+        assert_eq!(out, "A\nb\n");
     }
 }

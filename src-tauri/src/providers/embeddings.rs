@@ -1,5 +1,9 @@
 //! OpenAI-compatible `/v1/embeddings` (LM Studio, Ollama, cloud).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use serde_json::json;
 
 use super::{apply_extra_headers, http, normalize_base, HttpConfig};
@@ -14,6 +18,9 @@ const FALLBACK_EMBED_MODELS: &[&str] = &[
     "nomic-embed-text:latest",
 ];
 const DEFAULT_EMBED_MODEL: &str = FALLBACK_EMBED_MODELS[0];
+const EMBED_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static EMBED_MODEL_CACHE: Mutex<Option<HashMap<String, (Instant, Vec<String>)>>> = Mutex::new(None);
 
 /// Best-effort embedding model: connection default if it looks like an embed model, else fallback.
 pub fn resolve_embed_model(connection_default: &str) -> &str {
@@ -63,10 +70,16 @@ async fn embed_model_candidates(
         return vec![explicit.to_string()];
     }
 
+    let cache_key = format!("{}|{}", conn.id, normalize_base(&conn.base_url));
+    if let Some(cached) = cached_embed_models(&cache_key) {
+        return cached;
+    }
+
     let mut out = Vec::new();
     push_candidate(&mut out, resolve_embed_model(&conn.default_model));
 
-    for discovered in discover_embedding_models(conn, cfg).await {
+    let discovered = discover_embedding_models(conn, cfg).await;
+    for discovered in discovered {
         push_candidate(&mut out, &discovered);
     }
 
@@ -74,7 +87,27 @@ async fn embed_model_candidates(
         push_candidate(&mut out, fallback);
     }
 
+    store_embed_models(&cache_key, &out);
+
     out
+}
+
+fn cached_embed_models(cache_key: &str) -> Option<Vec<String>> {
+    let guard = EMBED_MODEL_CACHE.lock().ok()?;
+    let map = guard.as_ref()?;
+    let (at, models) = map.get(cache_key)?;
+    if at.elapsed() > EMBED_MODEL_CACHE_TTL {
+        return None;
+    }
+    Some(models.clone())
+}
+
+fn store_embed_models(cache_key: &str, models: &[String]) {
+    let Ok(mut guard) = EMBED_MODEL_CACHE.lock() else {
+        return;
+    };
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(cache_key.to_string(), (Instant::now(), models.to_vec()));
 }
 
 async fn discover_embedding_models(conn: &ConnectionRow, cfg: &HttpConfig) -> Vec<String> {

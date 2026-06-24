@@ -31,7 +31,7 @@ const INDEX_BATCH: usize = 8;
 const MAX_SESSION_CHUNKS: i64 = 1_500;
 /// Embed models (nomic) truncate around 2048 tokens — keep query well under that.
 const EMBED_QUERY_MAX_CHARS: usize = 4_000;
-const VECTOR_EMBED_TIMEOUT: Duration = Duration::from_secs(6);
+const VECTOR_EMBED_TIMEOUT: Duration = Duration::from_secs(20);
 
 async fn embed_texts_best_effort(
     connections: &ConnectionService,
@@ -53,7 +53,8 @@ async fn embed_texts_best_effort(
         }
         Err(_) => {
             tracing::warn!(
-                "vector memory {op} timed out after {}s; continuing without vector memory",
+                "vector memory {op} timed out after {}s; continuing without vector memory \
+                 (load an embedding model in LM Studio/Ollama, e.g. nomic-embed-text)",
                 VECTOR_EMBED_TIMEOUT.as_secs()
             );
             None

@@ -67,7 +67,6 @@ pub fn is_plan_markdown_path(path: &str) -> bool {
     norm.rsplit('/').next().unwrap_or(norm.as_str()) == "plan.md"
 }
 
-/// Normalize for embedding / retrieval (stable prefix for classifiers).
 pub fn format_plan_step_for_memory(inner: &str) -> String {
     let body = inner
         .lines()
@@ -79,6 +78,22 @@ pub fn format_plan_step_for_memory(inner: &str) -> String {
         return String::new();
     }
     format!("PLAN_PROGRESS:\n{body}")
+}
+
+/// Build inner body for `<plan-step-summary>` when the model omits it.
+pub fn build_plan_step_summary_inner(
+    step_id: u32,
+    total_steps: usize,
+    done_label: &str,
+    next_label: &str,
+) -> String {
+    format!(
+        "step: {step_id} / {total_steps}\ndone: {done_label}\nnext: {next_label}"
+    )
+}
+
+pub fn wrap_plan_step_summary(inner: &str) -> String {
+    format!("<plan-step-summary>\n{inner}\n</plan-step-summary>")
 }
 
 fn extract_tag(text: &str, tag: &str) -> Option<String> {

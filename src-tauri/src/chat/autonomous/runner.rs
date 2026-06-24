@@ -273,7 +273,7 @@ where
             )
         });
 
-        let result = run_autonomous_turn_with_retry(
+        let mut result = run_autonomous_turn_with_retry(
             state,
             &request.base,
             &config,
@@ -286,18 +286,7 @@ where
             retrieval_query,
         )
         .await?;
-        final_text = result.text.clone();
         steps_executed += 1;
-
-        commit_autonomous_turn_memory(
-            state,
-            &request.base,
-            &session_id,
-            &result,
-            &mut indexed_chunk_hashes,
-        )
-        .await;
-        emit_turn_memory_diagnostics(events, &result);
 
         if let Some(detected) =
             spec_memory::detect_spec_path_from_turn(&result.text, spec_path.as_deref())
@@ -431,6 +420,27 @@ where
         } else {
             StepStatus::Done
         };
+
+        let synthesized = append_orchestrator_plan_summary_if_missing(
+            &mut result.text,
+            &step,
+            &plan,
+            terminal_status,
+        );
+        if synthesized {
+            emit_orchestrator_plan_progress_token(events, &result.text);
+        }
+
+        final_text = result.text.clone();
+        commit_autonomous_turn_memory(
+            state,
+            &request.base,
+            &session_id,
+            &result,
+            &mut indexed_chunk_hashes,
+        )
+        .await;
+        emit_turn_memory_diagnostics(events, &result);
 
         plan.mark(step.id, terminal_status, None);
         emit_plan_snapshot(
@@ -881,6 +891,75 @@ fn tool_results_indicate_successful_write(text: &str) -> bool {
 
 fn preview(text: &str) -> String {
     text.chars().take(400).collect()
+}
+
+fn append_orchestrator_plan_summary_if_missing(
+    text: &mut String,
+    step: &PlanStep,
+    plan: &AutonomousPlan,
+    status: StepStatus,
+) -> bool {
+    if crate::workspace::plan_memory::extract_plan_step_summary(text).is_some() {
+        return false;
+    }
+    let next = plan
+        .steps
+        .iter()
+        .find(|s| s.id > step.id && matches!(s.status, StepStatus::Pending | StepStatus::InProgress))
+        .or_else(|| plan.next_pending())
+        .map(|s| s.title.as_str())
+        .unwrap_or("done");
+    let done_label = if status == StepStatus::Done {
+        step.title.clone()
+    } else {
+        format!("failed: {}", step.title)
+    };
+    let inner = crate::workspace::plan_memory::build_plan_step_summary_inner(
+        step.id,
+        plan.steps.len(),
+        &done_label,
+        next,
+    );
+    let block = crate::workspace::plan_memory::wrap_plan_step_summary(&inner);
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if !text.ends_with("\n\n") {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text.push_str(&block);
+    if !parse_all_step_results(text)
+        .iter()
+        .any(|r| r.step_id == step.id)
+    {
+        let result_tag = format!(
+            "\n<{} step=\"{}\" status=\"{}\">\n{}\n</{}>",
+            super::plan::STEP_RESULT_TAG,
+            step.id,
+            if status == StepStatus::Done {
+                "done"
+            } else {
+                "failed"
+            },
+            done_label,
+            super::plan::STEP_RESULT_TAG,
+        );
+        text.push_str(&result_tag);
+    }
+    true
+}
+
+fn emit_orchestrator_plan_progress_token<E: AutonomousRunEventSink + ?Sized>(
+    events: &mut E,
+    text: &str,
+) {
+    if let Some(inner) = crate::workspace::plan_memory::extract_plan_step_summary(text) {
+        let block = crate::workspace::plan_memory::wrap_plan_step_summary(&inner);
+        events.token(0, &format!("\n\n{block}"));
+    }
 }
 
 /// Assistant turn included at least one failed tool execution (header only — not file body).
