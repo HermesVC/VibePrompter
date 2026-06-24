@@ -99,6 +99,7 @@ interface DonePayload {
   retrievedMemory?: string;
   vectorChunksUsed?: number;
   vectorMemoryCompressed?: boolean;
+  memoryDiagnostics?: MemoryDiagnostics;
 }
 
 interface StatusPayload {
@@ -124,6 +125,75 @@ interface TokenPayload {
 interface MemoryPayload {
   sessionSummary?: string;
   contextWindowSize?: number;
+  memoryDiagnostics?: MemoryDiagnostics;
+  retrievedMemory?: string;
+  vectorChunksUsed?: number;
+  memoryCompressed?: boolean;
+  evictedTurns?: number;
+  vectorMemoryCompressed?: boolean;
+  contextRecovered?: boolean;
+}
+
+interface MemoryDiagnostics {
+  rollingSummaryChars?: number;
+  evictedTurns?: number;
+  vectorAvailable?: boolean;
+  vectorChunksIndexed?: number;
+  vectorChunksRetrieved?: number;
+  retrievalQueryPreview?: string;
+  retrievedMemoryChars?: number;
+  degradeLevelUsed?: number;
+  degradeLabel?: string;
+  inputEstimateFirst?: number;
+  inputEstimateFinal?: number;
+  contextLimit?: number;
+}
+
+type MemoryDebugSource = Pick<
+  DonePayload,
+  | 'vectorChunksUsed'
+  | 'memoryCompressed'
+  | 'evictedTurns'
+  | 'vectorMemoryCompressed'
+  | 'contextRecovered'
+  | 'memoryDiagnostics'
+>;
+
+function formatMemoryDebugLabel(payload: MemoryDebugSource): string {
+  const diag = payload.memoryDiagnostics;
+  const parts: string[] = [];
+  const retrieved =
+    payload.vectorChunksUsed ?? diag?.vectorChunksRetrieved ?? 0;
+  if (retrieved > 0) {
+    parts.push(`vector: ${retrieved}/4 retrieved`);
+  } else if (diag?.vectorAvailable === false) {
+    parts.push('vector: unavailable');
+  } else {
+    parts.push('vector: none matched');
+  }
+  const rollingChars = diag?.rollingSummaryChars ?? 0;
+  if (rollingChars > 0) {
+    parts.push(`rolling: ~${estimateTokensFromChars(rollingChars)} tok`);
+  }
+  if (diag?.vectorChunksIndexed && diag.vectorChunksIndexed > 0) {
+    parts.push(`indexed: ${diag.vectorChunksIndexed}`);
+  }
+  if (payload.memoryCompressed || diag?.evictedTurns) {
+    const evicted = payload.evictedTurns ?? diag?.evictedTurns ?? 0;
+    parts.push(
+      evicted > 0 ? `rolling compressed (${evicted} turns)` : 'rolling compressed'
+    );
+  }
+  if (payload.vectorMemoryCompressed) {
+    parts.push('vector compressed');
+  }
+  if (payload.contextRecovered || (diag?.degradeLevelUsed ?? 0) > 0) {
+    parts.push(`degrade: ${diag?.degradeLabel ?? 'recovered'}`);
+  }
+  if (diag?.inputEstimateFinal && diag.contextLimit) {
+    parts.push(`ctx ~${diag.inputEstimateFinal}/${diag.contextLimit}`);
+  }
+  return parts.join(' · ');
 }
 
 function parseTokenDelta(payload: string | TokenPayload): { generation: number; delta: string } {
@@ -242,6 +312,7 @@ export function ChatWindow() {
   const assistantIdRef = useRef<string | null>(null);
   const streamGenerationRef = useRef(0);
   const cancelledRef = useRef(false);
+  const preRecoveryContentRef = useRef('');
   const modeConnSyncedRef = useRef(false);
   const activeConnIdRef = useRef('');
 
@@ -272,7 +343,10 @@ export function ChatWindow() {
     flushPendingRef.current = true;
     requestAnimationFrame(() => {
       flushPendingRef.current = false;
-      const text = stripVpSummaryForDisplay(bufRef.current);
+      const streamText = preRecoveryContentRef.current
+        ? preRecoveryContentRef.current + bufRef.current
+        : bufRef.current;
+      const text = stripVpSummaryForDisplay(streamText);
       setMessages((prev) =>
         prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m))
       );
@@ -419,30 +493,9 @@ export function ChatWindow() {
     setRetrievedMemory(trimmed || null);
   }, []);
 
-  const applyMemoryDebugFromPayload = useCallback(
-    (
-      payload: Pick<
-        DonePayload,
-        'vectorChunksUsed' | 'memoryCompressed' | 'evictedTurns' | 'vectorMemoryCompressed'
-      >
-    ) => {
-      const parts: string[] = [];
-      if (payload.vectorChunksUsed && payload.vectorChunksUsed > 0) {
-        parts.push(`vector used: ${payload.vectorChunksUsed}/4 retrieved`);
-      } else {
-        parts.push('vector unused: no relevant chunks');
-      }
-      if (payload.memoryCompressed) {
-        const suffix = payload.evictedTurns ? ` (${payload.evictedTurns} turns)` : '';
-        parts.push(`rolling compressed${suffix}`);
-      }
-      if (payload.vectorMemoryCompressed) {
-        parts.push('vector compressed');
-      }
-      setMemoryDebugLabel(parts.join(' · '));
-    },
-    []
-  );
+  const applyMemoryDebugFromPayload = useCallback((payload: MemoryDebugSource) => {
+    setMemoryDebugLabel(formatMemoryDebugLabel(payload));
+  }, []);
 
   const applyContextNotice = useCallback(
     (
@@ -777,6 +830,7 @@ export function ChatWindow() {
       setProviderRetryWarning(null);
       setMemoryDebugLabel('Preparing request...');
       setTokenUsage(null);
+      preRecoveryContentRef.current = '';
       setStreaming(true);
 
       if (autonomousMode && autonomousGoal) {
@@ -833,15 +887,12 @@ export function ChatWindow() {
                 return;
               }
               if (payload.phase === 'recovering') {
+                preRecoveryContentRef.current = bufRef.current;
                 bufRef.current = '';
                 flushPendingRef.current = false;
                 setIsRecoveringContext(true);
                 setIsContinuingOutput(false);
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId ? { ...m, content: '', streaming: true } : m
-                  )
-                );
+                setMemoryDebugLabel('Context degrade: rebuilding…');
                 return;
               }
               if (payload.phase === 'continuing') {
@@ -853,9 +904,19 @@ export function ChatWindow() {
                 payload.sessionSummary,
                 payload.contextWindowSize ?? contextLimit
               );
+              if (
+                payload.memoryDiagnostics ||
+                payload.vectorChunksUsed != null ||
+                payload.memoryCompressed
+              ) {
+                applyMemoryDebugFromPayload(payload);
+                applyRetrievedMemoryFromPayload(payload.retrievedMemory);
+              }
             },
             onComplete: (result) => {
               if (cancelledRef.current) return;
+              preRecoveryContentRef.current = '';
+              bufRef.current = '';
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -869,12 +930,12 @@ export function ChatWindow() {
                 )
               );
               void refreshFolderScope();
-              const inner = extractPlanStepSummary(result.finalText);
-              if (inner) {
-                void indexPlanStepSummary(sessionIdRef.current, inner, {
-                  connectionId: connectionId || undefined,
-                });
-              }
+              processScopedCompletion({ text: result.finalText });
+              applyMemoryDebugFromPayload({
+                vectorChunksUsed: result.vectorChunksUsed ?? undefined,
+                memoryDiagnostics: result.memoryDiagnostics ?? undefined,
+              });
+              applyRetrievedMemoryFromPayload(result.retrievedMemory ?? undefined);
             },
             onError: (msg, cancelled) => {
               setIsRecoveringContext(false);
@@ -981,15 +1042,12 @@ export function ChatWindow() {
             } else {
               streamGenerationRef.current = e.payload.generation;
             }
+            preRecoveryContentRef.current = bufRef.current;
             bufRef.current = '';
             flushPendingRef.current = false;
             setIsRecoveringContext(true);
             setIsContinuingOutput(false);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId ? { ...m, content: '', streaming: true } : m
-              )
-            );
+            setMemoryDebugLabel('Context degrade: rebuilding…');
           }),
           listen<MemoryPayload>(memoryEvent, (e) => {
             if (assistantIdRef.current !== assistantId) return;
@@ -1006,10 +1064,20 @@ export function ChatWindow() {
               e.payload.sessionSummary,
               e.payload.contextWindowSize ?? contextLimit
             );
+            if (
+              e.payload.memoryDiagnostics ||
+              e.payload.vectorChunksUsed != null ||
+              e.payload.memoryCompressed
+            ) {
+              applyMemoryDebugFromPayload(e.payload);
+              applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
+            }
           }),
           listen<DonePayload>(doneEvent, (e) => {
             if (assistantIdRef.current !== assistantId) return;
             if (cancelledRef.current) return;
+            preRecoveryContentRef.current = '';
+            bufRef.current = '';
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
@@ -1053,14 +1121,15 @@ export function ChatWindow() {
             setProviderRetryWarning(null);
             const cancelled = e.payload === 'cancelled';
             if (cancelled) cancelledRef.current = true;
+            const partial = stripVpSummaryForDisplay(
+              bufRef.current || preRecoveryContentRef.current
+            );
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
                   ? {
                       ...m,
-                      content: cancelled
-                        ? stripVpSummaryForDisplay(bufRef.current)
-                        : '',
+                      content: partial || m.content,
                       streaming: false,
                       error: cancelled ? 'Cancelled' : e.payload,
                     }
@@ -1082,6 +1151,9 @@ export function ChatWindow() {
         });
 
         if (cancelledRef.current) return;
+
+        preRecoveryContentRef.current = '';
+        bufRef.current = '';
 
         setMessages((prev) =>
           prev.map((m) =>
@@ -1125,9 +1197,19 @@ export function ChatWindow() {
           cancelledRef.current = true;
           return;
         }
+        const partial = stripVpSummaryForDisplay(
+          bufRef.current || preRecoveryContentRef.current
+        );
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, streaming: false, error: msg } : m
+            m.id === assistantId
+              ? {
+                  ...m,
+                  streaming: false,
+                  content: partial || m.content,
+                  error: msg,
+                }
+              : m
           )
         );
       } finally {
@@ -1188,6 +1270,7 @@ export function ChatWindow() {
       const sid = crypto.randomUUID();
       setStreamId(sid);
       bufRef.current = '';
+      preRecoveryContentRef.current = '';
       setAttachError(null);
 
       if (autonomousMode) {
@@ -1247,6 +1330,7 @@ export function ChatWindow() {
     const sid = crypto.randomUUID();
     setStreamId(sid);
     bufRef.current = '';
+    preRecoveryContentRef.current = '';
 
     const apiMessages = [...messages, userMsg]
       .filter((m) => !m.streaming && !m.error)

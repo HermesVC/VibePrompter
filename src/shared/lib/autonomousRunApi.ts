@@ -32,6 +32,9 @@ export interface AutonomousPlanSnapshot {
   /** Orchestrator step id (in_progress or next pending). */
   currentStepId?: number | null;
   steps: StepSnapshot[];
+  planningWarning?: string | null;
+  specPath?: string | null;
+  stepWarning?: string | null;
 }
 
 export interface AutonomousStepRecord {
@@ -49,6 +52,24 @@ export interface AutonomousRunResult {
   steps: AutonomousStepRecord[];
   finalText: string;
   replansUsed: number;
+  memoryDiagnostics?: MemoryDiagnostics | null;
+  vectorChunksUsed?: number | null;
+  retrievedMemory?: string | null;
+}
+
+export interface MemoryDiagnostics {
+  rollingSummaryChars?: number;
+  evictedTurns?: number;
+  vectorAvailable?: boolean;
+  vectorChunksIndexed?: number;
+  vectorChunksRetrieved?: number;
+  retrievalQueryPreview?: string;
+  retrievedMemoryChars?: number;
+  degradeLevelUsed?: number;
+  degradeLabel?: string;
+  inputEstimateFirst?: number;
+  inputEstimateFinal?: number;
+  contextLimit?: number;
 }
 
 export interface AutonomousRunStreamInput {

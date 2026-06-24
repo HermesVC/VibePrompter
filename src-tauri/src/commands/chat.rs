@@ -786,6 +786,7 @@ pub async fn chat_debug_run_scenario(
             force_context_limit: input.force_context_limit,
             disable_rolling_memory: input.disable_rolling_memory.unwrap_or(false),
             disable_vector_retrieval: input.disable_vector_retrieval.unwrap_or(false),
+            ..Default::default()
         },
         cancel_flag,
         &mut events,

@@ -82,14 +82,102 @@ impl AutonomousPlan {
     }
 }
 
-/// Extract JSON array from `<autonomous-plan>...</autonomous-plan>`.
+/// Extract the best (most steps) plan from all `<autonomous-plan>` blocks in text.
 pub fn parse_autonomous_plan(text: &str) -> Option<AutonomousPlan> {
-    let inner = extract_tag(text, PLAN_TAG)?;
-    let steps: Vec<PlanStep> = serde_json::from_str(inner.trim()).ok()?;
-    if steps.is_empty() {
+    parse_best_autonomous_plan(text)
+}
+
+/// Like [`parse_autonomous_plan`] but considers several assistant turns (planning retries).
+pub fn best_autonomous_plan_from_texts(texts: &[&str]) -> Option<AutonomousPlan> {
+    texts
+        .iter()
+        .filter_map(|t| parse_best_autonomous_plan(t))
+        .max_by_key(|p| p.steps.len())
+}
+
+fn parse_best_autonomous_plan(text: &str) -> Option<AutonomousPlan> {
+    let inners = extract_all_tag_inners(text, PLAN_TAG);
+    if inners.is_empty() {
         return None;
     }
-    Some(AutonomousPlan { steps })
+    inners
+        .iter()
+        .filter_map(|inner| {
+            parse_steps_json(inner).map(|steps| AutonomousPlan { steps })
+        })
+        .max_by_key(|p| p.steps.len())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPlanStep {
+    id: u32,
+    title: String,
+    #[serde(default)]
+    status: StepStatus,
+    #[serde(default)]
+    verify: Option<serde_json::Value>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+fn parse_steps_json(inner: &str) -> Option<Vec<PlanStep>> {
+    let body = normalize_plan_json_body(inner);
+    let raw: Vec<RawPlanStep> = serde_json::from_str(&body).ok()?;
+    let steps: Vec<PlanStep> = raw
+        .into_iter()
+        .map(|r| PlanStep {
+            id: r.id,
+            title: r.title,
+            status: r.status,
+            verify: r
+                .verify
+                .and_then(|v| serde_json::from_value::<crate::workspace::VerifySpec>(v).ok()),
+            note: r.note,
+        })
+        .collect();
+    if steps.is_empty() {
+        None
+    } else {
+        Some(steps)
+    }
+}
+
+fn normalize_plan_json_body(inner: &str) -> String {
+    let mut s = inner.trim().to_string();
+    if s.starts_with("```") {
+        let lines: Vec<&str> = s.lines().collect();
+        if lines.len() >= 2 {
+            let start = 1;
+            let end = lines.len().saturating_sub(1);
+            if lines.last().is_some_and(|l| l.trim() == "```") {
+                s = lines[start..end].join("\n");
+            }
+        }
+    }
+    fix_trailing_commas(s.trim())
+}
+
+fn fix_trailing_commas(json: &str) -> String {
+    json.replace(",]", "]").replace(",}", "}")
+}
+
+fn extract_all_tag_inners(text: &str, tag: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut out = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find(&open) {
+        let content_start = search_from + rel + open.len();
+        let Some(close_rel) = lower[content_start..].find(&close) else {
+            break;
+        };
+        let content_end = content_start + close_rel;
+        out.push(text[content_start..content_end].trim().to_string());
+        search_from = content_end + close.len();
+    }
+    out
 }
 
 /// Serialize plan for re-injection into prompts.
@@ -150,15 +238,6 @@ pub fn parse_step_result(text: &str) -> Option<StepResultTag> {
     })
 }
 
-fn extract_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
-    let lower = text.to_ascii_lowercase();
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = lower.find(&open)? + open.len();
-    let end = lower[start..].find(&close)? + start;
-    Some(text[start..end].trim())
-}
-
 fn attribute_str(header: &str, key: &str) -> Option<String> {
     for part in header.split_whitespace().skip(1) {
         let Some((k, v)) = part.split_once('=') else {
@@ -178,6 +257,49 @@ fn attribute_u32(header: &str, key: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_largest_plan_when_multiple_blocks() {
+        let text = r#"<autonomous-plan>[{"id":1,"title":"draft","status":"pending"}]</autonomous-plan>
+<autonomous-plan>
+[
+  {"id": 1, "title": "Design", "status": "pending"},
+  {"id": 2, "title": "HTML", "status": "pending"},
+  {"id": 3, "title": "CSS", "status": "pending"},
+  {"id": 4, "title": "JS", "status": "pending"},
+  {"id": 5, "title": "Polish", "status": "pending"},
+  {"id": 6, "title": "Verify", "status": "pending"}
+]
+</autonomous-plan>"#;
+        let plan = parse_autonomous_plan(text).expect("plan");
+        assert_eq!(plan.steps.len(), 6);
+    }
+
+    #[test]
+    fn parses_plan_with_trailing_commas_and_fences() {
+        let text = r#"<autonomous-plan>
+```json
+[
+  {"id": 1, "title": "A", "status": "pending"},
+  {"id": 2, "title": "B", "status": "pending"},
+]
+```
+</autonomous-plan>"#;
+        let plan = parse_autonomous_plan(text).expect("plan");
+        assert_eq!(plan.steps.len(), 2);
+    }
+
+    #[test]
+    fn skips_invalid_verify_but_keeps_steps() {
+        let text = r#"<autonomous-plan>[
+  {"id": 1, "title": "A", "status": "pending", "verify": {"kind": "nope"}},
+  {"id": 2, "title": "B", "status": "pending", "verify": {"kind": "file_contains", "path": "a.txt", "needle": "x"}}
+]</autonomous-plan>"#;
+        let plan = parse_autonomous_plan(text).expect("plan");
+        assert_eq!(plan.steps.len(), 2);
+        assert!(plan.steps[0].verify.is_none());
+        assert!(plan.steps[1].verify.is_some());
+    }
 
     #[test]
     fn parses_plan_json() {

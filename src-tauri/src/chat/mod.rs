@@ -43,7 +43,8 @@ pub use sliding_window::{
     plan_sliding_window_with_aggression, WindowAggression,
 };
 pub use vector_memory::{
-    append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
+    append_retrieved_to_system, extract_context_artifacts_from_text, format_retrieved_for_system,
+    index_context_artifacts,
     index_evicted_messages, index_folder_outline, index_plan_step_summary, index_tool_results,
     index_turn_memory_after_tools, retrieve_relevant, strip_scope_attachments_for_memory,
     upsert_plan_canonical_from_plan_markdown,

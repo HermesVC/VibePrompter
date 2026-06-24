@@ -52,6 +52,21 @@ export function AutonomousPlanStrip({ phase, phaseDetail, plan }: AutonomousPlan
           {plan?.progress ? ` (${plan.progress})` : null}
         </div>
       )}
+      {plan?.planningWarning ? (
+        <div style={{ marginBottom: 6, color: 'var(--warning, #c9a227)', fontSize: 10 }}>
+          {plan.planningWarning}
+        </div>
+      ) : null}
+      {plan?.specPath ? (
+        <div style={{ marginBottom: 6, color: 'var(--fg-dim)', fontSize: 10 }}>
+          ТЗ: <code>{plan.specPath}</code>
+        </div>
+      ) : null}
+      {plan?.stepWarning ? (
+        <div style={{ marginBottom: 6, color: 'var(--warning, #c9a227)', fontSize: 10 }}>
+          {plan.stepWarning}
+        </div>
+      ) : null}
       {plan && plan.steps.length > 0 && (
         <ol
           style={{

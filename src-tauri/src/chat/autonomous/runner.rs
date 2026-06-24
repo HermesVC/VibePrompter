@@ -1,5 +1,6 @@
 //! Outer orchestration loop — plan → execute → verify → replan.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,20 +10,23 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    format_plan_for_prompt, parse_all_step_results, parse_autonomous_plan, parse_step_result,
-    AutonomousPlan, PlanStep, StepStatus,
+    best_autonomous_plan_from_texts, format_plan_for_prompt, parse_all_step_results,
+    parse_autonomous_plan, parse_step_result, AutonomousPlan, PlanStep, StepStatus,
 };
 use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_retry_user_message,
     planning_user_message, replan_user_message, AUTONOMOUS_PROTOCOL,
 };
 use crate::chat::{
-    is_step_retriable_error, run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus,
-    DegradeLevel,
+    extract_context_artifacts_from_text, index_context_artifacts, index_plan_step_summary,
+    is_step_retriable_error, run_chat, upsert_plan_canonical_from_plan_markdown, ChatRunEventSink,
+    ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus, DegradeLevel,
 };
-use crate::models::{ChatMessage, CompletionResult};
+use crate::models::{ChatMessage, CompletionResult, MemoryDiagnostics};
 use crate::utils::AppError;
-use crate::workspace::{run_verify_spec, VerifyOutcome};
+use crate::workspace::{
+    plan_memory, run_verify_spec, spec_memory, VerifyOutcome,
+};
 
 #[derive(Clone)]
 pub struct AutonomousRunRequest {
@@ -63,6 +67,12 @@ pub struct AutonomousRunResult {
     pub steps: Vec<AutonomousStepRecord>,
     pub final_text: String,
     pub replans_used: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_diagnostics: Option<MemoryDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_chunks_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_memory: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +81,12 @@ pub struct AutonomousPlanSnapshot {
     pub progress: String,
     pub current_step_id: Option<u32>,
     pub steps: Vec<StepSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planning_warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,6 +144,23 @@ where
     let mut replans_used = 0u32;
     let mut steps_executed = 0usize;
     let mut final_text = String::new();
+    let mut spec_path: Option<String> = None;
+    let mut spec_step_id: Option<u32> = None;
+    let mut step_warning: Option<String> = None;
+    let mut last_memory_diagnostics: Option<MemoryDiagnostics> = None;
+    let mut last_vector_chunks: Option<u32> = None;
+    let mut last_retrieved_memory: Option<String> = None;
+
+    let session_id = request
+        .base
+        .session_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mut indexed_chunk_hashes = load_session_chunk_hashes(state, &session_id).await;
+
+    let mut planning_warning: Option<String> = None;
 
     let mut plan = if config.planning_enabled {
         events.autonomous_phase(
@@ -141,7 +174,7 @@ where
             content: planning_msg,
             images: vec![],
         });
-        run_planning_turn(
+        let (plan, warning) = run_planning_turn(
             state,
             &request.base,
             &config,
@@ -152,7 +185,9 @@ where
             events,
             &mut final_text,
         )
-        .await?
+        .await?;
+        planning_warning = warning;
+        plan
     } else {
         AutonomousPlan {
             steps: vec![PlanStep {
@@ -165,7 +200,13 @@ where
         }
     };
 
-    emit_plan_snapshot(events, &plan);
+    emit_plan_snapshot(
+        events,
+        &plan,
+        planning_warning.as_deref(),
+        spec_path.as_deref(),
+        step_warning.as_deref(),
+    );
 
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
@@ -200,7 +241,14 @@ where
         };
 
         plan.mark(step.id, StepStatus::InProgress, None);
-        emit_plan_snapshot(events, &plan);
+        step_warning = None;
+        emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            None,
+        );
 
         events.autonomous_phase(
             AutonomousPhase::Executing,
@@ -208,13 +256,20 @@ where
         );
 
         let exec_msg = wrap_with_protocol(
-            &execution_user_message(&plan, &step),
+            &execution_user_message(&plan, &step, spec_path.as_deref()),
             Some(AUTONOMOUS_PROTOCOL),
         );
         messages.push(ChatMessage {
             role: "user".into(),
             content: exec_msg,
             images: vec![],
+        });
+
+        let retrieval_query = spec_path.as_ref().map(|spec| {
+            format!(
+                "Goal: {goal}\nStep {}: {}\nSpec: {spec}",
+                step.id, step.title
+            )
         });
 
         let result = run_autonomous_turn_with_retry(
@@ -227,10 +282,43 @@ where
             &mut session_summary,
             &cancel_flag,
             events,
+            retrieval_query,
         )
         .await?;
         final_text = result.text.clone();
         steps_executed += 1;
+
+        commit_autonomous_turn_memory(
+            state,
+            &request.base,
+            &session_id,
+            &result,
+            &mut indexed_chunk_hashes,
+        )
+        .await;
+        emit_turn_memory_diagnostics(events, &result);
+
+        if let Some(detected) =
+            spec_memory::detect_spec_path_from_turn(&result.text, spec_path.as_deref())
+        {
+            if spec_path.is_none() {
+                spec_step_id = Some(step.id);
+            }
+            spec_path = Some(detected);
+        }
+
+        if should_require_spec_compliance(spec_path.as_deref(), spec_step_id, step.id)
+            && spec_memory::extract_spec_compliance(&result.text).is_none()
+        {
+            step_warning = Some(format!(
+                "Шаг {}: нет блока <spec-compliance> — сверка с ТЗ не зафиксирована.",
+                step.id
+            ));
+        }
+
+        last_memory_diagnostics = result.memory_diagnostics.clone();
+        last_vector_chunks = result.vector_chunks_used;
+        last_retrieved_memory = result.retrieved_memory.clone();
 
         for r in parse_all_step_results(&result.text) {
             if r.step_id != step.id {
@@ -247,7 +335,13 @@ where
                 (!r.summary.is_empty()).then_some(r.summary.clone()),
             );
         }
-        emit_plan_snapshot(events, &plan);
+        emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            step_warning.as_deref(),
+        );
 
         let mut step_status = resolve_current_step_status(&result.text, step.id);
         if tool_results_indicate_failure(&result.text) {
@@ -269,7 +363,13 @@ where
                         verify_message = Some(outcome.message.clone());
                         if !outcome.ok && step_status != StepStatus::Failed {
                             plan.mark(step.id, StepStatus::Failed, Some(outcome.message.clone()));
-                            emit_plan_snapshot(events, &plan);
+                            emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            step_warning.as_deref(),
+        );
                             records.push(AutonomousStepRecord {
                                 step_id: step.id,
                                 title: step.title.clone(),
@@ -297,7 +397,13 @@ where
                                 )
                                 .await?
                                 {
-                                    emit_plan_snapshot(events, &plan);
+                                    emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            step_warning.as_deref(),
+        );
                                     continue;
                                 }
                             }
@@ -329,7 +435,13 @@ where
         };
 
         plan.mark(step.id, terminal_status, None);
-        emit_plan_snapshot(events, &plan);
+        emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            step_warning.as_deref(),
+        );
 
         records.push(AutonomousStepRecord {
             step_id: step.id,
@@ -359,7 +471,13 @@ where
                 )
                 .await?
                 {
-                    emit_plan_snapshot(events, &plan);
+                    emit_plan_snapshot(
+            events,
+            &plan,
+            None,
+            spec_path.as_deref(),
+            step_warning.as_deref(),
+        );
                     continue;
                 }
             }
@@ -389,9 +507,22 @@ where
         &mut session_summary,
         &cancel_flag,
         events,
+        spec_path.as_ref().map(|spec| format!("Goal: {goal}\nFinal report\nSpec: {spec}")),
     )
     .await?;
-    final_text = completion.text;
+    final_text = completion.text.clone();
+    commit_autonomous_turn_memory(
+        state,
+        &request.base,
+        &session_id,
+        &completion,
+        &mut indexed_chunk_hashes,
+    )
+    .await;
+    emit_turn_memory_diagnostics(events, &completion);
+    last_memory_diagnostics = completion.memory_diagnostics.clone();
+    last_vector_chunks = completion.vector_chunks_used;
+    last_retrieved_memory = completion.retrieved_memory.clone();
 
     events.autonomous_phase(AutonomousPhase::Done, None);
     Ok(AutonomousRunResult {
@@ -400,6 +531,9 @@ where
         steps: records,
         final_text,
         replans_used,
+        memory_diagnostics: last_memory_diagnostics,
+        vector_chunks_used: last_vector_chunks,
+        retrieved_memory: last_retrieved_memory,
     })
 }
 
@@ -439,6 +573,7 @@ where
         session_summary,
         cancel_flag,
         events,
+        None,
     )
     .await?;
     *final_text = result.text.clone();
@@ -460,7 +595,7 @@ async fn run_planning_turn<E>(
     cancel_flag: &Arc<AtomicBool>,
     events: &mut E,
     final_text: &mut String,
-) -> Result<AutonomousPlan, AppError>
+) -> Result<(AutonomousPlan, Option<String>), AppError>
 where
     E: AutonomousRunEventSink + Send,
 {
@@ -474,14 +609,18 @@ where
         session_summary,
         cancel_flag,
         events,
+        None,
     )
     .await?;
     *final_text = result.text.clone();
-    if let Some(plan) = parse_autonomous_plan(&result.text) {
-        return Ok(plan);
+
+    if let Some(plan) = best_autonomous_plan_from_texts(&[&result.text]) {
+        if plan.steps.len() > 1 {
+            return Ok((plan, None));
+        }
     }
 
-    tracing::warn!("planning: invalid plan, retrying with stricter prompt");
+    tracing::warn!("planning: no multi-step plan yet, retrying with stricter prompt");
     messages.push(ChatMessage {
         role: "user".into(),
         content: wrap_with_protocol(
@@ -500,23 +639,53 @@ where
         session_summary,
         cancel_flag,
         events,
+        None,
     )
     .await?;
     *final_text = result2.text.clone();
-    if let Some(plan) = parse_autonomous_plan(&result2.text) {
-        return Ok(plan);
+
+    if let Some(plan) = best_autonomous_plan_from_texts(&[&result.text, &result2.text]) {
+        let warning = if plan.steps.len() <= 1 {
+            Some(
+                "План содержит только один шаг — проверьте разбиение задачи.".into(),
+            )
+        } else if parse_autonomous_plan(&result2.text).is_none() {
+            Some("Использован план из первой попытки планирования.".into())
+        } else {
+            None
+        };
+        return Ok((plan, warning));
     }
 
-    tracing::warn!("planning: fallback single-step plan for goal");
-    Ok(AutonomousPlan {
-        steps: vec![PlanStep {
-            id: 1,
-            title: goal.to_string(),
-            status: StepStatus::Pending,
-            verify: None,
-            note: None,
-        }],
-    })
+    let hinted = count_plan_tag_blocks(&result.text).max(count_plan_tag_blocks(&result2.text));
+    tracing::warn!(
+        "planning: fallback single-step plan for goal (saw {hinted} autonomous-plan block(s))"
+    );
+    let warning = Some(if hinted > 0 {
+        format!(
+            "Не удалось разобрать план ({hinted} блок(ов) в ответе) — выполняем одним шагом."
+        )
+    } else {
+        "Модель не вернула <autonomous-plan> — выполняем одним шагом.".into()
+    });
+    Ok((
+        AutonomousPlan {
+            steps: vec![PlanStep {
+                id: 1,
+                title: goal.to_string(),
+                status: StepStatus::Pending,
+                verify: None,
+                note: None,
+            }],
+        },
+        warning,
+    ))
+}
+
+fn count_plan_tag_blocks(text: &str) -> usize {
+    let lower = text.to_ascii_lowercase();
+    let open = format!("<{}>", super::plan::PLAN_TAG);
+    lower.matches(&open).count()
 }
 
 async fn run_autonomous_turn_with_retry<E>(
@@ -529,6 +698,7 @@ async fn run_autonomous_turn_with_retry<E>(
     session_summary: &mut Option<String>,
     cancel_flag: &Arc<AtomicBool>,
     events: &mut E,
+    retrieval_query_override: Option<String>,
 ) -> Result<CompletionResult, AppError>
 where
     E: AutonomousRunEventSink + Send,
@@ -571,6 +741,11 @@ where
             force_context_limit: base.force_context_limit,
             disable_rolling_memory: base.disable_rolling_memory,
             disable_vector_retrieval: base.disable_vector_retrieval,
+            retrieval_query_override: if attempt == 0 {
+                retrieval_query_override.clone()
+            } else {
+                None
+            },
         };
 
         let mut adapter = SinkAdapter { inner: events };
@@ -624,7 +799,13 @@ fn current_step_id(plan: &AutonomousPlan) -> Option<u32> {
         .or_else(|| plan.next_pending().map(|s| s.id))
 }
 
-fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(events: &mut E, plan: &AutonomousPlan) {
+fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
+    events: &mut E,
+    plan: &AutonomousPlan,
+    planning_warning: Option<&str>,
+    spec_path: Option<&str>,
+    step_warning: Option<&str>,
+) {
     events.autonomous_plan(AutonomousPlanSnapshot {
         progress: plan.progress_label(),
         current_step_id: current_step_id(plan),
@@ -637,6 +818,9 @@ fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(events: &mut E, plan: 
                 status: s.status,
             })
             .collect(),
+        planning_warning: planning_warning.map(str::to_string),
+        spec_path: spec_path.map(str::to_string),
+        step_warning: step_warning.map(str::to_string),
     });
 }
 
@@ -685,6 +869,9 @@ fn cancelled_result(
         steps,
         final_text,
         replans_used,
+        memory_diagnostics: None,
+        vector_chunks_used: None,
+        retrieved_memory: None,
     }
 }
 
@@ -701,7 +888,147 @@ fn failed_result(
         steps,
         final_text,
         replans_used,
+        memory_diagnostics: None,
+        vector_chunks_used: None,
+        retrieved_memory: None,
     }
+}
+
+fn should_require_spec_compliance(
+    spec_path: Option<&str>,
+    spec_step_id: Option<u32>,
+    current_step_id: u32,
+) -> bool {
+    spec_path.is_some()
+        && spec_step_id
+            .map(|id| current_step_id > id)
+            .unwrap_or(current_step_id > 1)
+}
+
+async fn load_session_chunk_hashes(state: &AppState, session_id: &str) -> HashSet<String> {
+    if session_id.trim().is_empty() {
+        return HashSet::new();
+    }
+    match state.chat_memory.list_content_hashes(session_id).await {
+        Ok(hashes) => hashes.into_iter().collect(),
+        Err(e) => {
+            tracing::warn!("autonomous: vector hashes unavailable: {e}");
+            HashSet::new()
+        }
+    }
+}
+
+async fn commit_autonomous_turn_memory(
+    state: &AppState,
+    base: &ChatRunRequest,
+    session_id: &str,
+    result: &CompletionResult,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    let Ok(row) = resolve_autonomous_connection(state, base).await else {
+        return;
+    };
+    let cfg = state.connections.http_config().await;
+
+    let artifacts: Vec<(String, String)> = extract_context_artifacts_from_text(&result.text);
+    if !artifacts.is_empty() {
+        index_context_artifacts(
+            &state.chat_memory,
+            &state.connections,
+            &row,
+            &cfg,
+            session_id,
+            &artifacts,
+            indexed_hashes,
+        )
+        .await;
+        for (path, content) in &artifacts {
+            if plan_memory::is_plan_markdown_path(path) {
+                upsert_plan_canonical_from_plan_markdown(
+                    &state.chat_memory,
+                    &state.connections,
+                    &row,
+                    &cfg,
+                    session_id,
+                    content,
+                    indexed_hashes,
+                )
+                .await;
+            }
+        }
+    }
+
+    if let Some(inner) = plan_memory::extract_plan_step_summary(&result.text) {
+        index_plan_step_summary(
+            &state.chat_memory,
+            &state.connections,
+            &row,
+            &cfg,
+            session_id,
+            &inner,
+            indexed_hashes,
+        )
+        .await;
+    }
+}
+
+async fn resolve_autonomous_connection(
+    state: &AppState,
+    base: &ChatRunRequest,
+) -> Result<crate::storage::repositories::ConnectionRow, AppError> {
+    if let Some(id) = base
+        .connection_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        return state.connections.get_row(id).await;
+    }
+    if let Some(mid) = base.mode_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        let modes = state.catalog.list_modes().await?;
+        if let Some(mode) = modes.iter().find(|m| m.id == mid) {
+            if let Some(cid) = mode
+                .provider_override
+                .as_deref()
+                .filter(|s| !s.is_empty())
+            {
+                return state.connections.get_row(cid).await;
+            }
+        }
+    }
+    state
+        .connections
+        .get_default_row()
+        .await?
+        .ok_or_else(|| AppError::Validation("no default connection".into()))
+}
+
+fn emit_turn_memory_diagnostics<E: ChatRunEventSink + ?Sized>(
+    events: &mut E,
+    result: &CompletionResult,
+) {
+    let summary = result
+        .session_summary
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if summary.is_empty() && result.memory_diagnostics.is_none() {
+        return;
+    }
+    events.memory(ChatRunMemoryUpdate {
+        session_summary: summary,
+        context_window_size: result.context_window_size.unwrap_or(0),
+        memory_diagnostics: result.memory_diagnostics.clone(),
+        retrieved_memory: result.retrieved_memory.clone(),
+        vector_chunks_used: result.vector_chunks_used,
+        memory_compressed: Some(result.memory_compressed),
+        evicted_turns: result.evicted_turns,
+        vector_memory_compressed: Some(result.vector_memory_compressed),
+        context_recovered: Some(result.context_recovered),
+    });
 }
 
 #[cfg(test)]

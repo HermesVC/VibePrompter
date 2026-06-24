@@ -3,6 +3,7 @@ pub mod fs;
 pub mod language;
 pub mod patch;
 pub mod plan_memory;
+pub mod spec_memory;
 pub mod policy;
 pub mod symbols;
 pub mod types;

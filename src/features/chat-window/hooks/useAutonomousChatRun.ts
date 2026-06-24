@@ -29,7 +29,17 @@ export interface AutonomousSendParams {
   sessionId: string;
   onToken: (generation: number, delta: string) => void;
   onChatStatus: (payload: ChatStatusPayload) => void;
-  onMemory: (payload: { sessionSummary?: string; contextWindowSize?: number }) => void;
+  onMemory: (payload: {
+    sessionSummary?: string;
+    contextWindowSize?: number;
+    memoryDiagnostics?: import('@shared/lib/autonomousRunApi').MemoryDiagnostics;
+    retrievedMemory?: string;
+    vectorChunksUsed?: number;
+    memoryCompressed?: boolean;
+    evictedTurns?: number;
+    vectorMemoryCompressed?: boolean;
+    contextRecovered?: boolean;
+  }) => void;
   onComplete: (result: AutonomousRunResult) => void;
   onError: (message: string, cancelled: boolean) => void;
 }
@@ -83,9 +93,12 @@ export function useAutonomousChatRun() {
         listen<ChatStatusPayload>(statusEvent, (e) => {
           params.onChatStatus(e.payload);
         }),
-        listen<{ sessionSummary?: string; contextWindowSize?: number }>(memoryEvent, (e) => {
-          params.onMemory(e.payload);
-        }),
+        listen<{ sessionSummary?: string; contextWindowSize?: number } & Record<string, unknown>>(
+          memoryEvent,
+          (e) => {
+            params.onMemory(e.payload);
+          }
+        ),
         listen<AutonomousPlanSnapshot>(planEvent, (e) => {
           setPlan(e.payload);
           setStreamPhaseDetail(null);

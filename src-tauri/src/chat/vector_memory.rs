@@ -1443,6 +1443,14 @@ fn chunk_content_hash(role: &str, text: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Context artifacts from assistant `` ```file ` `` fences (plans, specs, notes).
+pub fn extract_context_artifacts_from_text(text: &str) -> Vec<(String, String)> {
+    crate::app::harness::extract_generated_file_fences(text)
+        .into_iter()
+        .filter(|(path, content)| !content.trim().is_empty() && is_context_artifact_path(path))
+        .collect()
+}
+
 fn is_context_artifact_path(path: &str) -> bool {
     let norm = path
         .replace('\\', "/")

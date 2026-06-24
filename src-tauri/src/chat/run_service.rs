@@ -64,6 +64,8 @@ pub struct ChatRunRequest {
     pub disable_rolling_memory: bool,
     /// Debug/testing flag: do not retrieve semantic/vector memory.
     pub disable_vector_retrieval: bool,
+    /// Override the text embedded for vector retrieval (autonomous steps).
+    pub retrieval_query_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +86,20 @@ pub struct ChatRunStatus {
 pub struct ChatRunMemoryUpdate {
     pub session_summary: String,
     pub context_window_size: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_diagnostics: Option<crate::models::MemoryDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_chunks_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_compressed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evicted_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_memory_compressed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_recovered: Option<bool>,
 }
 
 pub trait ChatRunEventSink {
@@ -254,11 +270,17 @@ where
             );
 
             let api_messages = window_plan.active.clone();
-            let query_text = working_messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "user")
-                .map(|m| m.content.as_str())
+            let query_text = request
+                .retrieval_query_override
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    working_messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.as_str())
+                })
                 .unwrap_or("");
             retrieval_query_preview = Some(preview_text(query_text, 240));
             let (retrieved_block, retrieved_chunk_count) = if degrade.omit_retrieved()
@@ -568,6 +590,7 @@ where
             if !memory.trim().is_empty() {
                 r.session_summary = Some(memory.clone());
             }
+            emit_chat_memory_diagnostics(events, &memory, context_limit, &r, context_recovered);
             r.memory_compressed = memory_compressed;
             if memory_compressed && evicted_count > 0 {
                 r.evicted_turns = Some(evicted_count);
@@ -1076,6 +1099,33 @@ fn emit_chat_memory_update<E: ChatRunEventSink>(events: &mut E, memory: &str, co
     events.memory(ChatRunMemoryUpdate {
         session_summary: memory.to_string(),
         context_window_size: context_limit,
+        memory_diagnostics: None,
+        retrieved_memory: None,
+        vector_chunks_used: None,
+        memory_compressed: None,
+        evicted_turns: None,
+        vector_memory_compressed: None,
+        context_recovered: None,
+    });
+}
+
+fn emit_chat_memory_diagnostics<E: ChatRunEventSink>(
+    events: &mut E,
+    memory: &str,
+    context_limit: i64,
+    result: &CompletionResult,
+    context_recovered: bool,
+) {
+    events.memory(ChatRunMemoryUpdate {
+        session_summary: memory.to_string(),
+        context_window_size: context_limit,
+        memory_diagnostics: result.memory_diagnostics.clone(),
+        retrieved_memory: result.retrieved_memory.clone(),
+        vector_chunks_used: result.vector_chunks_used,
+        memory_compressed: Some(result.memory_compressed),
+        evicted_turns: result.evicted_turns,
+        vector_memory_compressed: Some(result.vector_memory_compressed),
+        context_recovered: Some(context_recovered),
     });
 }
 
