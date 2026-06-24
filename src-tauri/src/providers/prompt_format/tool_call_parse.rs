@@ -33,10 +33,13 @@ pub fn parse_bare_call_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     let mut search_from = 0usize;
     while let Some(rel) = text[search_from..].find("call:") {
         let start = search_from + rel;
-        if let Some(call) = parse_call_segment(&text[start..]) {
+        let slice = &text[start..];
+        if let Some(call) = parse_call_segment(slice) {
             out.push(call);
+            search_from = start + call_segment_byte_len(slice).unwrap_or(5);
+        } else {
+            search_from = start.saturating_add(5);
         }
-        search_from = start.saturating_add(5);
     }
     out
 }
@@ -157,7 +160,7 @@ fn matching_brace_end(s: &str, open_idx: usize) -> Option<usize> {
     let tail = s.get(open_idx..)?;
     for (offset, ch) in tail.char_indices() {
         if let Some(q) = quote {
-            if ch == q {
+            if ch == q && !is_json_escape_before(tail, offset) {
                 quote = None;
             }
             continue;
@@ -204,7 +207,7 @@ fn split_relaxed_top_level(s: &str) -> Vec<String> {
     let mut start = 0usize;
     for (i, ch) in s.char_indices() {
         if let Some(q) = quote {
-            if ch == q {
+            if ch == q && !is_json_escape_before(s, i) {
                 quote = None;
             }
             continue;
@@ -243,7 +246,8 @@ fn parse_relaxed_value(raw: &str) -> Value {
     if (raw.starts_with('"') && raw.ends_with('"'))
         || (raw.starts_with('\'') && raw.ends_with('\''))
     {
-        return Value::String(raw[1..raw.len() - 1].to_string());
+        let inner = &raw[1..raw.len() - 1];
+        return Value::String(unescape_relaxed_string(inner));
     }
     if raw.eq_ignore_ascii_case("true") {
         return Value::Bool(true);
@@ -263,6 +267,41 @@ fn parse_relaxed_value(raw: &str) -> Value {
         }
     }
     Value::String(raw.to_string())
+}
+
+fn unescape_relaxed_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\'') => out.push('\''),
+                Some('\\') => out.push('\\'),
+                Some(c) => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn call_segment_byte_len(segment: &str) -> Option<usize> {
+    let trimmed = segment.trim_start();
+    let offset = segment.len() - trimmed.len();
+    let after_call = trimmed.strip_prefix("call:").unwrap_or(trimmed);
+    let call_prefix = trimmed.len() - after_call.len();
+    let brace = after_call.find('{')?;
+    let args_end = matching_brace_end(after_call, brace)?;
+    Some(offset + call_prefix + args_end)
 }
 
 /// Models sometimes emit patch edits inside a markdown file fence instead of tool_call.
@@ -697,6 +736,41 @@ edits:[{"old_text":"foreach ($projectUids as $x)","new_text":"foreach ($projectU
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "apply_patch");
         assert_eq!(calls[0].arguments["path"], "vp/src/a.php");
+    }
+
+    #[test]
+    fn parses_qwen_read_file_lines_array_alias() {
+        let calls = parse_all_tool_calls(
+            r#"<|tool_call|>call:read_file{path:vp/src/a.php,lines:[75,82]}</|tool_call|>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["lines"], serde_json::json!([75, 82]));
+    }
+
+    #[test]
+    fn parses_apply_patch_with_escaped_newlines_in_quotes() {
+        let calls = parse_all_tool_calls(
+            r#"<|tool_call|>call:apply_patch{path:vp/a.php,old_text:"line1\nline2",new_text:"fixed\nline2"}</|tool_call|>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["old_text"], "line1\nline2");
+        assert_eq!(calls[0].arguments["new_text"], "fixed\nline2");
+    }
+
+    #[test]
+    fn parses_projects_api_style_tool_calls() {
+        let text = r#"<|tool_call|>call:read_file{path:vp/src/service/api/Controllers/ProjectsAPI.php,lines:[75,82]}</|tool_call|>
+
+<|tool_call|>call:apply_patch{path:vp/src/service/api/Controllers/ProjectsAPI.php,old_text:"foreach ($projectUids as $projectUuid) {",new_text:"foreach ($projectUuids as $projectUuid) {"}</|tool_call|>"#;
+        let calls = parse_all_tool_calls(text);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[1].name, "apply_patch");
+        assert_eq!(
+            calls[1].arguments["old_text"],
+            "foreach ($projectUids as $projectUuid) {"
+        );
     }
 
     #[test]

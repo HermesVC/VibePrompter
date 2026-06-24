@@ -41,6 +41,7 @@ pub async fn execute(
     ctx: &ToolExecutionContext,
     arguments: Value,
 ) -> AppResult<ToolExecutionResult> {
+    let arguments = normalize_read_file_args(arguments);
     let raw_path = arguments
         .get("path")
         .and_then(|v| v.as_str())
@@ -80,4 +81,40 @@ pub async fn execute(
             file.path
         ),
     })
+}
+
+/// Qwen often sends `lines:[75,82]` instead of `start_line` / `end_line`.
+pub fn normalize_read_file_args(mut arguments: Value) -> Value {
+    let Some(obj) = arguments.as_object_mut() else {
+        return arguments;
+    };
+    if obj.contains_key("start_line") || obj.contains_key("end_line") {
+        return Value::Object(std::mem::take(obj));
+    }
+    let Some(lines) = obj.get("lines").and_then(|v| v.as_array()) else {
+        return Value::Object(std::mem::take(obj));
+    };
+    if let (Some(start), Some(end)) = (
+        lines.first().and_then(|v| v.as_u64()),
+        lines.get(1).and_then(|v| v.as_u64()),
+    ) {
+        obj.insert("start_line".into(), json!(start));
+        obj.insert("end_line".into(), json!(end));
+    }
+    Value::Object(std::mem::take(obj))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_lines_array_alias() {
+        let out = normalize_read_file_args(json!({
+            "path": "a.php",
+            "lines": [75, 82]
+        }));
+        assert_eq!(out["start_line"], 75);
+        assert_eq!(out["end_line"], 82);
+    }
 }

@@ -119,8 +119,10 @@ fn find_unique_match(
     needle: &str,
     edit_index: usize,
 ) -> Result<(usize, usize), PatchError> {
-    if let Some(bounds) = unique_match_bounds(haystack, needle) {
-        return Ok(bounds);
+    for candidate in line_ending_match_candidates(haystack, needle) {
+        if let Some(bounds) = unique_match_bounds(haystack, &candidate) {
+            return Ok(bounds);
+        }
     }
     let count = count_occurrences(haystack, needle);
     if count == 0 {
@@ -134,6 +136,26 @@ fn find_unique_match(
         edit_index,
         occurrences: count,
     })
+}
+
+/// Try LF and CRLF variants when the model's `old_text` line endings differ from the file.
+fn line_ending_match_candidates(haystack: &str, needle: &str) -> Vec<String> {
+    let mut out = vec![needle.to_string()];
+    let haystack_crlf = haystack.contains("\r\n");
+    let needle_crlf = needle.contains("\r\n");
+    if haystack_crlf && !needle_crlf && needle.contains('\n') {
+        let alt = needle.replace('\n', "\r\n");
+        if !out.contains(&alt) {
+            out.push(alt);
+        }
+    }
+    if !haystack_crlf && needle_crlf {
+        let alt = needle.replace("\r\n", "\n");
+        if !out.contains(&alt) {
+            out.push(alt);
+        }
+    }
+    out
 }
 
 fn unique_match_bounds(haystack: &str, needle: &str) -> Option<(usize, usize)> {
@@ -333,6 +355,19 @@ mod tests {
         );
         assert!(v.violations.is_empty());
         assert_eq!(v.metrics[0].old_lines, 1);
+    }
+
+    #[test]
+    fn matches_old_text_when_file_uses_crlf() {
+        let out = apply_patches(
+            "foreach ($projectUids as $projectUuid) {\r\n",
+            &[PatchEdit {
+                old_text: "foreach ($projectUids as $projectUuid) {\n".into(),
+                new_text: "foreach ($projectUuids as $projectUuid) {\n".into(),
+            }],
+        )
+        .expect("crlf patch");
+        assert_eq!(out, "foreach ($projectUuids as $projectUuid) {\n");
     }
 
     #[test]

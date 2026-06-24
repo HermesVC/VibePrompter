@@ -184,6 +184,17 @@ fn normalize_base(url: &str) -> String {
     url.trim_end_matches('/').to_string()
 }
 
+/// LM Studio local Jinja templates often fail when `enable_thinking: false` is injected.
+fn should_send_disable_thinking(conn: &ConnectionRow, requested: bool) -> bool {
+    if !requested {
+        return false;
+    }
+    let base = normalize_base(&conn.base_url).to_ascii_lowercase();
+    !(base.contains("localhost")
+        || base.contains("127.0.0.1")
+        || base.contains("[::1]"))
+}
+
 /// Apply user-configured per-connection headers to an outbound request. The
 /// `extra_headers` column stores a `{"Name": "value", ...}` JSON object.
 /// Empty / malformed values are silently skipped — we never want a bad
@@ -565,7 +576,7 @@ where
             if let Some(mt) = params.max_tokens {
                 body["max_tokens"] = serde_json::json!(mt);
             }
-            if params.disable_thinking == Some(true) {
+            if should_send_disable_thinking(conn, params.disable_thinking == Some(true)) {
                 body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
             }
             (url, body)
@@ -996,7 +1007,7 @@ async fn openai_chat(
     if let Some(mt) = params.max_tokens {
         body["max_tokens"] = json!(mt);
     }
-    if params.disable_thinking == Some(true) {
+    if should_send_disable_thinking(conn, params.disable_thinking == Some(true)) {
         body["chat_template_kwargs"] = json!({ "enable_thinking": false });
     }
 

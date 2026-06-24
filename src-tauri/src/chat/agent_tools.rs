@@ -17,7 +17,7 @@ const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 
 You can inspect and edit the project with these tools (declare via tool_call blocks):
 - `list_dir` — list files under a path (`path`, optional `depth`)
-- `read_file` — read a file or line range (`path`, optional `start_line`, `end_line`)
+- `read_file` — read a file or line range (`path`, optional `start_line`/`end_line` or `lines:[start,end]`)
 - `file_outline` — list classes/methods/functions in PHP/JS/Python (`path`)
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
 - `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
