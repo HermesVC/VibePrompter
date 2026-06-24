@@ -36,4 +36,4 @@ $env:TOOL_PROBE_LIVE='1'; cargo run --bin tool_call_probe  # full run_chat + fol
 
 Today: model outputs full file in ` ```file path ` `` fences → `apply_workspace_write` replaces entire file.
 
-Target: **surgical patches** — model emits changed hunks only; backend applies unified diff or search/replace blocks. See `workspace/fs.rs::write_file_checked`, `generatedFiles.ts`. Candidate formats: ` ```patch path` ` `, `apply_patch` tool, or line-range ` ```file path:12-40` ``.
+**Implemented:** tool `apply_patch` — model passes `old_text`/`new_text` (unique match); backend applies deterministically (`workspace/patch.rs`). Prefer over full-file fences when tools are active.

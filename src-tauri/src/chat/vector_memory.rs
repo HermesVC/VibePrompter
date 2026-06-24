@@ -440,6 +440,26 @@ pub async fn index_tool_results(
                 };
                 ("code-read", format!("{header}{lines}\n---\n{content}"))
             }
+            "apply_patch" => {
+                let path = r.output.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let edits = r
+                    .output
+                    .get("editsApplied")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let hash = r
+                    .output
+                    .get("contentHash")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if path.is_empty() {
+                    continue;
+                }
+                (
+                    "code-edit",
+                    format!("PATCH: {path} edits={edits} hash={hash}"),
+                )
+            }
             _ => continue,
         };
         let hash = chunk_content_hash(role, &text);

@@ -1,6 +1,7 @@
 pub mod context;
 pub mod fs;
 pub mod language;
+pub mod patch;
 pub mod plan_memory;
 pub mod policy;
 pub mod symbols;

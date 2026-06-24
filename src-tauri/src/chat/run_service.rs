@@ -26,7 +26,8 @@ const FILE_ARTIFACT_PROTOCOL: &str = r#"When the user asks you to create or modi
 file contents
 ```
 Use one fence per file. Put no prose inside file fences. Use stable relative workspace paths. Do not merge multiple files into one fence. If only one file is needed, you may still use one file fence.
-For plans, notes, and markdown context files (.md), use clear filenames (e.g. PLAN.md, notes/context.md) — the app remembers these paths in semantic memory."#;
+For plans, notes, and markdown context files (.md), use clear filenames (e.g. PLAN.md, notes/context.md) — the app remembers these paths in semantic memory.
+When workspace tools are active, prefer `apply_patch` (after read_file) for edits to existing files instead of full-file fences."#;
 
 const DIAGNOSTIC_INSPECTION_PROTOCOL: &str = r#"Diagnostic/debug request in workspace scope:
 - First inspect the relevant files with workspace tool_call blocks. Do not output generated file fences, rewrites, or replacement code before tool results.

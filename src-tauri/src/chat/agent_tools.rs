@@ -15,17 +15,20 @@ const TOOL_STITCH_OVERLAP_CHARS: usize = 2_000;
 
 const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 
-You can inspect the project with these tools (declare via tool_call blocks):
+You can inspect and edit the project with these tools (declare via tool_call blocks):
 - `list_dir` — list files under a path (`path`, optional `depth`)
 - `read_file` — read a file or line range (`path`, optional `start_line`, `end_line`)
 - `file_outline` — list classes/methods/functions in PHP/JS/Python (`path`)
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
+- `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
 
-Use relative paths from the workspace root. Prefer `read_file` with line ranges for large files.
+Use relative paths from the workspace root. Prefer `read_file` before editing.
+For fixes: read the file, then `apply_patch` with exact `old_text` (unique in file, include 2–3 lines of context) and `new_text`. Do not paste whole files unless creating new ones.
 When you need to inspect files, emit tool_call block(s) in one of these formats, then wait:
 
 Qwen / local models (preferred):
 <|tool_call|>call:read_file{path:relative/path.ext}</|tool_call|>
+<|tool_call|>call:apply_patch{path:relative/path.ext,edits:[{old_text:lines to find,new_text:replacement}]}</|tool_call|>
 
 Gemma 4:
 <|tool_call>call:read_file{path:<|"|>relative/path.ext<|"|>}<|tool_call|>
