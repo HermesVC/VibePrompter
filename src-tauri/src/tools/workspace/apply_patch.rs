@@ -4,7 +4,9 @@ use serde_json::{json, Value};
 
 use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::{AppError, AppResult};
-use crate::workspace::patch::{apply_patches, PatchEdit};
+use crate::workspace::patch::{
+    apply_patches, measure_edit, validate_patch_edits, PatchEdit, PatchPolicy,
+};
 use crate::workspace::policy::{PolicyDecision, PolicyEngine};
 use crate::workspace::write_file_checked;
 
@@ -17,8 +19,8 @@ pub const NAME: &str = "apply_patch";
 pub fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: NAME.into(),
-        description: "Apply one or more exact search/replace edits to a file. \
-Each old_text must appear exactly once — include enough surrounding lines. \
+        description: "Apply minimal exact search/replace edits to a file. \
+Each old_text must appear exactly once and stay small (typically 1–3 lines). \
 Read the file first; pass contentHash as expected_hash when available."
             .into(),
         parameters: json!({
@@ -34,17 +36,17 @@ Read the file first; pass contentHash as expected_hash when available."
                 },
                 "edits": {
                     "type": "array",
-                    "description": "Sequential edits (applied in order)",
+                    "description": "Sequential minimal edits (applied in order)",
                     "items": {
                         "type": "object",
                         "properties": {
                             "old_text": {
                                 "type": "string",
-                                "description": "Exact substring to replace (unique in file)"
+                                "description": "Exact substring to replace (unique, few lines only)"
                             },
                             "new_text": {
                                 "type": "string",
-                                "description": "Replacement text"
+                                "description": "Replacement — change only what differs from old_text"
                             }
                         },
                         "required": ["old_text", "new_text"]
@@ -87,6 +89,17 @@ pub async fn execute(
         ));
     }
 
+    let limits = ctx.settings.patch_limits();
+    let policy = ctx.settings.patch_policy();
+    let validation = validate_patch_edits(&edits, limits);
+
+    if policy == PatchPolicy::Strict && !validation.violations.is_empty() {
+        return Err(AppError::Validation(format!(
+            "patch too large — keep edits surgical:\n{}",
+            validation.violations.join("\n")
+        )));
+    }
+
     let file = ctx.workspace.read_file(&path, None, None).await?;
     let patched = apply_patches(&file.content, &edits).map_err(|e| AppError::Validation(e.message()))?;
 
@@ -101,6 +114,29 @@ pub async fn execute(
     )?;
 
     let line_delta = patched.lines().count() as i64 - file.line_count as i64;
+    let edit_metrics: Vec<_> = edits
+        .iter()
+        .enumerate()
+        .map(|(i, e)| measure_edit(i, e, limits))
+        .collect();
+    let max_old_lines = edit_metrics.iter().map(|m| m.old_lines).max().unwrap_or(0);
+    let patch_policy_label = match policy {
+        PatchPolicy::Strict => "strict",
+        PatchPolicy::Warn => "warn",
+        PatchPolicy::Off => "off",
+    };
+
+    let mut message = format!(
+        "Patched {} ({} edit(s), lines {} → {}, maxOldLines={})",
+        path,
+        edits.len(),
+        file.line_count,
+        patched.lines().count(),
+        max_old_lines
+    );
+    if policy == PatchPolicy::Warn && !validation.violations.is_empty() {
+        message.push_str(" [patch size warning]");
+    }
 
     Ok(ToolExecutionResult {
         name: NAME.into(),
@@ -112,19 +148,17 @@ pub async fn execute(
             "lineCountBefore": file.line_count,
             "lineCountAfter": patched.lines().count(),
             "lineDelta": line_delta,
+            "maxOldLines": max_old_lines,
+            "editMetrics": edit_metrics,
+            "patchPolicy": patch_policy_label,
+            "patchWarnings": validation.violations,
             "policy": match decision {
                 PolicyDecision::Allow => "allow",
                 PolicyDecision::Ask => "ask",
                 PolicyDecision::Deny => "deny",
             },
         }),
-        message: format!(
-            "Patched {} ({} edit(s), lines {} → {})",
-            path,
-            edits.len(),
-            file.line_count,
-            patched.lines().count()
-        ),
+        message,
     })
 }
 

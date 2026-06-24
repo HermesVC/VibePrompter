@@ -193,6 +193,17 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
     if !patch.ok {
         return Ok((false, patch.message));
     }
+    let max_old = patch
+        .output
+        .get("maxOldLines")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if max_old > 5 {
+        return Ok((
+            false,
+            format!("patch applied but maxOldLines={max_old} (expected ≤5 for typo fix)"),
+        ));
+    }
 
     let revert = tools::execute_tool(
         &ctx,

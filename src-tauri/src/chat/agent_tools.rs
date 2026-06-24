@@ -23,7 +23,10 @@ You can inspect and edit the project with these tools (declare via tool_call blo
 - `apply_patch` — surgical edit (`path`, `edits`: [{`old_text`, `new_text`}], optional `expected_hash` from read_file)
 
 Use relative paths from the workspace root. Prefer `read_file` before editing.
-For fixes: read the file, then `apply_patch` with exact `old_text` (unique in file, include 2–3 lines of context) and `new_text`. Do not paste whole files unless creating new ones.
+**Minimal patches only:** `old_text` and `new_text` must differ as little as possible — often a single line or identifier.
+Include 1–2 lines of context so `old_text` is unique; never paste a whole method, case block, or file.
+If the tool returns "patch too large", shrink `old_text` to the smallest unique fragment and retry.
+For typo / one-line fixes, `old_text` should be 1–3 lines. Do not paste whole files unless creating new ones.
 When you need to inspect files, emit tool_call block(s) in one of these formats, then wait:
 
 Qwen / local models (preferred):

@@ -4,6 +4,8 @@ export type ChatScopeKind = 'none' | 'snippet' | 'file' | 'folder' | 'workspace'
 
 export type ApplyPolicy = 'always_ask' | 'always_apply' | 'allow_list_only';
 
+export type PatchPolicy = 'strict' | 'warn' | 'off';
+
 export interface WorkspaceSettings {
   workspaceRoot: string;
   applyPolicy: ApplyPolicy;
@@ -12,6 +14,10 @@ export interface WorkspaceSettings {
   allowDirs: string[];
   allowExtensions: string[];
   denyGlobs: string[];
+  /** How apply_patch enforces minimal edit size. Default: strict */
+  patchPolicy?: PatchPolicy;
+  /** Max lines in old_text per edit. Default: 15 */
+  patchMaxLines?: number;
 }
 
 export interface ChatModifier {
@@ -217,4 +223,6 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   allowDirs: [],
   allowExtensions: ['.php', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.rs'],
   denyGlobs: ['.env', '**/.env', '**/vendor/**', '**/node_modules/**'],
+  patchPolicy: 'strict',
+  patchMaxLines: 15,
 };

@@ -22,6 +22,20 @@ pub struct WorkspaceSettings {
     pub allow_extensions: Vec<String>,
     #[serde(default = "default_deny_globs")]
     pub deny_globs: Vec<String>,
+    /// `strict` | `warn` | `off` — how apply_patch enforces minimal edit size.
+    #[serde(default = "default_patch_policy")]
+    pub patch_policy: String,
+    /// Max lines allowed in a single edit's `old_text`.
+    #[serde(default = "default_patch_max_lines")]
+    pub patch_max_lines: u32,
+}
+
+fn default_patch_policy() -> String {
+    "strict".into()
+}
+
+fn default_patch_max_lines() -> u32 {
+    15
 }
 
 fn default_apply_policy() -> String {

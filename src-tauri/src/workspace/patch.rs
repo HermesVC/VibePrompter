@@ -1,9 +1,69 @@
 //! Deterministic search/replace patches — model supplies anchors, tool applies.
 
+use serde::Serialize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchEdit {
     pub old_text: String,
     pub new_text: String,
+}
+
+/// Limits enforced by `apply_patch` (from workspace settings).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PatchLimits {
+    pub max_old_lines: usize,
+    pub max_new_lines: usize,
+    pub max_old_chars: usize,
+    pub rewrite_min_lines: usize,
+    /// Fraction of `old_text` lines that differ positionally from `new_text` (0.0–1.0).
+    pub rewrite_change_ratio: f64,
+}
+
+impl Default for PatchLimits {
+    fn default() -> Self {
+        Self {
+            max_old_lines: 15,
+            max_new_lines: 20,
+            max_old_chars: 2_500,
+            rewrite_min_lines: 8,
+            rewrite_change_ratio: 0.70,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchPolicy {
+    Strict,
+    Warn,
+    Off,
+}
+
+impl PatchPolicy {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "warn" => Self::Warn,
+            "off" | "none" => Self::Off,
+            _ => Self::Strict,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditMetrics {
+    pub edit_index: usize,
+    pub old_lines: usize,
+    pub new_lines: usize,
+    pub old_chars: usize,
+    pub new_chars: usize,
+    pub changed_lines: usize,
+    pub likely_rewrite: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchValidation {
+    pub metrics: Vec<EditMetrics>,
+    pub violations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +163,101 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     count
 }
 
+use super::types::WorkspaceSettings;
+
+impl WorkspaceSettings {
+    pub fn patch_limits(&self) -> PatchLimits {
+        let max_old = self.patch_max_lines.clamp(1, 200) as usize;
+        PatchLimits {
+            max_old_lines: max_old,
+            max_new_lines: max_old.saturating_add(5),
+            ..PatchLimits::default()
+        }
+    }
+
+    pub fn patch_policy(&self) -> PatchPolicy {
+        PatchPolicy::parse(&self.patch_policy)
+    }
+}
+
+/// Measure and validate edits before applying. Returns violations (empty when OK).
+pub fn validate_patch_edits(edits: &[PatchEdit], limits: PatchLimits) -> PatchValidation {
+    let mut metrics = Vec::with_capacity(edits.len());
+    let mut violations = Vec::new();
+
+    for (edit_index, edit) in edits.iter().enumerate() {
+        let m = measure_edit(edit_index, edit, limits);
+        if edit.old_text.is_empty() {
+            violations.push(format!("edit #{edit_index}: old_text must not be empty"));
+        }
+        if m.old_lines > limits.max_old_lines {
+            violations.push(format!(
+                "edit #{edit_index}: old_text is {} lines (max {}). Narrow to the smallest unique fragment — only the changed lines plus 1–2 lines of context.",
+                m.old_lines, limits.max_old_lines
+            ));
+        }
+        if m.new_lines > limits.max_new_lines {
+            violations.push(format!(
+                "edit #{edit_index}: new_text is {} lines (max {}). Keep the replacement minimal.",
+                m.new_lines, limits.max_new_lines
+            ));
+        }
+        if m.old_chars > limits.max_old_chars {
+            violations.push(format!(
+                "edit #{edit_index}: old_text is {} chars (max {}). Use a shorter unique anchor.",
+                m.old_chars, limits.max_old_chars
+            ));
+        }
+        if m.likely_rewrite {
+            violations.push(format!(
+                "edit #{edit_index}: looks like a block rewrite ({} of {} old lines changed). \
+Change only what is necessary — e.g. a single line or identifier.",
+                m.changed_lines, m.old_lines
+            ));
+        }
+        metrics.push(m);
+    }
+
+    PatchValidation {
+        metrics,
+        violations,
+    }
+}
+
+pub fn measure_edit(edit_index: usize, edit: &PatchEdit, limits: PatchLimits) -> EditMetrics {
+    let old_lines = line_count(&edit.old_text);
+    let new_lines = line_count(&edit.new_text);
+    let changed_lines = positional_changed_lines(&edit.old_text, &edit.new_text);
+    let likely_rewrite = old_lines >= limits.rewrite_min_lines
+        && old_lines > 0
+        && (changed_lines as f64 / old_lines as f64) >= limits.rewrite_change_ratio;
+
+    EditMetrics {
+        edit_index,
+        old_lines,
+        new_lines,
+        old_chars: edit.old_text.chars().count(),
+        new_chars: edit.new_text.chars().count(),
+        changed_lines,
+        likely_rewrite,
+    }
+}
+
+fn line_count(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count()
+    }
+}
+
+fn positional_changed_lines(old: &str, new: &str) -> usize {
+    let old_l: Vec<&str> = old.lines().collect();
+    let new_l: Vec<&str> = new.lines().collect();
+    let max_len = old_l.len().max(new_l.len());
+    (0..max_len).filter(|i| old_l.get(*i) != new_l.get(*i)).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +319,55 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, PatchError::NotFound { .. }));
+    }
+
+    #[test]
+    fn validates_small_surgical_edit() {
+        let limits = PatchLimits::default();
+        let v = validate_patch_edits(
+            &[PatchEdit {
+                old_text: "foreach ($projectUids as $projectUuid)".into(),
+                new_text: "foreach ($projectUuids as $projectUuid)".into(),
+            }],
+            limits,
+        );
+        assert!(v.violations.is_empty());
+        assert_eq!(v.metrics[0].old_lines, 1);
+    }
+
+    #[test]
+    fn rejects_oversized_old_text() {
+        let big = (0..30).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let v = validate_patch_edits(
+            &[PatchEdit {
+                old_text: big.clone(),
+                new_text: big,
+            }],
+            PatchLimits::default(),
+        );
+        assert!(v.violations.iter().any(|m| m.contains("old_text is 30 lines")));
+    }
+
+    #[test]
+    fn rejects_likely_rewrite() {
+        let old = (0..10)
+            .map(|i| format!("    stmt_{i}();"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new = (0..10)
+            .map(|i| format!("    new_stmt_{i}();"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let v = validate_patch_edits(
+            &[PatchEdit {
+                old_text: old,
+                new_text: new,
+            }],
+            PatchLimits {
+                max_old_lines: 20,
+                ..PatchLimits::default()
+            },
+        );
+        assert!(v.violations.iter().any(|m| m.contains("block rewrite")));
     }
 }

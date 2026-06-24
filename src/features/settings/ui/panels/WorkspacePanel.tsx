@@ -4,6 +4,7 @@ import { I } from '@shared/ui';
 import {
   DEFAULT_WORKSPACE_SETTINGS,
   type ApplyPolicy,
+  type PatchPolicy,
   type WorkspaceSettings,
 } from '@shared/lib/chatContext';
 import {
@@ -27,6 +28,24 @@ const POLICIES: { id: ApplyPolicy; label: string; hint: string }[] = [
     id: 'allow_list_only',
     label: 'Allow-list only',
     hint: 'Writes only to allowed paths',
+  },
+];
+
+const PATCH_POLICIES: { id: PatchPolicy; label: string; hint: string }[] = [
+  {
+    id: 'strict',
+    label: 'Strict (minimal patches)',
+    hint: 'Reject oversized apply_patch edits — agent must narrow old_text',
+  },
+  {
+    id: 'warn',
+    label: 'Warn only',
+    hint: 'Apply large patches but return size warnings',
+  },
+  {
+    id: 'off',
+    label: 'Off',
+    hint: 'No size limits on apply_patch',
   },
 ];
 
@@ -116,6 +135,40 @@ export function WorkspacePanel() {
             }
           />
         ))}
+      </Group>
+
+      <Group title="Patch size (apply_patch)">
+        {PATCH_POLICIES.map((p) => (
+          <SettingRow
+            key={p.id}
+            label={p.label}
+            hint={p.hint}
+            control={
+              <input
+                type="radio"
+                name="patchPolicy"
+                checked={(draft.patchPolicy ?? 'strict') === p.id}
+                onChange={() => update({ patchPolicy: p.id })}
+              />
+            }
+          />
+        ))}
+        <SettingRow
+          label="Max old_text lines"
+          hint="Per edit in strict/warn mode (default 15)"
+          control={
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={draft.patchMaxLines ?? 15}
+              onChange={(e) =>
+                update({ patchMaxLines: Math.max(1, parseInt(e.target.value, 10) || 15) })
+              }
+              style={{ ...inputStyle, width: 72 }}
+            />
+          }
+        />
       </Group>
 
       <Group title="Allow list">
