@@ -18,16 +18,40 @@ pub fn normalize_rel(path: &str) -> String {
         .to_string()
 }
 
-pub fn ensure_readable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<String> {
+fn path_in_folder_scope(path: &str, scope: &str) -> bool {
+    path == scope || path.starts_with(&format!("{scope}/"))
+}
+
+/// When folder scope is `test/foo`, accept `index.html` → `test/foo/index.html`.
+pub fn resolve_path_in_scope(scope: Option<&str>, rel: &str) -> String {
     let path = normalize_rel(rel);
+    let Some(scope) = scope.map(normalize_rel).filter(|s| !s.is_empty()) else {
+        return path;
+    };
+    let scope = scope.trim_end_matches('/');
+    if path_in_folder_scope(&path, scope) {
+        return path;
+    }
+    // Model often passes a filename or `./sub/file` relative to the scoped folder.
+    if !path.contains('/') || path.starts_with("./") {
+        let candidate = format!("{scope}/{}", path.trim_start_matches("./"));
+        if path_in_folder_scope(&candidate, scope) {
+            return candidate;
+        }
+    }
+    path
+}
+
+pub fn ensure_readable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<String> {
+    let path = resolve_path_in_scope(ctx.scope_prefix().as_deref(), rel);
     if path.is_empty() {
         return Err(AppError::Validation("path is required".into()));
     }
     if let Some(scope) = ctx.scope_prefix() {
         let scope = scope.trim_end_matches('/');
-        if path != scope && !path.starts_with(&format!("{scope}/")) {
+        if !path_in_folder_scope(&path, scope) {
             return Err(AppError::Validation(format!(
-                "path `{path}` is outside folder scope `{scope}`"
+                "path `{path}` is outside folder scope `{scope}` (use a path under the scoped folder or a bare filename)"
             )));
         }
     }
@@ -45,10 +69,10 @@ pub fn ensure_readable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<
 }
 
 pub fn ensure_listable_path(ctx: &ToolExecutionContext, rel: &str) -> AppResult<String> {
-    let path = normalize_rel(rel);
+    let path = resolve_path_in_scope(ctx.scope_prefix().as_deref(), rel);
     if let Some(scope) = ctx.scope_prefix() {
         let scope = scope.trim_end_matches('/');
-        if !path.is_empty() && path != scope && !path.starts_with(&format!("{scope}/")) {
+        if !path.is_empty() && !path_in_folder_scope(&path, scope) {
             return Err(AppError::Validation(format!(
                 "path `{path}` is outside folder scope `{scope}`"
             )));
@@ -102,4 +126,21 @@ pub fn cap_tool_text(text: &str) -> (String, bool) {
     }
     let truncated: String = chars.into_iter().take(MAX_TOOL_OUTPUT_CHARS).collect();
     (format!("{truncated}\n… (output truncated)"), true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_bare_filename_in_folder_scope() {
+        let path = resolve_path_in_scope(Some("test/qwen_test"), "index.html");
+        assert_eq!(path, "test/qwen_test/index.html");
+    }
+
+    #[test]
+    fn keeps_full_path_when_already_under_scope() {
+        let path = resolve_path_in_scope(Some("test/qwen_test"), "test/qwen_test/index.html");
+        assert_eq!(path, "test/qwen_test/index.html");
+    }
 }

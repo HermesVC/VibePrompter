@@ -29,7 +29,8 @@ You can inspect and edit the project with these tools (declare via tool_call blo
 - `write_file` — create a **new** file only (`path`, `content`). Fails if file exists — then use apply_patch.
 - `run_verify` — deterministic check after edits (`kind`: file_contains | file_not_contains | php_lint | cargo_check | vitest, plus `path` / `needle` / `manifest`)
 
-Use relative paths from the workspace root. Prefer `read_file` before editing existing files.
+Use relative paths from the workspace root. In **folder scope**, you may pass a bare filename (`index.html`) or the full path (`test/foo/index.html`).
+Prefer `read_file` before editing existing files.
 **New vs existing:** `list_dir` first if unsure. **New path** → `write_file`. **Existing path** → `read_file` then `apply_patch`. Never use apply_patch with empty old_text to create a file.
 **Patch sizing:** prefer the smallest unique `old_text` (often 1–3 lines for typos). Multi-line `old_text` is fine when the fix genuinely spans a case block, method, or branch — include enough context that the anchor is unique once in the file.
 Do not paste a whole file unless creating a new one. Split unrelated fixes into separate apply_patch calls.
@@ -65,8 +66,8 @@ BAD — whole file or entire class in one old_text on an **existing** file (spli
 
 ### Creating NEW files (scaffold, index.html, new modules)
 
-GOOD — new file via write_file:
-<|tool_call|>call:write_file{path:test/qwen_test/index.html,content:<!DOCTYPE html>\n<html>...</html>}</|tool_call|>
+GOOD — new file via write_file (quote content when it contains commas or HTML tags):
+<|tool_call|>call:write_file{path:index.html,content:"<!DOCTYPE html>\n<html><body>ok</body></html>"}</|tool_call|>
 
 BAD — apply_patch on non-existent file or empty old_text:
 <|tool_call|>call:apply_patch{path:test/new.html,old_text:,new_text:...}</|tool_call|>

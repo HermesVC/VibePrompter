@@ -56,6 +56,7 @@ import {
 import {
   applyWorkspaceWrite,
   getWorkspaceSettings,
+  loadFolderScope,
   previewWorkspaceWrite,
   readWorkspaceFile,
   saveWorkspaceSettings,
@@ -482,6 +483,36 @@ export function ChatWindow() {
     []
   );
 
+  const refreshFolderScope = useCallback(async () => {
+    const scope = chatContextRef.current.scope;
+    if (scope.kind !== 'folder') return;
+    try {
+      const bundle = await loadFolderScope(scope.path, 12_000);
+      setChatContext((prev) =>
+        prev.scope.kind === 'folder'
+          ? {
+              ...prev,
+              scope: {
+                kind: 'folder',
+                path: bundle.path,
+                treeSummary: bundle.treeSummary,
+                outlineSummary: bundle.outlineSummary,
+                files: bundle.files.map((f) => ({
+                  path: f.path,
+                  content: f.content,
+                  contentHash: f.contentHash,
+                  languageId: f.languageId,
+                })),
+                truncated: bundle.truncated,
+              },
+            }
+          : prev
+      );
+    } catch {
+      /* best-effort — scope bar may stay stale until manual re-attach */
+    }
+  }, []);
+
   const processScopedCompletion = useCallback(
     (payload: { scopedText?: string; text: string }) => {
       const planSummary = extractPlanStepSummary(payload.text);
@@ -495,13 +526,22 @@ export function ChatWindow() {
         payload.text,
         chatContextRef.current.scope
       );
-      if (!artifacts.length) return;
-      void indexContextArtifacts(sessionIdRef.current, artifacts, {
-        connectionId: connectionId || undefined,
-        modeId: modeId ?? undefined,
-      }).catch(() => {});
+      if (artifacts.length) {
+        void indexContextArtifacts(sessionIdRef.current, artifacts, {
+          connectionId: connectionId || undefined,
+          modeId: modeId ?? undefined,
+        }).catch(() => {});
+      }
+      if (
+        chatContextRef.current.scope.kind === 'folder' &&
+        (payload.text.includes('[Tool result:') ||
+          payload.text.includes('Created ') ||
+          artifacts.length > 0)
+      ) {
+        void refreshFolderScope();
+      }
     },
-    [connectionId, modeId]
+    [connectionId, modeId, refreshFolderScope]
   );
 
   const rememberAppliedContextArtifacts = useCallback(
@@ -598,9 +638,15 @@ export function ChatWindow() {
         };
       }
       if (prev.scope.kind === 'folder') {
-        const files = prev.scope.files.map((f) =>
-          f.path === path ? { ...f, content, contentHash } : f
-        );
+        const existing = prev.scope.files.find((f) => f.path === path);
+        const files = existing
+          ? prev.scope.files.map((f) =>
+              f.path === path ? { ...f, content, contentHash } : f
+            )
+          : [
+              ...prev.scope.files,
+              { path, content, contentHash, languageId: undefined },
+            ];
         return { ...prev, scope: { ...prev.scope, files } };
       }
       return prev;
@@ -845,6 +891,7 @@ export function ChatWindow() {
                   : m
               )
             );
+            void refreshFolderScope();
             const inner = extractPlanStepSummary(result.finalText);
             if (inner) {
               void indexPlanStepSummary(sessionIdRef.current, inner, {

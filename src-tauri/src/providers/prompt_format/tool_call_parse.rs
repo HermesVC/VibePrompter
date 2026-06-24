@@ -128,6 +128,10 @@ fn parse_call_segment(segment: &str) -> Option<ParsedToolCall> {
         if let Some(fixed) = parse_apply_patch_relaxed_body(args) {
             arguments = fixed;
         }
+    } else if name == "write_file" {
+        if let Some(fixed) = parse_write_file_relaxed_body(args) {
+            arguments = fixed;
+        }
     }
     Some(ParsedToolCall {
         name: name.to_string(),
@@ -394,13 +398,25 @@ fn file_patch_fence_to_call(header: &str, content: &str) -> Option<ParsedToolCal
             }),
         });
     }
-    let (old_text, new_text) = parse_old_new_fields(content)?;
+    if let Some((old_text, new_text)) = parse_old_new_fields(content) {
+        return Some(ParsedToolCall {
+            name: "apply_patch".into(),
+            arguments: serde_json::json!({
+                "path": path,
+                "old_text": old_text,
+                "new_text": new_text,
+            }),
+        });
+    }
+    let body = content.trim();
+    if body.is_empty() {
+        return None;
+    }
     Some(ParsedToolCall {
-        name: "apply_patch".into(),
+        name: "write_file".into(),
         arguments: serde_json::json!({
             "path": path,
-            "old_text": old_text,
-            "new_text": new_text,
+            "content": body,
         }),
     })
 }
@@ -477,6 +493,34 @@ fn strip_optional_code_fence(s: &str) -> String {
     s.to_string()
 }
 
+/// `write_file{path:…,content:…}` — HTML/CSS often contains commas; take content to end of args.
+fn parse_write_file_relaxed_body(body: &str) -> Option<Value> {
+    let inner = body.trim().trim_start_matches('{').trim_end_matches('}').trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let lower = inner.to_ascii_lowercase();
+    let content_pos = lower.find("content:")?;
+    let path = extract_relaxed_path_prefix(&inner[..content_pos])?;
+    let content_start = content_pos + "content:".len();
+    let content = unquote_relaxed_field(inner[content_start..].trim().trim_end_matches('}'));
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "path": path, "content": content }))
+}
+
+fn extract_relaxed_path_prefix(prefix: &str) -> Option<String> {
+    let prefix = prefix.trim().trim_end_matches(',');
+    if let Some(rest) = prefix.strip_prefix("path:") {
+        let path = unquote_relaxed_field(rest.trim());
+        if !path.is_empty() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// `apply_patch{path:…,old_text:…,new_text:…}` — commas inside unquoted old/new are common.
 fn parse_apply_patch_relaxed_body(body: &str) -> Option<Value> {
     let inner = body.trim().trim_start_matches('{').trim_end_matches('}').trim();
@@ -509,14 +553,7 @@ fn parse_apply_patch_relaxed_body(body: &str) -> Option<Value> {
 }
 
 fn extract_apply_patch_path(prefix: &str) -> Option<String> {
-    let prefix = prefix.trim().trim_end_matches(',');
-    if let Some(rest) = prefix.strip_prefix("path:") {
-        let path = unquote_relaxed_field(rest.trim());
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-    None
+    extract_relaxed_path_prefix(prefix)
 }
 
 fn unquote_relaxed_field(raw: &str) -> String {
@@ -952,6 +989,37 @@ foreach ($projectUuids as $projectUuid) {
             calls[0].arguments["new_text"],
             "foreach ($projectUuids as $id) {"
         );
+    }
+
+    #[test]
+    fn parses_write_file_with_commas_in_html_content() {
+        let calls = parse_all_tool_calls(
+            r#"<|tool_call|>call:write_file{path:test/qwen_test/index.html,content:<!DOCTYPE html>
+<html><head><title>Hi</title></head><body style="margin:0;color:#333"><h1>Live Stub</h1></body></html>}</|tool_call|>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write_file");
+        assert_eq!(calls[0].arguments["path"], "test/qwen_test/index.html");
+        let content = calls[0].arguments["content"].as_str().unwrap_or("");
+        assert!(content.contains("<!DOCTYPE html>"));
+        assert!(content.contains("margin:0"));
+        assert!(content.contains("Live Stub"));
+    }
+
+    #[test]
+    fn parses_file_fence_body_as_write_file_for_new_file() {
+        let calls = parse_all_tool_calls(
+            r#"```file:test/qwen_test/index.html
+<!DOCTYPE html>
+<html><body><h1>ok</h1></body></html>
+```"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write_file");
+        assert!(calls[0].arguments["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("<h1>ok</h1>"));
     }
 
     #[test]

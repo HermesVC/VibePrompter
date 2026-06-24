@@ -235,7 +235,7 @@ where
         final_text = result.text.clone();
         steps_executed += 1;
 
-        let step_status = parse_step_result(&result.text)
+        let mut step_status = parse_step_result(&result.text)
             .filter(|r| r.step_id == step.id)
             .map(|r| {
                 if !r.summary.is_empty() {
@@ -243,7 +243,16 @@ where
                 }
                 r.status
             })
-            .unwrap_or(StepStatus::Done);
+            .unwrap_or_else(|| {
+                if tool_results_indicate_failure(&result.text) {
+                    StepStatus::Failed
+                } else {
+                    StepStatus::Done
+                }
+            });
+        if tool_results_indicate_failure(&result.text) {
+            step_status = StepStatus::Failed;
+        }
 
         let mut verify_ok = None;
         let mut verify_message = None;
@@ -312,6 +321,8 @@ where
         }
 
         let terminal_status = if step_status == StepStatus::Failed {
+            StepStatus::Failed
+        } else if tool_results_indicate_failure(&result.text) {
             StepStatus::Failed
         } else if verify_ok == Some(false) {
             StepStatus::Failed
@@ -494,6 +505,17 @@ fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
 
 fn preview(text: &str) -> String {
     text.chars().take(400).collect()
+}
+
+/// Assistant turn included at least one failed tool execution.
+fn tool_results_indicate_failure(text: &str) -> bool {
+    text.split("[Tool result:")
+        .skip(1)
+        .any(|chunk| {
+            chunk.contains("ERROR:")
+                || chunk.contains("\"ok\": false")
+                || chunk.contains("\"ok\":false")
+        })
 }
 
 fn cancelled_result(
