@@ -8,6 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::Duration;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -19,6 +20,9 @@ use crate::models::{
 use crate::utils::AppError;
 
 const MAX_AUTO_CONTINUES: usize = 3;
+/// LLM memory compression before the main completion — fail fast so a missing model cannot block for minutes.
+const MEMORY_COMPRESS_TIMEOUT: Duration = Duration::from_secs(12);
+const CONTEXT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTINUATION_TAIL_CHARS: usize = 6_000;
 const STITCH_OVERLAP_CHARS: usize = 2_000;
 
@@ -198,10 +202,18 @@ where
     let mut input_estimate_first = 0u32;
     let mut input_estimate_final = 0u32;
 
-    let _permit = state.connections.acquire_permit().await;
     let mut result: Result<CompletionResult, AppError> =
         Err(AppError::Validation("chat stream did not run".into()));
     let mut degrade_used_for_recovery = crate::chat::DegradeLevel::Normal;
+    let mut skip_memory_commit = false;
+
+    events.status(ChatRunStatus {
+        phase: "preparing".into(),
+        generation: stream_generation,
+        kind: None,
+        attempt: None,
+        message: Some("Building context…".into()),
+    });
 
     while degrade <= crate::chat::DegradeLevel::Anchor {
         if cancel_flag.load(Ordering::SeqCst) {
@@ -301,74 +313,10 @@ where
         };
         evicted_count = window_plan.evicted.len() as u32;
 
-        if !request.disable_rolling_memory
-            && crate::chat::session_memory_needs_compression(&memory, context_limit)
-        {
-            events.status(ChatRunStatus {
-                phase: "compressing_memory".into(),
-                generation: stream_generation,
-                kind: Some("rolling".into()),
-                attempt: None,
-                message: None,
-            });
-            match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await {
-                Ok(compressed) => {
-                    memory = compressed;
-                    memory_compressed = true;
-                }
-                Err(e) => {
-                    tracing::warn!("rolling memory compression failed: {e}");
-                    memory = crate::chat::fallback_compress_session_memory(&memory, context_limit);
-                    memory_compressed = true;
-                }
-            }
-            emit_chat_memory_update(events, &memory, context_limit);
-        }
-
-        let evicted_for_compression: Vec<ChatMessage> = window_plan
-            .evicted
-            .iter()
-            .filter(|m| !compressed_evicted_keys.contains(&message_memory_key(m)))
-            .cloned()
-            .collect();
-
-        if !request.disable_rolling_memory && !evicted_for_compression.is_empty() {
-            events.status(ChatRunStatus {
-                phase: "compressing_memory".into(),
-                generation: stream_generation,
-                kind: None,
-                attempt: None,
-                message: None,
-            });
-            match crate::chat::compress_evicted_turns(
-                &row,
-                &cfg,
-                &memory,
-                &evicted_for_compression,
-                context_limit,
-            )
-            .await
+        if !skip_memory_commit {
+            if !request.disable_rolling_memory
+                && crate::chat::session_memory_needs_compression(&memory, context_limit)
             {
-                Ok(merged) => {
-                    memory = merged;
-                    memory_compressed = true;
-                }
-                Err(e) => {
-                    tracing::warn!("memory compression failed: {e}, using truncated fallback");
-                    memory = crate::chat::fallback_merge_memory(
-                        &memory,
-                        &evicted_for_compression,
-                        context_limit,
-                    );
-                    memory_compressed = true;
-                }
-            }
-            for m in &evicted_for_compression {
-                compressed_evicted_keys.insert(message_memory_key(m));
-            }
-            emit_chat_memory_update(events, &memory, context_limit);
-
-            if crate::chat::session_memory_needs_compression(&memory, context_limit) {
                 events.status(ChatRunStatus {
                     phase: "compressing_memory".into(),
                     generation: stream_generation,
@@ -376,40 +324,74 @@ where
                     attempt: None,
                     message: None,
                 });
-                match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await
-                {
-                    Ok(compressed) => {
-                        memory = compressed;
-                        memory_compressed = true;
-                    }
-                    Err(e) => {
-                        tracing::warn!("rolling memory post-merge compression failed: {e}");
-                        memory =
-                            crate::chat::fallback_compress_session_memory(&memory, context_limit);
-                        memory_compressed = true;
-                    }
-                }
+                memory = compress_session_memory_timed(&row, &cfg, &memory, context_limit).await;
+                memory_compressed = true;
                 emit_chat_memory_update(events, &memory, context_limit);
             }
-        }
 
-        if !request.disable_vector_retrieval
-            && !window_plan.evicted.is_empty()
-            && !session_id.trim().is_empty()
-            && crate::chat::index_evicted_messages(
-                &state.chat_memory,
-                &row,
-                &cfg,
-                &session_id,
-                &window_plan.evicted,
-                &mut indexed_chunk_hashes,
-            )
-            .await
-        {
-            vector_memory_compressed = true;
-            vector_chunks_indexed =
-                vector_chunks_indexed.saturating_add(window_plan.evicted.len() as u32);
+            let evicted_for_compression: Vec<ChatMessage> = window_plan
+                .evicted
+                .iter()
+                .filter(|m| !compressed_evicted_keys.contains(&message_memory_key(m)))
+                .cloned()
+                .collect();
+
+            if !request.disable_rolling_memory && !evicted_for_compression.is_empty() {
+                events.status(ChatRunStatus {
+                    phase: "compressing_memory".into(),
+                    generation: stream_generation,
+                    kind: None,
+                    attempt: None,
+                    message: None,
+                });
+                memory = compress_evicted_turns_timed(
+                    &row,
+                    &cfg,
+                    &memory,
+                    &evicted_for_compression,
+                    context_limit,
+                )
+                .await;
+                memory_compressed = true;
+                for m in &evicted_for_compression {
+                    compressed_evicted_keys.insert(message_memory_key(m));
+                }
+                emit_chat_memory_update(events, &memory, context_limit);
+
+                if crate::chat::session_memory_needs_compression(&memory, context_limit) {
+                    events.status(ChatRunStatus {
+                        phase: "compressing_memory".into(),
+                        generation: stream_generation,
+                        kind: Some("rolling".into()),
+                        attempt: None,
+                        message: None,
+                    });
+                    memory =
+                        compress_session_memory_timed(&row, &cfg, &memory, context_limit).await;
+                    memory_compressed = true;
+                    emit_chat_memory_update(events, &memory, context_limit);
+                }
+            }
+
+            if !request.disable_vector_retrieval
+                && !window_plan.evicted.is_empty()
+                && !session_id.trim().is_empty()
+                && crate::chat::index_evicted_messages(
+                    &state.chat_memory,
+                    &row,
+                    &cfg,
+                    &session_id,
+                    &window_plan.evicted,
+                    &mut indexed_chunk_hashes,
+                )
+                .await
+            {
+                vector_memory_compressed = true;
+                vector_chunks_indexed =
+                    vector_chunks_indexed.saturating_add(window_plan.evicted.len() as u32);
+            }
         }
+        skip_memory_commit = false;
 
         retrieved_preview = if retrieved_block.is_empty() {
             None
@@ -433,6 +415,7 @@ where
             if let Some(next) = degrade.next() {
                 degrade = next;
                 degrade_used_for_recovery = degrade;
+                skip_memory_commit = true;
                 tracing::warn!(
                     "post-memory context degrade → {} (estimate={final_input_estimate})",
                     degrade.label()
@@ -468,6 +451,15 @@ where
             disable_thinking: tools_active.then_some(true),
             ..Default::default()
         };
+
+        events.status(ChatRunStatus {
+            phase: "provider_wait".into(),
+            generation: stream_generation,
+            kind: None,
+            attempt: None,
+            message: Some("Waiting for provider slot".into()),
+        });
+        let _permit = acquire_provider_permit(state, cancel_flag.clone()).await?;
 
         let mut stream_out = complete_stream_with_auto_continue(
             events,
@@ -1089,16 +1081,76 @@ async fn resolve_context_limit(
 ) -> i64 {
     let configured = row.context_window_size;
     let fallback = if configured > 0 { configured } else { 8192 };
-    if let Some(probed) = crate::providers::lmstudio::probe_context_length(&row.base_url, cfg).await
+    match tokio::time::timeout(
+        CONTEXT_PROBE_TIMEOUT,
+        crate::providers::lmstudio::probe_context_length(&row.base_url, cfg),
+    )
+    .await
     {
-        tracing::debug!("context probe: {probed} (configured {configured})");
-        if configured > 0 {
-            probed.min(configured)
-        } else {
-            probed
+        Ok(Some(probed)) => {
+            tracing::debug!("context probe: {probed} (configured {configured})");
+            if configured > 0 {
+                probed.min(configured)
+            } else {
+                probed
+            }
         }
-    } else {
-        fallback
+        Ok(None) | Err(_) => fallback,
+    }
+}
+
+async fn compress_session_memory_timed(
+    row: &crate::storage::repositories::ConnectionRow,
+    cfg: &crate::providers::HttpConfig,
+    memory: &str,
+    context_limit: i64,
+) -> String {
+    match tokio::time::timeout(
+        MEMORY_COMPRESS_TIMEOUT,
+        crate::chat::compress_session_memory(row, cfg, memory, context_limit),
+    )
+    .await
+    {
+        Ok(Ok(compressed)) => compressed,
+        Ok(Err(e)) => {
+            tracing::warn!("rolling memory compression failed: {e}");
+            crate::chat::fallback_compress_session_memory(memory, context_limit)
+        }
+        Err(_) => {
+            tracing::warn!(
+                "rolling memory compression timed out after {}s; using fallback",
+                MEMORY_COMPRESS_TIMEOUT.as_secs()
+            );
+            crate::chat::fallback_compress_session_memory(memory, context_limit)
+        }
+    }
+}
+
+async fn compress_evicted_turns_timed(
+    row: &crate::storage::repositories::ConnectionRow,
+    cfg: &crate::providers::HttpConfig,
+    memory: &str,
+    evicted: &[ChatMessage],
+    context_limit: i64,
+) -> String {
+    match tokio::time::timeout(
+        MEMORY_COMPRESS_TIMEOUT,
+        crate::chat::compress_evicted_turns(row, cfg, memory, evicted, context_limit),
+    )
+    .await
+    {
+        Ok(Ok(merged)) => merged,
+        Ok(Err(e)) => {
+            tracing::warn!("memory compression failed: {e}, using truncated fallback");
+            crate::chat::fallback_merge_memory(memory, evicted, context_limit)
+        }
+        Err(_) => {
+            tracing::warn!(
+                "evicted memory compression timed out after {}s; using fallback",
+                MEMORY_COMPRESS_TIMEOUT.as_secs()
+            );
+            crate::chat::fallback_merge_memory(memory, evicted, context_limit)
+        }
     }
 }
 
@@ -1136,6 +1188,28 @@ fn effective_chat_max_tokens(mode_floor: i64, input_estimate: u32, context_limit
     let scaled = ((f64::from(input_estimate)) * 1.25).ceil() as i64;
     let floor = mode_floor.max(512);
     floor.max(scaled).min(remaining).min(16_000).max(256) as u32
+}
+
+async fn acquire_provider_permit(
+    state: &AppState,
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+    let mut acquire = Box::pin(state.connections.acquire_permit());
+    let mut timeout = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(15)));
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AppError::Validation("cancelled".into()));
+        }
+        tokio::select! {
+            permit = &mut acquire => return Ok(permit),
+            _ = &mut timeout => {
+                return Err(AppError::Validation(
+                    "provider is busy; previous generation is still running or stuck".into(),
+                ));
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+    }
 }
 
 fn is_cancelled_err(e: &AppError) -> bool {

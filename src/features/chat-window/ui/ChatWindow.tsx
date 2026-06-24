@@ -102,7 +102,14 @@ interface DonePayload {
 }
 
 interface StatusPayload {
-  phase: 'recovering' | 'continuing' | 'compressing_memory' | 'tools' | 'provider_retry';
+  phase:
+    | 'preparing'
+    | 'recovering'
+    | 'continuing'
+    | 'compressing_memory'
+    | 'tools'
+    | 'provider_retry'
+    | 'provider_wait';
   generation?: number;
   attempt?: number;
   kind?: 'rolling' | 'vector';
@@ -768,7 +775,7 @@ export function ChatWindow() {
       setIsRecoveringContext(false);
       setIsContinuingOutput(false);
       setProviderRetryWarning(null);
-      setMemoryDebugLabel('Vector memory: checking...');
+      setMemoryDebugLabel('Preparing request...');
       setTokenUsage(null);
       setStreaming(true);
 
@@ -801,9 +808,17 @@ export function ChatWindow() {
                 );
                 return;
               }
+              if (payload.phase === 'preparing') {
+                setMemoryDebugLabel(payload.message?.trim() || 'Building context…');
+                return;
+              }
               if (payload.phase === 'compressing_memory') {
                 const kind = payload.kind === 'vector' ? 'vector' : 'rolling';
                 setMemoryDebugLabel(`Memory compression: ${kind}`);
+                return;
+              }
+              if (payload.phase === 'provider_wait') {
+                setMemoryDebugLabel(payload.message?.trim() || 'Waiting for provider slot...');
                 return;
               }
               if (payload.phase === 'tools') {
@@ -930,9 +945,17 @@ export function ChatWindow() {
               );
               return;
             }
+            if (e.payload.phase === 'preparing') {
+              setMemoryDebugLabel(e.payload.message?.trim() || 'Building context…');
+              return;
+            }
             if (e.payload.phase === 'compressing_memory') {
               const kind = e.payload.kind === 'vector' ? 'vector' : 'rolling';
               setMemoryDebugLabel(`Memory compression: ${kind}`);
+              return;
+            }
+            if (e.payload.phase === 'provider_wait') {
+              setMemoryDebugLabel(e.payload.message?.trim() || 'Waiting for provider slot...');
               return;
             }
             if (e.payload.phase === 'tools') {
