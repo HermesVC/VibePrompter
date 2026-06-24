@@ -265,7 +265,7 @@ pub async fn compress_evicted_turns(
         turns
     );
 
-    super::memory_compress::compress_with_system_retries(
+    super::memory_compress::compress_with_system_preserving_facts(
         conn,
         cfg,
         &user_body,

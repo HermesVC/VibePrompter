@@ -354,4 +354,72 @@ mod tests {
             .iter()
             .any(|row| row.role == "decision" && row.content == "keep decision"));
     }
+
+    #[tokio::test]
+    async fn duplicate_hash_is_idempotent_per_session_but_not_global() {
+        let repo = repo().await;
+        repo.insert_chunk("s1", "user", "first", "same-hash", &[1.0, 0.0])
+            .await
+            .unwrap();
+        repo.insert_chunk("s1", "user", "duplicate ignored", "same-hash", &[0.0, 1.0])
+            .await
+            .unwrap();
+        repo.insert_chunk(
+            "s2",
+            "user",
+            "same hash other session",
+            "same-hash",
+            &[0.0, 1.0],
+        )
+        .await
+        .unwrap();
+
+        let s1 = repo.list_session_chunks("s1").await.unwrap();
+        let s2 = repo.list_session_chunks("s2").await.unwrap();
+
+        assert_eq!(s1.len(), 1);
+        assert_eq!(s1[0].content, "first");
+        assert_eq!(s2.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_latest_rows_only_within_target_session() {
+        let repo = repo().await;
+        for i in 0..5 {
+            repo.insert_chunk("s1", "user", &format!("old-{i}"), &format!("h-{i}"), &[1.0])
+                .await
+                .unwrap();
+        }
+        repo.insert_chunk("other", "user", "keep", "other-hash", &[1.0])
+            .await
+            .unwrap();
+
+        repo.prune_session("s1", 2).await.unwrap();
+
+        let s1 = repo.list_session_chunks("s1").await.unwrap();
+        let other = repo.list_session_chunks("other").await.unwrap();
+        assert_eq!(
+            s1.iter()
+                .map(|row| row.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["old-3", "old-4"]
+        );
+        assert_eq!(other.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_session_chunks_rejects_corrupt_embedding_blob() {
+        let repo = repo().await;
+        sqlx::query(
+            "INSERT INTO chat_memory_chunks
+             (session_id, role, content, content_hash, embedding, dims)
+             VALUES ('s1', 'user', 'bad', 'bad-hash', x'000000', 2)",
+        )
+        .execute(&repo.pool)
+        .await
+        .unwrap();
+
+        let err = repo.list_session_chunks("s1").await.unwrap_err();
+        assert!(err.to_string().contains("invalid embedding blob"));
+    }
 }

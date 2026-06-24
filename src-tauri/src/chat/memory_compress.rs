@@ -6,6 +6,7 @@ use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
 use super::context_recovery::{is_context_overflow_error, looks_like_context_failure};
+use super::memory_facts::{merge_compressed_memory, split_memory_facts};
 use super::session_summary::{summary_budget_chars, trim_to_char_budget};
 
 /// Retained size after one compression pass (70% reduction).
@@ -67,9 +68,14 @@ pub fn fallback_compress_text(source: &str, context_limit: i64) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
+    let facts = split_memory_facts(trimmed);
     let budget = summary_budget_chars(context_limit);
-    let target = compression_target_chars(trimmed.chars().count()).min(budget);
-    trim_to_char_budget(trimmed, target)
+    let target = compression_target_chars(facts.narrative.chars().count()).min(budget);
+    let narrative = trim_to_char_budget(&facts.narrative, target);
+    trim_to_char_budget(
+        &merge_compressed_memory(&facts, &narrative, context_limit),
+        budget,
+    )
 }
 
 /// Shared LLM pass with retries when the compress prompt overflows context or returns empty.
@@ -81,11 +87,68 @@ pub async fn compress_text_via_llm(
     context_limit: i64,
 ) -> AppResult<String> {
     let system = "You compress long-term memory for an ongoing session.\n\
-You receive FULL_MEMORY — the entire current extract.\n\
-Write a shorter version keeping essential facts: topics, decisions, names, preferences, open tasks, plan progress, bugs.\n\
+You receive FULL_MEMORY — narrative memory only. Atomic facts were removed and will be merged back outside the model.\n\
+Write a shorter narrative keeping topics, names, preferences, open tasks, and bugs.\n\
+Do not invent or restate PLAN_CANONICAL, DECISION, REPO, path, or PLAN_PROGRESS facts.\n\
 Drop filler and repetition. Target length: about TARGET characters (~30% of the input).\n\
 Use the same language as the source. Output ONLY the compressed memory — no markdown, no labels.\n";
-    compress_with_system_retries(conn, cfg, source, target_chars, context_limit, system, true).await
+    compress_with_system_preserving_facts(
+        conn,
+        cfg,
+        source,
+        target_chars,
+        context_limit,
+        system,
+        true,
+    )
+    .await
+}
+
+pub async fn compress_with_system_preserving_facts(
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    source: &str,
+    target_chars: usize,
+    context_limit: i64,
+    system: &str,
+    wrap_as_full_memory: bool,
+) -> AppResult<String> {
+    let facts = split_memory_facts(source);
+    if facts.atoms.is_empty() {
+        return compress_with_system_retries(
+            conn,
+            cfg,
+            source,
+            target_chars,
+            context_limit,
+            system,
+            wrap_as_full_memory,
+        )
+        .await;
+    }
+
+    let narrative = facts.narrative.trim();
+    if narrative.is_empty() {
+        return Ok(trim_to_char_budget(
+            &merge_compressed_memory(&facts, "", context_limit),
+            summary_budget_chars(context_limit),
+        ));
+    }
+
+    let compressed = compress_with_system_retries(
+        conn,
+        cfg,
+        narrative,
+        target_chars,
+        context_limit,
+        system,
+        wrap_as_full_memory,
+    )
+    .await?;
+    Ok(trim_to_char_budget(
+        &merge_compressed_memory(&facts, &compressed, context_limit),
+        summary_budget_chars(context_limit),
+    ))
 }
 
 /// Like [`compress_text_via_llm`] but caller supplies a custom system prompt and raw user body.
@@ -310,5 +373,19 @@ mod tests {
         assert!(!is_compress_retryable_error(&AppError::Validation(
             "invalid api key".into()
         )));
+    }
+
+    #[test]
+    fn fallback_compression_keeps_structured_facts_before_trimming_narrative() {
+        let source = format!(
+            "PLAN_CANONICAL v8\nstep: 8 / 12\nnext: tests\nDECISION: keep local Qwen\n{}",
+            "narrative ".repeat(5000)
+        );
+        let out = fallback_compress_text(&source, 8192);
+
+        assert!(out.contains("PLAN_CANONICAL v8"));
+        assert!(out.contains("DECISION: keep local Qwen"));
+        assert!(out.contains("## FACTS"));
+        assert!(out.chars().count() <= summary_budget_chars(8192));
     }
 }

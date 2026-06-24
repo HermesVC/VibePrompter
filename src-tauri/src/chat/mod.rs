@@ -7,6 +7,8 @@
 mod agent_tools;
 mod context_recovery;
 mod memory_compress;
+mod memory_facts;
+mod retrieval_policy;
 mod session_summary;
 mod sliding_window;
 mod vector_memory;

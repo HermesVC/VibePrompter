@@ -14,6 +14,7 @@ use super::memory_compress::{
     compress_text_via_llm, compression_target_chars, fallback_compress_text,
     MEMORY_PRESSURE_FRACTION,
 };
+use super::retrieval_policy::is_plan_continuation_query;
 
 const CHUNK_MAX_CHARS: usize = 700;
 const TOP_K: usize = 4;
@@ -703,6 +704,10 @@ pub async fn retrieve_relevant(
         }
     };
 
+    let plan_query = is_plan_continuation_query(query);
+    let latest_plan_canonical = latest_role_row(&stored, PLAN_CANONICAL_ROLE);
+    let canonical_reserved = plan_query && latest_plan_canonical.is_some();
+
     let max_id = stored.iter().map(|row| row.id).max().unwrap_or(0).max(1);
     let mut scored: Vec<(
         f32,
@@ -716,10 +721,21 @@ pub async fn retrieve_relevant(
             let semantic =
                 crate::storage::repositories::cosine_similarity(&query_emb, &row.embedding);
             let recent = (row.id as f32 / max_id as f32) * 0.02;
-            let adjusted = semantic + kind.priority_boost() + recent;
+            let canonical_boost = if row.role == PLAN_CANONICAL_ROLE && semantic > 0.05 {
+                0.15
+            } else {
+                0.0
+            };
+            let adjusted = semantic + kind.priority_boost() + recent + canonical_boost;
             Some((adjusted, semantic, kind, row))
         })
-        .filter(|(_, semantic, kind, _)| {
+        .filter(|(_, semantic, kind, row)| {
+            if canonical_reserved && row.role == "plan-step" {
+                return false;
+            }
+            if row.role == PLAN_CANONICAL_ROLE && (*semantic > 0.05 || plan_query) {
+                return true;
+            }
             *semantic >= MIN_RETRIEVAL_SCORE
                 || (kind.is_important() && *semantic >= IMPORTANT_RETRIEVAL_SCORE)
         })
@@ -731,30 +747,59 @@ pub async fn retrieve_relevant(
     let mut out = Vec::new();
     let mut seen = HashSet::new();
 
+    if let Some(row) = latest_plan_canonical.filter(|_| plan_query) {
+        if let Some(kind) = classify_memory(&row.role, &row.content) {
+            push_retrieved_row(row, kind, max_chars, &mut used, &mut seen, &mut out);
+        }
+    }
+
     for (_, _, kind, row) in scored {
         if out.len() >= TOP_K {
             break;
         }
-        let excerpt = compact_excerpt(&row.content, EXCERPT_MAX_CHARS);
-        if excerpt.is_empty() {
+        if canonical_reserved && row.role == "plan-step" {
             continue;
         }
-        if !seen.insert(normalized_dedupe_key(&excerpt)) {
-            continue;
-        }
-        let entry_len = excerpt.chars().count() + row.role.len() + kind.label().len() + 24;
-        if used + entry_len > max_chars && !out.is_empty() {
-            break;
-        }
-        used += entry_len;
-        out.push(RetrievedChunk {
-            role: row.role.clone(),
-            content: excerpt,
-            kind,
-        });
+        push_retrieved_row(row, kind, max_chars, &mut used, &mut seen, &mut out);
     }
 
     out
+}
+
+fn latest_role_row<'a>(rows: &'a [MemoryChunkRow], role: &str) -> Option<&'a MemoryChunkRow> {
+    rows.iter()
+        .filter(|row| row.role == role)
+        .max_by_key(|row| row.id)
+}
+
+fn push_retrieved_row(
+    row: &MemoryChunkRow,
+    kind: MemoryKind,
+    max_chars: usize,
+    used: &mut usize,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<RetrievedChunk>,
+) {
+    if out.len() >= TOP_K {
+        return;
+    }
+    let excerpt = compact_excerpt(&row.content, EXCERPT_MAX_CHARS);
+    if excerpt.is_empty() {
+        return;
+    }
+    if !seen.insert(normalized_dedupe_key(&excerpt)) {
+        return;
+    }
+    let entry_len = excerpt.chars().count() + row.role.len() + kind.label().len() + 24;
+    if *used + entry_len > max_chars && !out.is_empty() {
+        return;
+    }
+    *used += entry_len;
+    out.push(RetrievedChunk {
+        role: row.role.clone(),
+        content: excerpt,
+        kind,
+    });
 }
 
 pub fn format_retrieved_for_system(chunks: &[RetrievedChunk]) -> String {
@@ -1375,6 +1420,45 @@ mod tests {
         assert_eq!(preserved[0].role, "plan-canonical");
         assert_eq!(compressible.len(), 1);
         assert_eq!(compressible[0].content, "long narrative");
+    }
+
+    #[test]
+    fn latest_role_row_prefers_newest_plan_canonical() {
+        let chunks = vec![
+            MemoryChunkRow {
+                id: 1,
+                role: "plan-canonical".into(),
+                content: "PLAN_CANONICAL v1\nstep: 1 / 3".into(),
+                embedding: vec![1.0],
+            },
+            MemoryChunkRow {
+                id: 4,
+                role: "plan-canonical".into(),
+                content: "PLAN_CANONICAL v4\nstep: 4 / 5".into(),
+                embedding: vec![1.0],
+            },
+            MemoryChunkRow {
+                id: 5,
+                role: "plan-step".into(),
+                content: "PLAN_PROGRESS:\nstep: 2 / 5".into(),
+                embedding: vec![1.0],
+            },
+        ];
+
+        let latest = latest_role_row(&chunks, "plan-canonical").expect("latest");
+        assert!(latest.content.contains("v4"));
+    }
+
+    #[test]
+    fn retrieved_prompt_labels_canonical_as_plan_not_user() {
+        let out = format_retrieved_for_system(&[RetrievedChunk {
+            role: "plan-canonical".into(),
+            content: "PLAN_CANONICAL v2\nstep: 2 / 5".into(),
+            kind: MemoryKind::PlanProgress,
+        }]);
+
+        assert!(out.contains("[plan] Plan: PLAN_CANONICAL"));
+        assert!(!out.contains("User: PLAN_CANONICAL"));
     }
 
     #[test]
