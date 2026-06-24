@@ -102,6 +102,7 @@ pub async fn autonomous_run_stream(
             chat_context: input.chat_context,
             session_summary: input.session_summary,
             session_id: input.session_id,
+            ..Default::default()
         },
         config: input.config,
     };
@@ -204,6 +205,7 @@ pub async fn autonomous_debug_run(
             chat_context: input.chat_context,
             session_summary: input.session_summary,
             session_id: input.session_id,
+            ..Default::default()
         },
         config: input.config,
     };

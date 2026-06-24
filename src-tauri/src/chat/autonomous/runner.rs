@@ -9,15 +9,18 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    parse_all_step_results, parse_autonomous_plan, parse_step_result, AutonomousPlan, PlanStep,
-    StepStatus,
+    format_plan_for_prompt, parse_all_step_results, parse_autonomous_plan, parse_step_result,
+    AutonomousPlan, PlanStep, StepStatus,
 };
 use crate::chat::autonomous::prompts::{
-    completion_user_message, execution_user_message, planning_user_message, replan_user_message,
-    AUTONOMOUS_PROTOCOL,
+    completion_user_message, execution_user_message, planning_retry_user_message,
+    planning_user_message, replan_user_message, AUTONOMOUS_PROTOCOL,
 };
 use crate::workspace::{run_verify_spec, VerifyOutcome};
-use crate::chat::{run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus};
+use crate::chat::{
+    is_step_retriable_error, run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus,
+    DegradeLevel,
+};
 use crate::models::{ChatMessage, CompletionResult};
 use crate::utils::AppError;
 
@@ -138,27 +141,25 @@ where
             AutonomousPhase::Planning,
             Some("Creating execution plan…".into()),
         );
-        let planning_msg = wrap_with_protocol(&planning_user_message(&goal), Some(AUTONOMOUS_PROTOCOL));
+        let planning_msg =
+            wrap_with_protocol(&planning_user_message(&goal), Some(AUTONOMOUS_PROTOCOL));
         messages.push(ChatMessage {
             role: "user".into(),
             content: planning_msg,
             images: vec![],
         });
-        let result = run_autonomous_turn(
+        run_planning_turn(
             state,
             &request.base,
+            &config,
+            &goal,
             &mut messages,
             &mut session_summary,
             &cancel_flag,
             events,
+            &mut final_text,
         )
-        .await?;
-        final_text = result.text.clone();
-        parse_autonomous_plan(&result.text).ok_or_else(|| {
-            AppError::Validation(
-                "planning turn did not produce a valid <autonomous-plan>".into(),
-            )
-        })?
+        .await?
     } else {
         AutonomousPlan {
             steps: vec![PlanStep {
@@ -225,9 +226,12 @@ where
             images: vec![],
         });
 
-        let result = run_autonomous_turn(
+        let result = run_autonomous_turn_with_retry(
             state,
             &request.base,
+            &config,
+            &goal,
+            Some(&plan),
             &mut messages,
             &mut session_summary,
             &cancel_flag,
@@ -292,6 +296,8 @@ where
                                 if try_replan(
                                     state,
                                     &request.base,
+                                    &config,
+                                    &goal,
                                     &mut messages,
                                     &mut session_summary,
                                     &cancel_flag,
@@ -352,6 +358,8 @@ where
                 if try_replan(
                     state,
                     &request.base,
+                    &config,
+                    &goal,
                     &mut messages,
                     &mut session_summary,
                     &cancel_flag,
@@ -383,9 +391,12 @@ where
         content: completion_user_message(&plan),
         images: vec![],
     });
-    let completion = run_autonomous_turn(
+    let completion = run_autonomous_turn_with_retry(
         state,
         &request.base,
+        &config,
+        &goal,
+        Some(&plan),
         &mut messages,
         &mut session_summary,
         &cancel_flag,
@@ -407,6 +418,8 @@ where
 async fn try_replan<E>(
     state: &AppState,
     base: &ChatRunRequest,
+    config: &AutonomousRunConfig,
+    goal: &str,
     messages: &mut Vec<ChatMessage>,
     session_summary: &mut Option<String>,
     cancel_flag: &Arc<AtomicBool>,
@@ -428,9 +441,12 @@ where
         ),
         images: vec![],
     });
-    let result = run_autonomous_turn(
+    let result = run_autonomous_turn_with_retry(
         state,
         base,
+        config,
+        goal,
+        Some(plan),
         messages,
         session_summary,
         cancel_flag,
@@ -446,9 +462,81 @@ where
     }
 }
 
-async fn run_autonomous_turn<E>(
+async fn run_planning_turn<E>(
     state: &AppState,
     base: &ChatRunRequest,
+    config: &AutonomousRunConfig,
+    goal: &str,
+    messages: &mut Vec<ChatMessage>,
+    session_summary: &mut Option<String>,
+    cancel_flag: &Arc<AtomicBool>,
+    events: &mut E,
+    final_text: &mut String,
+) -> Result<AutonomousPlan, AppError>
+where
+    E: AutonomousRunEventSink + Send,
+{
+    let result = run_autonomous_turn_with_retry(
+        state,
+        base,
+        config,
+        goal,
+        None,
+        messages,
+        session_summary,
+        cancel_flag,
+        events,
+    )
+    .await?;
+    *final_text = result.text.clone();
+    if let Some(plan) = parse_autonomous_plan(&result.text) {
+        return Ok(plan);
+    }
+
+    tracing::warn!("planning: invalid plan, retrying with stricter prompt");
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: wrap_with_protocol(
+            &planning_retry_user_message(goal),
+            Some(AUTONOMOUS_PROTOCOL),
+        ),
+        images: vec![],
+    });
+    let result2 = run_autonomous_turn_with_retry(
+        state,
+        base,
+        config,
+        goal,
+        None,
+        messages,
+        session_summary,
+        cancel_flag,
+        events,
+    )
+    .await?;
+    *final_text = result2.text.clone();
+    if let Some(plan) = parse_autonomous_plan(&result2.text) {
+        return Ok(plan);
+    }
+
+    tracing::warn!("planning: fallback single-step plan for goal");
+    Ok(AutonomousPlan {
+        steps: vec![PlanStep {
+            id: 1,
+            title: goal.to_string(),
+            status: StepStatus::Pending,
+            verify: None,
+            note: None,
+        }],
+    })
+}
+
+async fn run_autonomous_turn_with_retry<E>(
+    state: &AppState,
+    base: &ChatRunRequest,
+    config: &AutonomousRunConfig,
+    goal: &str,
+    plan: Option<&AutonomousPlan>,
     messages: &mut Vec<ChatMessage>,
     session_summary: &mut Option<String>,
     cancel_flag: &Arc<AtomicBool>,
@@ -457,29 +545,76 @@ async fn run_autonomous_turn<E>(
 where
     E: AutonomousRunEventSink + Send,
 {
-    let req = ChatRunRequest {
-        messages: messages.clone(),
-        mode_id: base.mode_id.clone(),
-        connection_id: base.connection_id.clone(),
-        chat_context: base.chat_context.clone(),
-        session_summary: session_summary.clone(),
-        session_id: base.session_id.clone(),
-    };
+    let anchor = build_degrade_anchor(goal, plan);
+    let max_retries = config.max_step_retries;
+    let mut last_err: Option<AppError> = None;
 
-    let mut adapter = SinkAdapter { inner: events };
-    let result = run_chat(state, req, cancel_flag.clone(), &mut adapter).await?;
+    for attempt in 0..=max_retries {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AppError::Validation("cancelled".into()));
+        }
+        if attempt > 0 {
+            events.autonomous_phase(
+                AutonomousPhase::Executing,
+                Some(format!(
+                    "Step retry {attempt}/{max_retries} (anchor context)…"
+                )),
+            );
+            tracing::warn!("autonomous turn outer retry {attempt}/{max_retries}");
+        }
 
-    messages.push(ChatMessage {
-        role: "assistant".into(),
-        content: result.text.clone(),
-        images: vec![],
-    });
+        let req = ChatRunRequest {
+            messages: messages.clone(),
+            mode_id: base.mode_id.clone(),
+            connection_id: base.connection_id.clone(),
+            chat_context: base.chat_context.clone(),
+            session_summary: session_summary.clone(),
+            session_id: base.session_id.clone(),
+            degrade_anchor: if attempt > 0 {
+                Some(anchor.clone())
+            } else {
+                None
+            },
+            degrade_start: if attempt > 0 {
+                Some(DegradeLevel::Anchor.as_u8())
+            } else {
+                None
+            },
+        };
 
-    if let Some(summary) = result.session_summary.as_ref().filter(|s| !s.trim().is_empty()) {
-        *session_summary = Some(summary.clone());
+        let mut adapter = SinkAdapter { inner: events };
+        match run_chat(state, req, cancel_flag.clone(), &mut adapter).await {
+            Ok(result) => {
+                messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: result.text.clone(),
+                    images: vec![],
+                });
+                if let Some(summary) =
+                    result.session_summary.as_ref().filter(|s| !s.trim().is_empty())
+                {
+                    *session_summary = Some(summary.clone());
+                }
+                return Ok(result);
+            }
+            Err(e) if attempt < max_retries && is_step_retriable_error(&e) => {
+                tracing::warn!("autonomous turn failed (retriable): {e}");
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
     }
 
-    Ok(result)
+    Err(last_err.unwrap_or_else(|| {
+        AppError::Validation("autonomous turn failed after retries".into())
+    }))
+}
+
+fn build_degrade_anchor(goal: &str, plan: Option<&AutonomousPlan>) -> String {
+    match plan {
+        Some(p) => format!("Goal: {goal}\n\n{}", format_plan_for_prompt(p)),
+        None => format!("Goal: {goal}"),
+    }
 }
 
 fn wrap_with_protocol(user_content: &str, protocol: Option<&str>) -> String {

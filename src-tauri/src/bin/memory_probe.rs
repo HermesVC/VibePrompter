@@ -39,6 +39,10 @@ struct ProbeReport {
     phase1: PhaseReport,
     phase2: PhaseReport,
     answer: String,
+    /// Model answered with the secret code.
+    answer_contains_secret: bool,
+    /// Vector retrieval contributed chunks containing the secret (no rolling summary in phase 2).
+    vector_recall_ok: bool,
     recall_ok: bool,
 }
 
@@ -213,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
         phase1_report.summary_contains_secret
     );
 
-    println!("Phase 2: recall from memory only…");
+    println!("Phase 2: vector recall only (no session_summary)…");
 
     let cancel = Arc::new(AtomicBool::new(false));
     let mut sink2 = TraceSink { trace: Vec::new() };
@@ -230,8 +234,9 @@ async fn main() -> anyhow::Result<()> {
             mode_id: Some("chat-developer".into()),
             connection_id: None,
             chat_context: None,
-            session_summary: Some(rolling_memory),
+            session_summary: None,
             session_id: Some(session_id.clone()),
+            ..Default::default()
         },
         cancel,
         &mut sink2,
@@ -239,7 +244,12 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     let answer = phase2.text.trim().to_string();
-    let recall_ok = answer.contains(SECRET_CODE);
+    let phase2_report = phase_report(&phase2);
+    let answer_contains_secret = answer.contains(SECRET_CODE);
+    let vector_recall_ok = phase2_report.vector_chunks_used.unwrap_or(0) > 0
+        && phase2_report.retrieved_contains_secret
+        && answer_contains_secret;
+    let recall_ok = vector_recall_ok;
 
     let report = ProbeReport {
         session_id,
@@ -247,17 +257,27 @@ async fn main() -> anyhow::Result<()> {
         context_limit: Some(context_limit),
         phase1_evicted: evicted_count,
         phase1: phase1_report,
-        phase2: phase_report(&phase2),
+        phase2: phase2_report,
         answer: answer.clone(),
+        answer_contains_secret,
+        vector_recall_ok,
         recall_ok,
     };
 
     println!("{}", serde_json::to_string_pretty(&report)?);
 
     if recall_ok {
-        println!("\nPASS: model recalled {SECRET_CODE} after simulated eviction");
+        println!(
+            "\nPASS: vector recall returned {SECRET_CODE} (chunks_used={})",
+            phase2.vector_chunks_used.unwrap_or(0)
+        );
         Ok(())
     } else {
-        anyhow::bail!("FAIL: expected {SECRET_CODE} in phase-2 answer, got: {answer}");
+        anyhow::bail!(
+            "FAIL: vector recall — answer_secret={answer_contains_secret} \
+             retrieved_secret={} chunks_used={} answer={answer}",
+            phase2.retrieved_memory.as_deref().unwrap_or("").contains(SECRET_CODE),
+            phase2.vector_chunks_used.unwrap_or(0)
+        );
     }
 }

@@ -83,6 +83,11 @@ pub fn looks_like_context_failure(
     false
 }
 
+/// Transport / context errors that warrant an outer autonomous step retry.
+pub fn is_step_retriable_error(err: &AppError) -> bool {
+    is_context_overflow_error(err) || err.retriable()
+}
+
 pub fn should_retry_for_context(
     result: Result<&CompletionResult, &AppError>,
     input_estimate: u32,

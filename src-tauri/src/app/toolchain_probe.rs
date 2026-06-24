@@ -377,6 +377,7 @@ pub async fn run_toolchain_live(state: &AppState) -> AppResult<ToolchainLiveRepo
             }),
             session_summary: None,
             session_id: Some("tools-integration-live".into()),
+            ..Default::default()
         },
         Arc::new(AtomicBool::new(false)),
         &mut trace,

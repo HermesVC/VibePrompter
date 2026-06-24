@@ -107,6 +107,7 @@ pub async fn chat_complete_stream(
             chat_context: chat_context.clone(),
             session_summary: session_summary.clone(),
             session_id: session_id.clone(),
+            ..Default::default()
         },
         cancel_flag.clone(),
         &mut events,
@@ -691,6 +692,10 @@ pub struct ChatDebugRunScenarioInput {
     chat_context: Option<crate::workspace::ChatContextPayload>,
     session_summary: Option<String>,
     session_id: Option<String>,
+    /// Force degrade ladder start (0–6). See `DegradeLevel`.
+    degrade_start: Option<u8>,
+    /// Anchor text for degrade level 6 (autonomous goal + plan).
+    degrade_anchor: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -753,6 +758,8 @@ pub async fn chat_debug_run_scenario(
             chat_context: input.chat_context,
             session_summary: input.session_summary,
             session_id: input.session_id,
+            degrade_start: input.degrade_start,
+            degrade_anchor: input.degrade_anchor,
         },
         cancel_flag,
         &mut events,

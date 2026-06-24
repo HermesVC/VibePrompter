@@ -16,7 +16,6 @@ use crate::app::AppState;
 use crate::models::{ChatMessage, CompletionParams, CompletionResult, NewHistoryItem};
 use crate::utils::AppError;
 
-const MAX_CONTEXT_RETRIES: usize = 2;
 const MAX_AUTO_CONTINUES: usize = 3;
 const CONTINUATION_TAIL_CHARS: usize = 6_000;
 const STITCH_OVERLAP_CHARS: usize = 2_000;
@@ -41,7 +40,7 @@ const DIAGNOSTIC_INSPECTION_PROTOCOL: &str = r#"Diagnostic/debug request in work
 - If you cannot call tools, say which exact files you need to read; do not invent file contents.
 - After tool results, explain the likely root cause first. Only then provide a minimal patch if the user explicitly asked to fix it."#;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ChatRunRequest {
     pub messages: Vec<ChatMessage>,
     pub mode_id: Option<String>,
@@ -49,6 +48,10 @@ pub struct ChatRunRequest {
     pub chat_context: Option<crate::workspace::ChatContextPayload>,
     pub session_summary: Option<String>,
     pub session_id: Option<String>,
+    /// Optional anchor (goal + plan) for degrade level Anchor — autonomous step retry.
+    pub degrade_anchor: Option<String>,
+    /// Start the degrade ladder at this level (0–6) instead of Normal.
+    pub degrade_start: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,7 +147,11 @@ where
     let mut memory = request.session_summary.unwrap_or_default();
     let initial_memory = memory.clone();
     let reserve_output = max_tokens.max(256) as u32;
-    let mut aggression = crate::chat::WindowAggression::Normal;
+    let degrade_anchor = request.degrade_anchor.clone();
+    let mut degrade = request
+        .degrade_start
+        .and_then(crate::chat::DegradeLevel::from_u8)
+        .unwrap_or(crate::chat::DegradeLevel::Normal);
     let mut memory_compressed = false;
     let mut evicted_count = 0u32;
     let mut stream_generation = 0u32;
@@ -170,36 +177,103 @@ where
     let _permit = state.connections.acquire_permit().await;
     let mut result: Result<CompletionResult, AppError> =
         Err(AppError::Validation("chat stream did not run".into()));
-    let mut successful_attempt = 0usize;
+    let mut degrade_used_for_recovery = crate::chat::DegradeLevel::Normal;
 
-    for attempt in 0..=MAX_CONTEXT_RETRIES {
+    while degrade <= crate::chat::DegradeLevel::Anchor {
         if cancel_flag.load(Ordering::SeqCst) {
             result = Err(AppError::Validation("cancelled".into()));
             break;
         }
 
-        if attempt > 0 {
+        if degrade > crate::chat::DegradeLevel::Normal {
             stream_generation += 1;
-            aggression = aggression.next();
             events.status(ChatRunStatus {
                 phase: "recovering".into(),
                 generation: stream_generation,
                 kind: None,
-                attempt: None,
-                message: None,
+                attempt: Some(degrade.as_u8() as usize),
+                message: Some(format!("Context degrade: {}", degrade.label())),
             });
             tracing::warn!(
-                "context recovery attempt {attempt}/{MAX_CONTEXT_RETRIES} (aggression={aggression:?})"
+                "context degrade level {} ({})",
+                degrade.as_u8(),
+                degrade.label()
             );
+            degrade_used_for_recovery = degrade;
         }
 
-        let window_plan = crate::chat::plan_sliding_window_with_aggression(
-            messages.clone(),
-            context_limit,
-            &memory,
-            reserve_output,
-            aggression,
-        );
+        let (api_messages, input_estimate, retrieved_block, window_plan, retrieved_chunk_count) =
+            'preflight: loop {
+            let working_messages = crate::chat::apply_message_degrade(
+                messages.clone(),
+                degrade,
+                degrade_anchor.as_deref(),
+            );
+
+            let window_plan = crate::chat::plan_sliding_window_with_aggression(
+                working_messages.clone(),
+                context_limit,
+                &memory,
+                reserve_output,
+                degrade.window_aggression(),
+            );
+
+            let api_messages = window_plan.active.clone();
+            let query_text = working_messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+            let (retrieved_block, retrieved_chunk_count) =
+                if degrade.omit_retrieved() || session_id.trim().is_empty() {
+                    (String::new(), 0usize)
+                } else {
+                    let retrieved = crate::chat::retrieve_relevant(
+                        &state.chat_memory,
+                        &row,
+                        &cfg,
+                        &session_id,
+                        query_text,
+                        context_limit,
+                        &mut query_emb_cache,
+                    )
+                    .await;
+                    let count = retrieved.len();
+                    (
+                        crate::chat::format_retrieved_for_system(&retrieved),
+                        count,
+                    )
+                };
+
+            let input_estimate = estimate_chat_input_tokens(
+                &api_messages,
+                system_prompt.as_deref(),
+                &memory,
+                &retrieved_block,
+            );
+
+            if crate::chat::preflight_needs_degrade(input_estimate, context_limit) {
+                if let Some(next) = degrade.next() {
+                    degrade = next;
+                    degrade_used_for_recovery = degrade;
+                    tracing::warn!(
+                        "preflight context degrade → {} (estimate={input_estimate})",
+                        degrade.label()
+                    );
+                    continue 'preflight;
+                }
+            }
+
+            break (
+                api_messages,
+                input_estimate,
+                retrieved_block,
+                window_plan,
+                retrieved_chunk_count,
+            );
+        };
+
         evicted_count = window_plan.evicted.len() as u32;
 
         if crate::chat::session_memory_needs_compression(&memory, context_limit) {
@@ -307,44 +381,17 @@ where
             vector_memory_compressed = true;
         }
 
-        let api_messages = window_plan.active;
-        let query_text = messages
-            .last()
-            .filter(|m| m.role == "user")
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
-        let retrieved = if session_id.trim().is_empty() {
-            Vec::new()
-        } else {
-            crate::chat::retrieve_relevant(
-                &state.chat_memory,
-                &row,
-                &cfg,
-                &session_id,
-                query_text,
-                context_limit,
-                &mut query_emb_cache,
-            )
-            .await
-        };
-        let retrieved_block = crate::chat::format_retrieved_for_system(&retrieved);
-        retrieved_preview = if retrieved.is_empty() {
+        retrieved_preview = if retrieved_block.is_empty() {
             None
         } else {
             Some(retrieved_block.clone())
         };
-        vector_chunks_used = if retrieved.is_empty() {
+        vector_chunks_used = if retrieved_chunk_count == 0 {
             None
         } else {
-            Some(retrieved.len() as u32)
+            Some(retrieved_chunk_count as u32)
         };
 
-        let input_estimate = estimate_chat_input_tokens(
-            &api_messages,
-            system_prompt.as_deref(),
-            &memory,
-            &retrieved_block,
-        );
         let effective_max_tokens =
             effective_chat_max_tokens(max_tokens, input_estimate, context_limit);
 
@@ -438,13 +485,14 @@ where
             break;
         }
 
-        let retry = attempt < MAX_CONTEXT_RETRIES
+        let retry = degrade.next().is_some()
             && crate::chat::should_retry_for_context(
                 stream_out.as_ref().map(|o| &o.result).map_err(|e| e),
                 input_estimate,
                 context_limit,
             );
         if retry {
+            degrade = degrade.next().expect("checked is_some");
             continue;
         }
 
@@ -455,11 +503,11 @@ where
             }
             o.result
         });
-        successful_attempt = attempt;
         break;
     }
 
-    let context_recovered = successful_attempt > 0 && result.is_ok();
+    let context_recovered =
+        degrade_used_for_recovery > crate::chat::DegradeLevel::Normal && result.is_ok();
     let was_cancelled =
         cancel_flag.load(Ordering::SeqCst) || result.as_ref().err().is_some_and(is_cancelled_err);
     let source_label = source_label(&messages);

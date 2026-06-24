@@ -13,6 +13,10 @@ export interface ChatDebugScenarioInput {
   chatContext?: unknown;
   sessionSummary?: string | null;
   sessionId?: string | null;
+  /** Force degrade ladder start (0–6). */
+  degradeStart?: number | null;
+  /** Anchor text for degrade level 6. */
+  degradeAnchor?: string | null;
 }
 
 export interface ChatDebugScenarioOutput {

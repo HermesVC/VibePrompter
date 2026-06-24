@@ -270,6 +270,7 @@ pub async fn probe_react_scaffold_steps(state: &AppState) -> AppResult<Vec<React
                 }),
                 session_summary: None,
                 session_id: Some(HARNESS_REACT_SESSION.into()),
+                ..Default::default()
             },
             Arc::new(AtomicBool::new(false)),
             &mut trace,

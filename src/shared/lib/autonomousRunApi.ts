@@ -18,6 +18,7 @@ export interface AutonomousRunConfig {
   maxReplans?: number;
   planningEnabled?: boolean;
   verifySteps?: boolean;
+  maxStepRetries?: number;
 }
 
 export interface StepSnapshot {

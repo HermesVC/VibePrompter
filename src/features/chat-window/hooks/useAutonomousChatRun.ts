@@ -124,6 +124,7 @@ export function useAutonomousChatRun() {
           maxReplans: 2,
           planningEnabled: true,
           verifySteps: true,
+          maxStepRetries: 1,
         },
       });
 

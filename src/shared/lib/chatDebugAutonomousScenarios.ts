@@ -32,6 +32,7 @@ export function autonomousSyntheticFixtureScenario() {
       maxReplans: 1,
       planningEnabled: true,
       verifySteps: true,
+      maxStepRetries: 1,
     },
   };
 }

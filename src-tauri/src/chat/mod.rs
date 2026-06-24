@@ -8,6 +8,7 @@ mod agent_tools;
 mod autonomous;
 mod completion_recovery;
 mod context_recovery;
+mod degrade;
 mod memory_compress;
 mod memory_facts;
 mod retrieval_policy;
@@ -20,7 +21,8 @@ pub use agent_tools::{
     augment_system_for_tools, connection_tools_active, run_tool_followup_loop,
     scope_enables_tools, scope_path_for_tools, ToolLoopMemoryHook,
 };
-pub use context_recovery::should_retry_for_context;
+pub use context_recovery::{is_context_overflow_error, is_step_retriable_error, should_retry_for_context};
+pub use degrade::{apply_message_degrade, preflight_needs_degrade, DegradeLevel};
 pub use memory_compress::{
     compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
     summarize_turn_for_memory,

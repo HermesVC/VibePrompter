@@ -74,6 +74,15 @@ pub fn replan_user_message(
     )
 }
 
+pub fn planning_retry_user_message(goal: &str) -> String {
+    format!(
+        "Goal:\n{goal}\n\n\
+         Your previous reply did not contain a valid `<{PLAN_TAG}>` JSON array.\n\
+         Reply again with **only** the plan tag and a JSON array of steps (ids 1..N). \
+         No prose outside the tag."
+    )
+}
+
 pub fn completion_user_message(plan: &AutonomousPlan) -> String {
     format!(
         "{}\n\nAll steps are done. Give a brief final report in Russian: what was accomplished.",

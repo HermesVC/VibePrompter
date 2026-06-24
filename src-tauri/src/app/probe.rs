@@ -150,6 +150,7 @@ pub async fn probe_tool_call_live(state: &AppState) -> AppResult<(String, bool)>
             }),
             session_summary: None,
             session_id: Some("tool-call-probe".into()),
+            ..Default::default()
         },
         Arc::new(AtomicBool::new(false)),
         &mut trace,
@@ -320,6 +321,7 @@ pub async fn probe_harness_fixture_bugfix(
             }),
             session_summary: None,
             session_id: Some("harness-fixture-probe".into()),
+            ..Default::default()
         },
         Arc::new(AtomicBool::new(false)),
         &mut trace,
