@@ -23,6 +23,10 @@ path = "src/bin/memory_probe.rs"
 name = "tool_call_probe"
 path = "src/bin/tool_call_probe.rs"
 
+[[bin]]
+name = "projects_api_probe"
+path = "src/bin/projects_api_probe.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.1", features = [] }
 

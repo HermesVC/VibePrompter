@@ -154,3 +154,164 @@ pub async fn probe_tool_call_live(state: &AppState) -> AppResult<(String, bool)>
     .await?;
     Ok((result.text, trace.tools_phase))
 }
+
+/// Deterministic apply_patch smoke test (bypasses LLM). Reverts the file after check.
+pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, String)> {
+    use crate::tools::{self, ToolExecutionContext};
+
+    const TARGET_REL: &str = "vp/src/service/api/Controllers/ProjectsAPI.php";
+    const OLD: &str = "foreach ($projectUids as $projectUuid)";
+    const NEW: &str = "foreach ($projectUuids as $projectUuid)";
+
+    let settings = state.workspace.get_settings().await?;
+    let ctx = ToolExecutionContext {
+        workspace: state.workspace.clone(),
+        settings: settings.clone(),
+        scope_path: Some("vp/src/service/api/Controllers".into()),
+    };
+
+    let read = tools::execute_tool(
+        &ctx,
+        "read_file",
+        serde_json::json!({ "path": TARGET_REL }),
+    )
+    .await?;
+    if !read.ok {
+        return Ok((false, format!("read_file failed: {}", read.message)));
+    }
+
+    let patch = tools::execute_tool(
+        &ctx,
+        "apply_patch",
+        serde_json::json!({
+            "path": TARGET_REL,
+            "old_text": OLD,
+            "new_text": NEW
+        }),
+    )
+    .await?;
+    if !patch.ok {
+        return Ok((false, patch.message));
+    }
+
+    let revert = tools::execute_tool(
+        &ctx,
+        "apply_patch",
+        serde_json::json!({
+            "path": TARGET_REL,
+            "old_text": NEW,
+            "new_text": OLD
+        }),
+    )
+    .await?;
+
+    if revert.ok {
+        Ok((true, "apply_patch fix+revert OK".into()))
+    } else {
+        Ok((false, format!("fix OK but revert failed: {}", revert.message)))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectsApiProbeResult {
+    pub target: String,
+    pub tools_phase: bool,
+    pub trace_status_phases: Vec<String>,
+    pub answer_preview: String,
+    pub had_bug_before: bool,
+    pub has_bug_after: bool,
+    pub has_fix_after: bool,
+    pub agent_found_bug: bool,
+    pub patch_smoke_ok: Option<bool>,
+    pub patch_smoke_message: Option<String>,
+}
+
+/// Scan ProjectsAPI.php for bugs and apply fix via agent tools.
+pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsApiProbeResult> {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    use crate::chat::{run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus};
+    use crate::models::ChatMessage;
+    use crate::workspace::{ChatContextPayload, ChatScope};
+
+    const TARGET_REL: &str = "vp/src/service/api/Controllers/ProjectsAPI.php";
+    const BUG_NEEDLE: &str = "$projectUids";
+
+    struct Trace {
+        phases: Vec<String>,
+        tools_phase: bool,
+    }
+    impl ChatRunEventSink for Trace {
+        fn status(&mut self, s: ChatRunStatus) {
+            self.phases.push(s.phase.clone());
+            if s.phase == "tools" {
+                self.tools_phase = true;
+            }
+        }
+        fn token(&mut self, _: u32, _: &str) {}
+        fn memory(&mut self, _: crate::chat::ChatRunMemoryUpdate) {}
+    }
+
+    let settings = state.workspace.get_settings().await?;
+    let root = settings.workspace_root.trim();
+    let abs = format!("{root}\\{TARGET_REL}");
+    let before = std::fs::read_to_string(&abs)?;
+    let had_bug_before = before.contains(BUG_NEEDLE);
+
+    let mut trace = Trace {
+        phases: Vec::new(),
+        tools_phase: false,
+    };
+
+    let result = run_chat(
+        state,
+        ChatRunRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: format!(
+                    "Просканируй файл {TARGET_REL}, найди баги (особенно в case getDolgomerInfo) \
+и если есть — исправь через apply_patch. Сначала read_file, потом apply_patch с точным old_text. \
+Кратко опиши что нашёл и что исправил."
+                ),
+                images: vec![],
+            }],
+            mode_id: Some("chat-developer".into()),
+            connection_id: None,
+            chat_context: Some(ChatContextPayload {
+                scope: ChatScope::File {
+                    path: TARGET_REL.into(),
+                    content: String::new(),
+                    content_hash: String::new(),
+                    line_start: 1,
+                    line_end: 1,
+                    language_id: Some("php".into()),
+                },
+                modifiers: vec!["developer".into()],
+                language_id: Some("php".into()),
+            }),
+            session_summary: None,
+            session_id: Some("projects-api-probe".into()),
+        },
+        Arc::new(AtomicBool::new(false)),
+        &mut trace,
+    )
+    .await?;
+
+    let after = std::fs::read_to_string(&abs)?;
+    let answer = result.text.clone();
+    let agent_found_bug = answer.contains("projectUids") && answer.contains("projectUuids");
+
+    Ok(ProjectsApiProbeResult {
+        target: TARGET_REL.into(),
+        tools_phase: trace.tools_phase,
+        trace_status_phases: trace.phases,
+        answer_preview: answer.chars().take(800).collect(),
+        had_bug_before,
+        has_bug_after: after.contains(BUG_NEEDLE),
+        has_fix_after: after.contains("$projectUuids"),
+        agent_found_bug,
+        patch_smoke_ok: None,
+        patch_smoke_message: None,
+    })
+}
