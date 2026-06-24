@@ -19,6 +19,7 @@ use serde_json::json;
 pub mod embeddings;
 pub mod lmstudio;
 pub mod prompt_format;
+mod provider_errors;
 
 pub use embeddings::embed_texts;
 
@@ -515,20 +516,118 @@ pub async fn list_models(conn: &ConnectionRow, cfg: &HttpConfig) -> AppResult<Ve
     }
 }
 
-/// Streaming chat completion. Calls `on_token` with each text delta as it
-/// arrives off the wire, then returns the final aggregated text + model used
-/// + total latency. Cancellation: pass a `should_cancel` closure that
-/// returns true to abort — checked between every chunk.
+/// Optional hooks while streaming (tokens + transient provider retries).
+pub trait CompletionStreamObserver: Send {
+    fn on_token(&mut self, delta: &str);
+    fn on_provider_retry(&mut self, _attempt: usize, _message: &str) {}
+}
+
+/// Streaming chat completion.
 pub async fn complete_stream<F, C>(
     conn: &ConnectionRow,
     messages: Vec<ChatMessage>,
     params: CompletionParams,
     cfg: &HttpConfig,
-    mut on_token: F,
+    on_token: F,
     should_cancel: C,
 ) -> AppResult<CompletionResult>
 where
     F: FnMut(&str) + Send,
+    C: Fn() -> bool + Send,
+{
+    struct TokenObserver<F> {
+        on_token: F,
+    }
+    impl<F> CompletionStreamObserver for TokenObserver<F>
+    where
+        F: FnMut(&str) + Send,
+    {
+        fn on_token(&mut self, delta: &str) {
+            (self.on_token)(delta);
+        }
+    }
+    let mut observer = TokenObserver { on_token };
+    complete_stream_with_observer(
+        conn,
+        messages,
+        params,
+        cfg,
+        &mut observer,
+        should_cancel,
+    )
+    .await
+}
+
+/// Like [`complete_stream`], but also notifies `observer` before each Jinja retry.
+pub async fn complete_stream_with_observer<O, C>(
+    conn: &ConnectionRow,
+    messages: Vec<ChatMessage>,
+    params: CompletionParams,
+    cfg: &HttpConfig,
+    observer: &mut O,
+    should_cancel: C,
+) -> AppResult<CompletionResult>
+where
+    O: CompletionStreamObserver + Send,
+    C: Fn() -> bool + Send,
+{
+    let mut omit_thinking_kwargs = false;
+    let mut last_jinja: Option<AppError> = None;
+
+    for attempt in 0..provider_errors::JINJA_PROMPT_MAX_RETRIES {
+        match complete_stream_once(
+            conn,
+            messages.clone(),
+            params.clone(),
+            cfg,
+            observer,
+            &should_cancel,
+            omit_thinking_kwargs,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(e) if provider_errors::is_jinja_prompt_template_error(&e) => {
+                last_jinja = Some(e);
+                if attempt + 1 >= provider_errors::JINJA_PROMPT_MAX_RETRIES {
+                    break;
+                }
+                observer.on_provider_retry(
+                    attempt + 1,
+                    &provider_errors::prompt_template_error_summary(
+                        last_jinja.as_ref().unwrap(),
+                    ),
+                );
+                if attempt == 0 {
+                    omit_thinking_kwargs = true;
+                }
+                tokio::time::sleep(Duration::from_millis(350 * (attempt as u64 + 1))).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    if let Some(e) = last_jinja {
+        return Err(AppError::Validation(format!(
+            "Prompt template error after {} attempts: {}",
+            provider_errors::JINJA_PROMPT_MAX_RETRIES,
+            provider_errors::prompt_template_error_summary(&e)
+        )));
+    }
+    Err(AppError::Validation("chat stream did not run".into()))
+}
+
+async fn complete_stream_once<O, C>(
+    conn: &ConnectionRow,
+    messages: Vec<ChatMessage>,
+    params: CompletionParams,
+    cfg: &HttpConfig,
+    observer: &mut O,
+    should_cancel: &C,
+    omit_thinking_kwargs: bool,
+) -> AppResult<CompletionResult>
+where
+    O: CompletionStreamObserver + Send,
     C: Fn() -> bool + Send,
 {
     use eventsource_stream::Eventsource;
@@ -576,7 +675,9 @@ where
             if let Some(mt) = params.max_tokens {
                 body["max_tokens"] = serde_json::json!(mt);
             }
-            if should_send_disable_thinking(conn, params.disable_thinking == Some(true)) {
+            if !omit_thinking_kwargs
+                && should_send_disable_thinking(conn, params.disable_thinking == Some(true))
+            {
                 body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
             }
             (url, body)
@@ -730,7 +831,7 @@ where
             if let Some(delta) = delta_obj.get("content").and_then(|t| t.as_str()) {
                 if !delta.is_empty() {
                     text.push_str(delta);
-                    on_token(delta);
+                    observer.on_token(delta);
                 }
             } else if let Some(reasoning) = delta_obj
                 .get("reasoning_content")
@@ -756,7 +857,7 @@ where
                     .and_then(|t| t.as_str())
                 {
                     text.push_str(t);
-                    on_token(t);
+                    observer.on_token(t);
                 }
             }
             Some("message_start") => {

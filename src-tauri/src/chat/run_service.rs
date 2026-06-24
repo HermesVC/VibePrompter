@@ -52,6 +52,8 @@ pub struct ChatRunStatus {
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +167,7 @@ where
                 generation: stream_generation,
                 kind: None,
                 attempt: None,
+                message: None,
             });
             tracing::warn!(
                 "context recovery attempt {attempt}/{MAX_CONTEXT_RETRIES} (aggression={aggression:?})"
@@ -186,6 +189,7 @@ where
                 generation: stream_generation,
                 kind: Some("rolling".into()),
                 attempt: None,
+                message: None,
             });
             match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await {
                 Ok(compressed) => {
@@ -214,6 +218,7 @@ where
                 generation: stream_generation,
                 kind: None,
                 attempt: None,
+                message: None,
             });
             match crate::chat::compress_evicted_turns(
                 &row,
@@ -249,6 +254,7 @@ where
                     generation: stream_generation,
                     kind: Some("rolling".into()),
                     attempt: None,
+                    message: None,
                 });
                 match crate::chat::compress_session_memory(&row, &cfg, &memory, context_limit).await
                 {
@@ -369,6 +375,7 @@ where
                         generation: stream_generation,
                         kind: None,
                         attempt: None,
+                        message: None,
                     });
                     let cancel_for_stream = cancel_flag.clone();
                     match crate::chat::run_tool_followup_loop(
@@ -663,16 +670,41 @@ where
                 generation: stream_generation,
                 kind: None,
                 attempt: Some(continue_idx),
+                message: None,
             });
         }
 
         let cancel_for_stream = cancel_flag.clone();
-        let mut part = crate::providers::complete_stream(
+        struct ChatStreamObserver<'a, E> {
+            events: &'a mut E,
+            generation: u32,
+        }
+        impl<E: ChatRunEventSink + Send> crate::providers::CompletionStreamObserver
+            for ChatStreamObserver<'_, E>
+        {
+            fn on_token(&mut self, delta: &str) {
+                self.events.token(self.generation, delta);
+            }
+            fn on_provider_retry(&mut self, attempt: usize, message: &str) {
+                self.events.status(ChatRunStatus {
+                    phase: "provider_retry".into(),
+                    generation: self.generation,
+                    attempt: Some(attempt),
+                    message: Some(message.to_string()),
+                    kind: None,
+                });
+            }
+        }
+        let mut stream_observer = ChatStreamObserver {
+            events,
+            generation: stream_generation,
+        };
+        let mut part = crate::providers::complete_stream_with_observer(
             row,
             current_messages.clone(),
             params.clone(),
             cfg,
-            |delta| events.token(stream_generation, delta),
+            &mut stream_observer,
             move || cancel_for_stream.load(Ordering::SeqCst),
         )
         .await?;

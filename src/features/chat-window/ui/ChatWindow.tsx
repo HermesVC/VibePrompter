@@ -98,10 +98,11 @@ interface DonePayload {
 }
 
 interface StatusPayload {
-  phase: 'recovering' | 'continuing' | 'compressing_memory' | 'tools';
+  phase: 'recovering' | 'continuing' | 'compressing_memory' | 'tools' | 'provider_retry';
   generation?: number;
   attempt?: number;
   kind?: 'rolling' | 'vector';
+  message?: string;
 }
 
 interface TokenPayload {
@@ -175,6 +176,7 @@ export function ChatWindow() {
   const [contextNoticeKind, setContextNoticeKind] = useState<'info' | 'warn'>('info');
   const [isRecoveringContext, setIsRecoveringContext] = useState(false);
   const [isContinuingOutput, setIsContinuingOutput] = useState(false);
+  const [providerRetryWarning, setProviderRetryWarning] = useState<string | null>(null);
   const [sessionSummary, setSessionSummary] = useState(
     () => initialSession?.sessionSummary ?? ''
   );
@@ -731,6 +733,7 @@ export function ChatWindow() {
     setContextTrimNotice(null);
     setIsRecoveringContext(false);
     setIsContinuingOutput(false);
+    setProviderRetryWarning(null);
     setMemoryDebugLabel('Vector memory: checking...');
 
     setMessages((prev) => [
@@ -756,6 +759,7 @@ export function ChatWindow() {
           if (assistantIdRef.current !== assistantId) return;
           const { generation, delta } = parseTokenDelta(e.payload);
           if (generation !== streamGenerationRef.current || !delta) return;
+          setProviderRetryWarning(null);
           bufRef.current += delta;
           scheduleFlush(assistantId);
         }),
@@ -763,6 +767,13 @@ export function ChatWindow() {
           if (assistantIdRef.current !== assistantId) return;
           if (typeof e.payload.generation === 'number') {
             streamGenerationRef.current = e.payload.generation;
+          }
+          if (e.payload.phase === 'provider_retry') {
+            setProviderRetryWarning(
+              e.payload.message?.trim() ||
+                `Prompt template error (retry ${e.payload.attempt ?? 1}/3)…`
+            );
+            return;
           }
           if (e.payload.phase === 'compressing_memory') {
             const kind = e.payload.kind === 'vector' ? 'vector' : 'rolling';
@@ -858,6 +869,7 @@ export function ChatWindow() {
           if (assistantIdRef.current !== assistantId) return;
           setIsRecoveringContext(false);
           setIsContinuingOutput(false);
+          setProviderRetryWarning(null);
           const cancelled = e.payload === 'cancelled';
           if (cancelled) cancelledRef.current = true;
           setMessages((prev) =>
@@ -927,6 +939,7 @@ export function ChatWindow() {
     } catch (e) {
       setIsRecoveringContext(false);
       setIsContinuingOutput(false);
+      setProviderRetryWarning(null);
       if (cancelledRef.current) return;
       const msg = errorMessage(e);
       if (msg.toLowerCase().includes('cancelled')) {
@@ -943,6 +956,7 @@ export function ChatWindow() {
       setStreaming(false);
       setIsRecoveringContext(false);
       setIsContinuingOutput(false);
+      setProviderRetryWarning(null);
       setStreamId(null);
       assistantIdRef.current = null;
     }
@@ -1211,14 +1225,42 @@ export function ChatWindow() {
                 Chat
               </div>
             )}
-            <div style={{ fontSize: 10.5, color: 'var(--fg-dim)', pointerEvents: 'none' }}>
-              {isRecoveringContext
-                ? 'Подстраиваем контекст…'
-                : isContinuingOutput
-                  ? 'Continuing...'
-                  : streaming
-                  ? 'Thinking…'
-                  : 'Local mode · stays open'}
+            <div
+              style={{
+                fontSize: 10.5,
+                color: 'var(--fg-dim)',
+                pointerEvents: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {providerRetryWarning && (
+                <span
+                  data-no-drag
+                  title={providerRetryWarning}
+                  style={{
+                    pointerEvents: 'auto',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    color: 'var(--warn)',
+                    cursor: 'help',
+                  }}
+                >
+                  <I.info size={13} sw={2} />
+                </span>
+              )}
+              <span>
+                {isRecoveringContext
+                  ? 'Подстраиваем контекст…'
+                  : isContinuingOutput
+                    ? 'Continuing...'
+                    : providerRetryWarning
+                      ? 'Повтор запроса к модели…'
+                      : streaming
+                        ? 'Thinking…'
+                        : 'Local mode · stays open'}
+              </span>
             </div>
           </div>
           <ContextUsageRing
