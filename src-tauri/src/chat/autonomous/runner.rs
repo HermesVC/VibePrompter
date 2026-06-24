@@ -19,9 +19,10 @@ use crate::chat::autonomous::prompts::{
     planning_user_message, replan_user_message, AUTONOMOUS_PROTOCOL,
 };
 use crate::chat::{
-    extract_context_artifacts_from_text, index_context_artifacts, index_plan_step_summary,
-    is_step_retriable_error, run_chat, upsert_plan_canonical_from_plan_markdown, ChatRunEventSink,
-    ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus, DegradeLevel,
+    extract_context_artifacts_from_text, index_autonomous_plan_progress, index_context_artifacts,
+    index_plan_step_summary, is_step_retriable_error, run_chat,
+    upsert_plan_canonical_from_plan_markdown, ChatRunEventSink, ChatRunMemoryUpdate,
+    ChatRunRequest, ChatRunStatus, DegradeLevel,
 };
 use crate::models::{ChatMessage, CompletionResult, MemoryDiagnostics};
 use crate::utils::AppError;
@@ -208,6 +209,16 @@ where
         spec_path.as_deref(),
         step_warning.as_deref(),
     );
+    index_autonomous_plan_memory(
+        state,
+        &request.base,
+        &session_id,
+        &plan,
+        plan.next_pending(),
+        "planning",
+        &mut indexed_chunk_hashes,
+    )
+    .await;
 
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
@@ -250,6 +261,16 @@ where
             spec_path.as_deref(),
             None,
         );
+        index_autonomous_plan_memory(
+            state,
+            &request.base,
+            &session_id,
+            &plan,
+            Some(&step),
+            "in_progress",
+            &mut indexed_chunk_hashes,
+        )
+        .await;
 
         events.autonomous_phase(
             AutonomousPhase::Executing,
@@ -441,6 +462,21 @@ where
         )
         .await;
         emit_turn_memory_diagnostics(events, &result);
+
+        index_autonomous_plan_memory(
+            state,
+            &request.base,
+            &session_id,
+            &plan,
+            Some(&step),
+            if terminal_status == StepStatus::Done {
+                "done"
+            } else {
+                "failed"
+            },
+            &mut indexed_chunk_hashes,
+        )
+        .await;
 
         plan.mark(step.id, terminal_status, None);
         emit_plan_snapshot(
@@ -1031,6 +1067,59 @@ async fn load_session_chunk_hashes(state: &AppState, session_id: &str) -> HashSe
             HashSet::new()
         }
     }
+}
+
+async fn index_autonomous_plan_memory(
+    state: &AppState,
+    base: &ChatRunRequest,
+    session_id: &str,
+    plan: &AutonomousPlan,
+    step: Option<&PlanStep>,
+    phase: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    let Ok(row) = resolve_autonomous_connection(state, base).await else {
+        return;
+    };
+    let cfg = state.connections.http_config().await;
+    let step = step
+        .or_else(|| plan.steps.iter().find(|s| s.status == StepStatus::InProgress))
+        .or_else(|| plan.next_pending());
+    let Some(step) = step else {
+        return;
+    };
+
+    let last_done = plan
+        .steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped))
+        .last()
+        .map(|s| s.title.as_str())
+        .unwrap_or("none");
+    let next = plan
+        .next_pending()
+        .map(|s| s.title.as_str())
+        .unwrap_or("done");
+
+    index_autonomous_plan_progress(
+        &state.chat_memory,
+        &state.connections,
+        &row,
+        &cfg,
+        session_id,
+        plan.steps.len(),
+        step.id,
+        &step.title,
+        phase,
+        last_done,
+        next,
+        &format_plan_for_prompt(plan),
+        indexed_hashes,
+    )
+    .await;
 }
 
 async fn commit_autonomous_turn_memory(

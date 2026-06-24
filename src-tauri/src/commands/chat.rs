@@ -270,8 +270,6 @@ pub async fn chat_complete_stream(
     let cancel_flag = registry.register(&stream_id);
     let cancel_check = cancel_flag.clone();
 
-    let _slot = state.connections.acquire_provider_slot(&row.base_url).await;
-
     const MAX_CONTEXT_RETRIES: usize = 2;
     let mut result: Result<CompletionResult, AppError> =
         Err(AppError::Validation("chat stream did not run".into()));
@@ -490,19 +488,22 @@ pub async fn chat_complete_stream(
         };
 
         let max_out_for_post = effective_max_tokens;
-        let mut stream_out = complete_stream_with_auto_continue(
-            &app,
-            &status_event,
-            &token_event,
-            &row,
-            api_messages.clone(),
-            params.clone(),
-            &cfg,
-            stream_generation,
-            cancel_check.clone(),
-            max_out_for_post,
-        )
-        .await;
+        let mut stream_out = {
+            let _slot = state.connections.acquire_provider_slot(&row.base_url).await;
+            complete_stream_with_auto_continue(
+                &app,
+                &status_event,
+                &token_event,
+                &row,
+                api_messages.clone(),
+                params.clone(),
+                &cfg,
+                stream_generation,
+                cancel_check.clone(),
+                max_out_for_post,
+            )
+            .await
+        };
 
         if let Ok(ref mut out) = stream_out {
             if let Some(ctx) = chat_context.as_ref() {

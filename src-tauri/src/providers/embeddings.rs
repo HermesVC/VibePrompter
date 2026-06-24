@@ -49,9 +49,12 @@ pub async fn embed_texts(
     let mut last_err: Option<AppError> = None;
     for candidate in candidates {
         match embed_texts_once(conn, cfg, texts, &candidate).await {
-            Ok(v) => return Ok(v),
+            Ok(v) => {
+                tracing::debug!("embeddings ok via '{candidate}' ({} inputs)", texts.len());
+                return Ok(v);
+            }
             Err(e) => {
-                tracing::debug!("embeddings candidate '{candidate}' failed: {e}");
+                tracing::warn!("embeddings candidate '{candidate}' failed: {e}");
                 last_err = Some(e);
             }
         }
@@ -76,12 +79,13 @@ async fn embed_model_candidates(
     }
 
     let mut out = Vec::new();
-    push_candidate(&mut out, resolve_embed_model(&conn.default_model));
 
     let discovered = discover_embedding_models(conn, cfg).await;
     for discovered in discovered {
         push_candidate(&mut out, &discovered);
     }
+
+    push_candidate(&mut out, resolve_embed_model(&conn.default_model));
 
     for fallback in FALLBACK_EMBED_MODELS {
         push_candidate(&mut out, fallback);

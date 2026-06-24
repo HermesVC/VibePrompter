@@ -54,7 +54,7 @@ async fn embed_texts_best_effort(
         Err(_) => {
             tracing::warn!(
                 "vector memory {op} timed out after {}s; continuing without vector memory \
-                 (load an embedding model in LM Studio/Ollama, e.g. nomic-embed-text)",
+                 (if LM Studio is running: embedding may be waiting on the inference lock, or load nomic-embed-text)",
                 VECTOR_EMBED_TIMEOUT.as_secs()
             );
             None
@@ -414,6 +414,80 @@ fn compressible_chunks(chunks: &[MemoryChunkRow]) -> Vec<MemoryChunkRow> {
         .filter(|row| row.role != PLAN_CANONICAL_ROLE)
         .cloned()
         .collect()
+}
+
+/// Index autonomous orchestrator plan state — more aggressive than normal chat plan tags.
+pub async fn index_autonomous_plan_progress(
+    memory: &ChatMemoryService,
+    connections: &ConnectionService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    total_steps: usize,
+    step_id: u32,
+    step_title: &str,
+    step_status: &str,
+    last_done_label: &str,
+    next_label: &str,
+    plan_outline: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+
+    let canonical = crate::workspace::plan_memory::PlanCanonical {
+        step: format!("{step_id} / {total_steps}"),
+        last_done: last_done_label.to_string(),
+        next: next_label.to_string(),
+        source: "autonomous-orchestrator".into(),
+    };
+    upsert_plan_canonical(
+        memory,
+        connections,
+        conn,
+        cfg,
+        session_id,
+        canonical,
+        indexed_hashes,
+    )
+    .await;
+
+    let inner = crate::workspace::plan_memory::build_plan_step_summary_inner(
+        step_id,
+        total_steps,
+        last_done_label,
+        next_label,
+    );
+    index_plan_step_summary(
+        memory,
+        connections,
+        conn,
+        cfg,
+        session_id,
+        &inner,
+        indexed_hashes,
+    )
+    .await;
+
+    let outline = format!(
+        "AUTONOMOUS_PLAN step={step_id} title={step_title} status={step_status}\n{plan_outline}"
+    );
+    let hash = chunk_content_hash("plan-outline", &outline);
+    if !indexed_hashes.contains(&hash) {
+        insert_single_chunk(
+            memory,
+            connections,
+            conn,
+            cfg,
+            session_id,
+            "plan-outline",
+            &outline,
+            &hash,
+            indexed_hashes,
+        )
+        .await;
+    }
 }
 
 /// Index workspace tool read results (read_file, read_symbol, file_outline).

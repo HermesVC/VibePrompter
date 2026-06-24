@@ -431,6 +431,7 @@ where
         });
 
         let followup = match complete_stream_with_tool_auto_continue(
+            &state.connections,
             row,
             messages.clone(),
             params.clone(),
@@ -526,6 +527,7 @@ fn format_tool_results_for_user(results: &[ToolExecutionResult]) -> String {
 }
 
 async fn complete_stream_with_tool_auto_continue<F, C>(
+    connections: &crate::services::ConnectionService,
     row: &crate::storage::repositories::ConnectionRow,
     base_messages: Vec<crate::models::ChatMessage>,
     params: crate::models::CompletionParams,
@@ -572,6 +574,7 @@ where
         );
 
         last_result = complete_stream_with_tool_auto_continue_inner(
+            connections,
             row,
             &base_messages,
             window.active,
@@ -598,6 +601,7 @@ where
 }
 
 async fn complete_stream_with_tool_auto_continue_inner<F, C>(
+    connections: &crate::services::ConnectionService,
     row: &crate::storage::repositories::ConnectionRow,
     base_messages: &[crate::models::ChatMessage],
     window_messages: Vec<crate::models::ChatMessage>,
@@ -616,6 +620,7 @@ where
     let mut combined: Option<crate::models::CompletionResult> = None;
 
     for continue_idx in 0..=MAX_TOOL_AUTO_CONTINUES {
+        let _slot = connections.acquire_provider_slot(&row.base_url).await;
         let mut part = crate::providers::complete_stream(
             row,
             current_messages.clone(),

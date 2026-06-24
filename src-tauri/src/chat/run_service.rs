@@ -485,19 +485,20 @@ where
             attempt: None,
             message: Some("Waiting for provider slot".into()),
         });
-        let _permit = acquire_provider_slot(state, &row.base_url, cancel_flag.clone()).await?;
-
-        let mut stream_out = complete_stream_with_auto_continue(
-            events,
-            &row,
-            api_messages.clone(),
-            params.clone(),
-            &cfg,
-            stream_generation,
-            cancel_flag.clone(),
-            effective_max_tokens,
-        )
-        .await;
+        let mut stream_out = {
+            let _permit = acquire_provider_slot(state, &row.base_url, cancel_flag.clone()).await?;
+            complete_stream_with_auto_continue(
+                events,
+                &row,
+                api_messages.clone(),
+                params.clone(),
+                &cfg,
+                stream_generation,
+                cancel_flag.clone(),
+                effective_max_tokens,
+            )
+            .await
+        };
 
         if let Ok(ref mut out) = stream_out {
             if let Some(ctx) = request.chat_context.as_ref() {
