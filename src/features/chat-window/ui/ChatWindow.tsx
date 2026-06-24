@@ -404,9 +404,9 @@ export function ChatWindow() {
     ) => {
       const parts: string[] = [];
       if (payload.vectorChunksUsed && payload.vectorChunksUsed > 0) {
-        parts.push(`vector used: ${payload.vectorChunksUsed}`);
+        parts.push(`vector used: ${payload.vectorChunksUsed}/4 retrieved`);
       } else {
-        parts.push('vector unused');
+        parts.push('vector unused: no relevant chunks');
       }
       if (payload.memoryCompressed) {
         const suffix = payload.evictedTurns ? ` (${payload.evictedTurns} turns)` : '';

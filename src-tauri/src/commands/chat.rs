@@ -669,7 +669,9 @@ async fn complete_stream_with_auto_continue(
         let visible_progress = accumulated.len() > before_len;
         merge_completion_result(&mut combined, part, &accumulated);
 
-        let should_continue = combined.as_ref().is_some_and(|r| r.output_truncated);
+        let should_continue = combined
+            .as_ref()
+            .is_some_and(|r| should_auto_continue_completion(r, &accumulated));
         if !should_continue
             || !visible_progress
             || cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
@@ -714,6 +716,13 @@ fn merge_completion_result(
         part.text = accumulated_text.to_string();
         *combined = Some(part);
     }
+}
+
+fn should_auto_continue_completion(result: &CompletionResult, accumulated_text: &str) -> bool {
+    if result.output_truncated {
+        return true;
+    }
+    continuation_context(accumulated_text).inside_fence
 }
 
 fn continuation_messages(base: &[ChatMessage], accumulated: &str) -> Vec<ChatMessage> {
@@ -795,8 +804,13 @@ fn continuation_prompt(ctx: &ContinuationContext) -> String {
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or("code");
+        if lang.starts_with("file ") || lang.contains("path=") || lang.contains("file=") {
+            return format!(
+                "/no_think\nYour previous assistant message was cut off inside a generated file fence (`{lang}`).{cursor}Continue from the very next character of the file content. Do not repeat the fragment. When this file is complete, close the markdown fence with ```; if more generated files are required, continue with the next ```file ... fence. Do not explain or summarize."
+            );
+        }
         return format!(
-            "/no_think\nYour previous assistant message was cut off inside a `{lang}` code block.{cursor}Continue from the very next character of the code. Output raw code continuation only. Do not repeat the fragment, do not open or close a markdown fence unless the code itself requires those characters, do not explain, do not summarize."
+            "/no_think\nYour previous assistant message was cut off inside a `{lang}` code block.{cursor}Continue from the very next character of the code. Do not repeat the fragment. Close the markdown fence with ``` once the code block is complete. Do not explain or summarize."
         );
     }
     format!(
@@ -1302,7 +1316,44 @@ mod chat_command_tests {
         let ctx = continuation_context("```php\n<?php\nfunction demo() {\n");
         let prompt = continuation_prompt(&ctx);
         assert!(prompt.contains("inside a `php` code block"));
-        assert!(prompt.contains("raw code continuation only"));
+        assert!(prompt.contains("Close the markdown fence"));
         assert!(prompt.contains("/no_think"));
+    }
+
+    #[test]
+    fn incomplete_generated_file_forces_auto_continue_without_length_finish_reason() {
+        let mut result = CompletionResult {
+            text: String::new(),
+            model: "test".into(),
+            latency_ms: 0,
+            usage: Default::default(),
+            context_window_size: None,
+            scoped_text: None,
+            session_summary: None,
+            memory_compressed: false,
+            evicted_turns: None,
+            context_recovered: false,
+            stream_incomplete: false,
+            finish_reason: Some("stop".into()),
+            output_truncated: false,
+            retrieved_memory: None,
+            vector_chunks_used: None,
+            vector_memory_compressed: false,
+        };
+        let text = "```file src/app.ts\nexport const unfinished = ";
+
+        assert!(should_auto_continue_completion(&result, text));
+        result.output_truncated = true;
+        assert!(should_auto_continue_completion(&result, "done"));
+    }
+
+    #[test]
+    fn generated_file_continuation_prompt_allows_closing_fence() {
+        let ctx = continuation_context("```file src/app.ts\nexport const x = ");
+        let prompt = continuation_prompt(&ctx);
+
+        assert!(prompt.contains("generated file fence"));
+        assert!(prompt.contains("close the markdown fence"));
+        assert!(prompt.contains("next ```file"));
     }
 }
