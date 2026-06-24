@@ -4,23 +4,22 @@
 // scope on `App` / `AppHandle`. We use it in the setup hook below.
 use tauri::Manager;
 
-mod app;
+pub mod app;
 mod commands;
 mod config;
 mod events;
-mod models;
+pub mod models;
 mod services;
 mod storage;
 mod utils;
 
 mod platform;
 
-// Stub modules — populated by later sub-projects.
-mod chat;
+pub mod chat;
 mod clipboard;
 mod overlay;
 mod prompts;
-mod providers;
+pub mod providers;
 mod security;
 mod shortcuts;
 mod tools;
