@@ -13,7 +13,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::app::AppState;
-use crate::models::{ChatMessage, CompletionParams, CompletionResult, NewHistoryItem};
+use crate::models::{
+    ChatMessage, CompletionParams, CompletionResult, MemoryDiagnostics, NewHistoryItem,
+};
 use crate::utils::AppError;
 
 const MAX_AUTO_CONTINUES: usize = 3;
@@ -52,6 +54,12 @@ pub struct ChatRunRequest {
     pub degrade_anchor: Option<String>,
     /// Start the degrade ladder at this level (0–6) instead of Normal.
     pub degrade_start: Option<u8>,
+    /// Debug/testing override for small-window pressure scenarios.
+    pub force_context_limit: Option<i64>,
+    /// Debug/testing flag: do not append/compress rolling summary memory.
+    pub disable_rolling_memory: bool,
+    /// Debug/testing flag: do not retrieve semantic/vector memory.
+    pub disable_vector_retrieval: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,9 +150,16 @@ where
     }
 
     let cfg = state.connections.http_config().await;
-    let context_limit = resolve_context_limit(&row, &cfg).await;
+    let mut context_limit = resolve_context_limit(&row, &cfg).await;
+    if let Some(limit) = request.force_context_limit.filter(|v| *v > 0) {
+        context_limit = limit.max(1024);
+    }
 
-    let mut memory = request.session_summary.unwrap_or_default();
+    let mut memory = if request.disable_rolling_memory {
+        String::new()
+    } else {
+        request.session_summary.unwrap_or_default()
+    };
     let initial_memory = memory.clone();
     let reserve_output = max_tokens.max(256) as u32;
     let degrade_anchor = request.degrade_anchor.clone();
@@ -160,19 +175,28 @@ where
     let mut retrieved_preview: Option<String> = None;
     let mut vector_chunks_used: Option<u32> = None;
     let mut vector_memory_compressed = false;
-    let mut indexed_chunk_hashes: HashSet<String> = if session_id.trim().is_empty() {
-        HashSet::new()
-    } else {
-        state
-            .chat_memory
-            .list_content_hashes(&session_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
-    };
+    let mut vector_available = false;
+    let mut indexed_chunk_hashes: HashSet<String> =
+        if session_id.trim().is_empty() || request.disable_vector_retrieval {
+            HashSet::new()
+        } else {
+            match state.chat_memory.list_content_hashes(&session_id).await {
+                Ok(hashes) => {
+                    vector_available = true;
+                    hashes.into_iter().collect()
+                }
+                Err(e) => {
+                    tracing::warn!("vector memory unavailable for session {session_id}: {e}");
+                    HashSet::new()
+                }
+            }
+        };
     let mut compressed_evicted_keys: HashSet<String> = HashSet::new();
     let mut query_emb_cache: Option<Vec<f32>> = None;
+    let mut vector_chunks_indexed = 0u32;
+    let mut retrieval_query_preview: Option<String> = None;
+    let mut input_estimate_first = 0u32;
+    let mut input_estimate_final = 0u32;
 
     let _permit = state.connections.acquire_permit().await;
     let mut result: Result<CompletionResult, AppError> =
@@ -202,8 +226,7 @@ where
             degrade_used_for_recovery = degrade;
         }
 
-        let (api_messages, input_estimate, retrieved_block, window_plan, retrieved_chunk_count) =
-            'preflight: loop {
+        let (api_messages, _input_estimate, retrieved_block, window_plan, retrieved_chunk_count) = 'preflight: loop {
             let working_messages = crate::chat::apply_message_degrade(
                 messages.clone(),
                 degrade,
@@ -225,26 +248,26 @@ where
                 .find(|m| m.role == "user")
                 .map(|m| m.content.as_str())
                 .unwrap_or("");
-            let (retrieved_block, retrieved_chunk_count) =
-                if degrade.omit_retrieved() || session_id.trim().is_empty() {
-                    (String::new(), 0usize)
-                } else {
-                    let retrieved = crate::chat::retrieve_relevant(
-                        &state.chat_memory,
-                        &row,
-                        &cfg,
-                        &session_id,
-                        query_text,
-                        context_limit,
-                        &mut query_emb_cache,
-                    )
-                    .await;
-                    let count = retrieved.len();
-                    (
-                        crate::chat::format_retrieved_for_system(&retrieved),
-                        count,
-                    )
-                };
+            retrieval_query_preview = Some(preview_text(query_text, 240));
+            let (retrieved_block, retrieved_chunk_count) = if degrade.omit_retrieved()
+                || session_id.trim().is_empty()
+                || request.disable_vector_retrieval
+            {
+                (String::new(), 0usize)
+            } else {
+                let retrieved = crate::chat::retrieve_relevant(
+                    &state.chat_memory,
+                    &row,
+                    &cfg,
+                    &session_id,
+                    query_text,
+                    context_limit,
+                    &mut query_emb_cache,
+                )
+                .await;
+                let count = retrieved.len();
+                (crate::chat::format_retrieved_for_system(&retrieved), count)
+            };
 
             let input_estimate = estimate_chat_input_tokens(
                 &api_messages,
@@ -252,6 +275,9 @@ where
                 &memory,
                 &retrieved_block,
             );
+            if input_estimate_first == 0 {
+                input_estimate_first = input_estimate;
+            }
 
             if crate::chat::preflight_needs_degrade(input_estimate, context_limit) {
                 if let Some(next) = degrade.next() {
@@ -273,10 +299,11 @@ where
                 retrieved_chunk_count,
             );
         };
-
         evicted_count = window_plan.evicted.len() as u32;
 
-        if crate::chat::session_memory_needs_compression(&memory, context_limit) {
+        if !request.disable_rolling_memory
+            && crate::chat::session_memory_needs_compression(&memory, context_limit)
+        {
             events.status(ChatRunStatus {
                 phase: "compressing_memory".into(),
                 generation: stream_generation,
@@ -305,7 +332,7 @@ where
             .cloned()
             .collect();
 
-        if !evicted_for_compression.is_empty() {
+        if !request.disable_rolling_memory && !evicted_for_compression.is_empty() {
             events.status(ChatRunStatus {
                 phase: "compressing_memory".into(),
                 generation: stream_generation,
@@ -366,7 +393,8 @@ where
             }
         }
 
-        if !window_plan.evicted.is_empty()
+        if !request.disable_vector_retrieval
+            && !window_plan.evicted.is_empty()
             && !session_id.trim().is_empty()
             && crate::chat::index_evicted_messages(
                 &state.chat_memory,
@@ -379,6 +407,8 @@ where
             .await
         {
             vector_memory_compressed = true;
+            vector_chunks_indexed =
+                vector_chunks_indexed.saturating_add(window_plan.evicted.len() as u32);
         }
 
         retrieved_preview = if retrieved_block.is_empty() {
@@ -392,8 +422,27 @@ where
             Some(retrieved_chunk_count as u32)
         };
 
+        let final_input_estimate = estimate_chat_input_tokens(
+            &api_messages,
+            system_prompt.as_deref(),
+            &memory,
+            &retrieved_block,
+        );
+        input_estimate_final = final_input_estimate;
+        if crate::chat::preflight_needs_degrade(final_input_estimate, context_limit) {
+            if let Some(next) = degrade.next() {
+                degrade = next;
+                degrade_used_for_recovery = degrade;
+                tracing::warn!(
+                    "post-memory context degrade → {} (estimate={final_input_estimate})",
+                    degrade.label()
+                );
+                continue;
+            }
+        }
+
         let effective_max_tokens =
-            effective_chat_max_tokens(max_tokens, input_estimate, context_limit);
+            effective_chat_max_tokens(max_tokens, final_input_estimate, context_limit);
 
         let tools_active = request
             .chat_context
@@ -488,7 +537,7 @@ where
         let retry = degrade.next().is_some()
             && crate::chat::should_retry_for_context(
                 stream_out.as_ref().map(|o| &o.result).map_err(|e| e),
-                input_estimate,
+                final_input_estimate,
                 context_limit,
             );
         if retry {
@@ -532,6 +581,25 @@ where
             r.retrieved_memory = retrieved_preview.clone();
             r.vector_chunks_used = vector_chunks_used;
             r.vector_memory_compressed = vector_memory_compressed;
+            r.memory_diagnostics = Some(MemoryDiagnostics {
+                rolling_summary_chars: memory.chars().count(),
+                evicted_turns: evicted_count,
+                vector_available,
+                vector_chunks_indexed,
+                vector_chunks_retrieved: vector_chunks_used.unwrap_or(0),
+                retrieval_query_preview,
+                retrieved_memory_chars: retrieved_preview
+                    .as_deref()
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0),
+                degrade_level_used: degrade_used_for_recovery.as_u8().max(degrade.as_u8()),
+                degrade_label: degrade.label().to_string(),
+                input_estimate_first,
+                input_estimate_final,
+                context_limit,
+                rolling_disabled: request.disable_rolling_memory,
+                vector_retrieval_disabled: request.disable_vector_retrieval,
+            });
             if let Some(ctx) = request.chat_context.as_ref() {
                 use crate::workspace::ChatScope;
                 let user_edit_intent = messages
@@ -1051,6 +1119,15 @@ fn estimate_chat_input_tokens(
     msg_tokens + ((sys_chars + 3) / 4) as u32
 }
 
+fn preview_text(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max_chars).collect();
+    format!("{head}...")
+}
+
 fn effective_chat_max_tokens(mode_floor: i64, input_estimate: u32, context_limit: i64) -> u32 {
     let ctx = context_limit.max(8192);
     let input = i64::from(input_estimate);
@@ -1150,5 +1227,30 @@ mod tests {
         assert!(prompt.contains("generated file fence"));
         assert!(prompt.contains("close the markdown fence"));
         assert!(prompt.contains("next ```file"));
+    }
+
+    #[test]
+    fn stream_interrupted_partial_result_requests_continuation() {
+        let result = CompletionResult {
+            text: "partial answer".into(),
+            model: "test".into(),
+            latency_ms: 0,
+            usage: Default::default(),
+            context_window_size: None,
+            scoped_text: None,
+            session_summary: None,
+            memory_compressed: false,
+            evicted_turns: None,
+            context_recovered: false,
+            stream_incomplete: true,
+            finish_reason: Some("stream_interrupted".into()),
+            output_truncated: true,
+            retrieved_memory: None,
+            vector_chunks_used: None,
+            vector_memory_compressed: false,
+            memory_diagnostics: None,
+        };
+
+        assert!(should_auto_continue_completion(&result, &result.text));
     }
 }

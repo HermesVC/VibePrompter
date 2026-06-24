@@ -6,9 +6,7 @@ pub const JINJA_PROMPT_MAX_RETRIES: usize = 3;
 
 pub fn is_jinja_prompt_template_error(err: &AppError) -> bool {
     let msg = err.to_string().to_ascii_lowercase();
-    msg.contains("jinja")
-        || msg.contains("no user query found")
-        || msg.contains("prompt template")
+    msg.contains("jinja") || msg.contains("no user query found") || msg.contains("prompt template")
 }
 
 /// Short text for UI tooltips while retrying (not the full vendor essay).

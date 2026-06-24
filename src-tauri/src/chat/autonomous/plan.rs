@@ -126,7 +126,9 @@ pub fn parse_step_result(text: &str) -> Option<StepResultTag> {
     let lower = text.to_ascii_lowercase();
     let open = lower.find(&format!("<{STEP_RESULT_TAG}"))?;
     let after_open = &text[open..];
-    let close_rel = after_open.to_ascii_lowercase().find(&format!("</{STEP_RESULT_TAG}>"))?;
+    let close_rel = after_open
+        .to_ascii_lowercase()
+        .find(&format!("</{STEP_RESULT_TAG}>"))?;
     let block = &after_open[..close_rel];
     let header_end = block.find('>')?;
     let header = block[..header_end].trim();
@@ -188,7 +190,10 @@ mod tests {
 </autonomous-plan>"#;
         let plan = parse_autonomous_plan(text).expect("plan");
         assert_eq!(plan.steps.len(), 2);
-        assert_eq!(plan.steps[1].verify.as_ref().unwrap().kind, "file_not_contains");
+        assert_eq!(
+            plan.steps[1].verify.as_ref().unwrap().kind,
+            "file_not_contains"
+        );
     }
 
     #[test]

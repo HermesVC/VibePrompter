@@ -1,6 +1,8 @@
 //! Headless tool-call probe — parse, execute, optional live LLM round-trip.
 
-use app_lib::app::probe::{build_probe_state, probe_tool_call_live, probe_tool_call_parse_and_execute};
+use app_lib::app::probe::{
+    build_probe_state, probe_tool_call_live, probe_tool_call_parse_and_execute,
+};
 use app_lib::providers::prompt_format::tool_call_parse;
 use serde::Serialize;
 

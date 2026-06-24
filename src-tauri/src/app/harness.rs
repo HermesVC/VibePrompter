@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use crate::app::probe::{probe_apply_patch_smoke, probe_harness_fixture_bugfix, HarnessFixtureProbeResult};
+use crate::app::probe::{
+    probe_apply_patch_smoke, probe_harness_fixture_bugfix, HarnessFixtureProbeResult,
+};
 use crate::app::AppState;
 use crate::providers::prompt_format::tool_call_parse;
 use crate::utils::AppResult;
@@ -71,7 +73,8 @@ pub async fn run_deterministic_checks(state: &AppState) -> AppResult<HarnessDete
         modifiers: vec![],
         language_id: None,
     };
-    let sys_tools = compose_system_prompt_with_opts("", &ctx, ComposeSystemOptions { tools_active: true });
+    let sys_tools =
+        compose_system_prompt_with_opts("", &ctx, ComposeSystemOptions { tools_active: true });
     checks.push(check(
         "tools_active_system_omits_file_body",
         !sys_tools.contains("$secret") && sys_tools.contains("read_file"),
@@ -152,11 +155,7 @@ foreach ($projectUuids as $x) {
     ));
 
     let (smoke_ok, smoke_msg) = probe_apply_patch_smoke(state).await?;
-    checks.push(check(
-        "apply_patch_smoke",
-        smoke_ok,
-        smoke_msg,
-    ));
+    checks.push(check("apply_patch_smoke", smoke_ok, smoke_msg));
 
     let toolchain = crate::app::toolchain_probe::run_toolchain_deterministic(state).await?;
     for s in &toolchain.steps {
@@ -177,7 +176,9 @@ pub async fn probe_harness_audit(state: &AppState) -> AppResult<HarnessFixturePr
 }
 
 /// Multi-step React scaffold under `test/harness-react/` (requires LM Studio). `HARNESS_REACT=1`.
-pub async fn probe_react_scaffold_steps(state: &AppState) -> AppResult<Vec<ReactScaffoldStepReport>> {
+pub async fn probe_react_scaffold_steps(
+    state: &AppState,
+) -> AppResult<Vec<ReactScaffoldStepReport>> {
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -248,9 +249,7 @@ pub async fn probe_react_scaffold_steps(state: &AppState) -> AppResult<Vec<React
             fn memory(&mut self, _: crate::chat::ChatRunMemoryUpdate) {}
         }
 
-        let mut trace = Trace {
-            tools_phase: false,
-        };
+        let mut trace = Trace { tools_phase: false };
         let result = run_chat(
             state,
             ChatRunRequest {
@@ -318,7 +317,9 @@ pub fn extract_generated_file_fences(text: &str) -> Vec<(String, String)> {
         };
         let header = text[after..after + header_end_rel].trim();
         let content_start = after + header_end_rel + 1;
-        let close = text[content_start..].find("```").unwrap_or(text.len() - content_start);
+        let close = text[content_start..]
+            .find("```")
+            .unwrap_or(text.len() - content_start);
         let content = text[content_start..content_start + close].trim_end();
         if let Some(path) = parse_generated_file_header(header) {
             if !is_patch_wire_fence_content(content) {

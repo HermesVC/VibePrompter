@@ -6,13 +6,18 @@ import {
 } from '@shared/lib/chatDebugApi';
 import {
   interpretMemoryProbeResult,
+  memoryNoMemoryNegativeScenario,
   memoryRecallPressureScenario,
   memoryRecallOnlyScenario,
+  memoryRollingOnlyRecallScenario,
   memorySeedFactScenario,
+  memorySentinelSeedScenario,
+  memoryVectorOnlyRecallScenario,
 } from '@shared/lib/chatDebugMemoryScenarios';
 import {
   harnessAuditScenario,
   harnessMemoryRecallScenario,
+  HARNESS_AUDIT_SESSION,
   interpretDeterministicHarness,
   interpretHarnessAuditTrace,
   interpretHarnessMemoryRecall,
@@ -71,6 +76,15 @@ type CompletionLike = {
   vectorMemoryCompressed?: boolean;
   sessionSummary?: string;
   retrievedMemory?: string;
+  memoryDiagnostics?: {
+    vectorAvailable?: boolean;
+    vectorChunksRetrieved?: number;
+    vectorChunksIndexed?: number;
+    rollingSummaryChars?: number;
+    degradeLabel?: string;
+    inputEstimateFirst?: number;
+    inputEstimateFinal?: number;
+  };
 };
 
 export function ChatDebugPanel() {
@@ -291,6 +305,30 @@ export function ChatDebugPanel() {
             onClick={() => loadPreset(memoryRecallOnlyScenario(seedSummary))}
           >
             2. Recall only
+          </PhButton>
+          <PhButton size="sm" disabled={busy} onClick={() => loadPreset(memorySentinelSeedScenario())}>
+            Sentinel seed
+          </PhButton>
+          <PhButton
+            size="sm"
+            disabled={busy}
+            onClick={() => loadPreset(memoryVectorOnlyRecallScenario())}
+          >
+            Vector only
+          </PhButton>
+          <PhButton
+            size="sm"
+            disabled={busy || !seedSummary}
+            onClick={() => loadPreset(memoryRollingOnlyRecallScenario(seedSummary))}
+          >
+            Rolling only
+          </PhButton>
+          <PhButton
+            size="sm"
+            disabled={busy}
+            onClick={() => loadPreset(memoryNoMemoryNegativeScenario())}
+          >
+            No memory
           </PhButton>
         </div>
         {memoryVerdict && (

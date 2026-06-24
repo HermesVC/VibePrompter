@@ -9,8 +9,8 @@ pub mod types;
 pub mod verify;
 
 pub use context::{
-    compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output,
-    list_modifiers, normalize_chat_context, scope_user_context_block, user_requests_code_edit,
+    compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output, list_modifiers,
+    normalize_chat_context, scope_user_context_block, user_requests_code_edit,
     ComposeSystemOptions,
 };
 pub use fs::{

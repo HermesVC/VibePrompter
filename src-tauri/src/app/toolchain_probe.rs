@@ -65,7 +65,8 @@ fn step(id: &str, tool: &str, pass: bool, detail: impl Into<String>) -> Toolchai
 
 /// Remove integration fixture files (best-effort).
 pub fn reset_tools_integration_dir(workspace_root: &Path) -> AppResult<()> {
-    let dir = workspace_root.join(TOOLS_INTEGRATION_DIR.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let dir =
+        workspace_root.join(TOOLS_INTEGRATION_DIR.replace('/', std::path::MAIN_SEPARATOR_STR));
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
     }
@@ -83,7 +84,9 @@ async fn tool_ctx(state: &AppState) -> AppResult<ToolExecutionContext> {
 }
 
 /// Deterministic: write_file → apply_patch → negatives → wire parse → verify.
-pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<ToolchainDeterministicReport> {
+pub async fn run_toolchain_deterministic(
+    state: &AppState,
+) -> AppResult<ToolchainDeterministicReport> {
     let settings = state.workspace.get_settings().await?;
     let root = PathBuf::from(settings.workspace_root.trim());
     reset_tools_integration_dir(&root)?;
@@ -116,12 +119,7 @@ pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<Toolchai
         }),
     )
     .await?;
-    steps.push(step(
-        "apply_patch_title",
-        "apply_patch",
-        p1.ok,
-        &p1.message,
-    ));
+    steps.push(step("apply_patch_title", "apply_patch", p1.ok, &p1.message));
 
     // --- second file write + patch ---
     let w2 = tools::execute_tool(
@@ -130,7 +128,12 @@ pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<Toolchai
         serde_json::json!({ "path": TOOLS_CSS_REL, "content": STUB_CSS }),
     )
     .await?;
-    steps.push(step("write_file_create_css", "write_file", w2.ok, &w2.message));
+    steps.push(step(
+        "write_file_create_css",
+        "write_file",
+        w2.ok,
+        &w2.message,
+    ));
 
     let p2 = tools::execute_tool(
         &ctx,
@@ -142,12 +145,7 @@ pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<Toolchai
         }),
     )
     .await?;
-    steps.push(step(
-        "apply_patch_css",
-        "apply_patch",
-        p2.ok,
-        &p2.message,
-    ));
+    steps.push(step("apply_patch_css", "apply_patch", p2.ok, &p2.message));
 
     // --- negative: write_file on existing ---
     let w_dup = tools::execute_tool(
@@ -224,7 +222,10 @@ pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<Toolchai
         if page_body.contains("Title Wire-Patched") {
             "page.html has patched title".into()
         } else {
-            format!("unexpected body: {}…", page_body.chars().take(80).collect::<String>())
+            format!(
+                "unexpected body: {}…",
+                page_body.chars().take(80).collect::<String>()
+            )
         },
     ));
 
@@ -300,10 +301,7 @@ pub async fn run_toolchain_deterministic(state: &AppState) -> AppResult<Toolchai
     Ok(ToolchainDeterministicReport { steps, all_pass })
 }
 
-async fn execute_first_parsed_call(
-    state: &AppState,
-    sample: &str,
-) -> AppResult<(bool, String)> {
+async fn execute_first_parsed_call(state: &AppState, sample: &str) -> AppResult<(bool, String)> {
     let calls = tool_call_parse::parse_all_tool_calls(sample);
     let Some(call) = calls.first() else {
         return Ok((false, "parse returned 0 calls".into()));
@@ -341,9 +339,7 @@ pub async fn run_toolchain_live(state: &AppState) -> AppResult<ToolchainLiveRepo
         fn memory(&mut self, _: crate::chat::ChatRunMemoryUpdate) {}
     }
 
-    let mut trace = Trace {
-        tools_phase: false,
-    };
+    let mut trace = Trace { tools_phase: false };
 
     let prompt = format!(
         "Интеграционный тест tools в `{TOOLS_INTEGRATION_DIR}/` (папка пустая).\n\
@@ -386,8 +382,10 @@ pub async fn run_toolchain_live(state: &AppState) -> AppResult<ToolchainLiveRepo
 
     let text = result.text;
     let markers = ToolMarkers {
-        mentions_write_file: text.contains("write_file") || text.contains("[Tool result: write_file]"),
-        mentions_apply_patch: text.contains("apply_patch") || text.contains("[Tool result: apply_patch]"),
+        mentions_write_file: text.contains("write_file")
+            || text.contains("[Tool result: write_file]"),
+        mentions_apply_patch: text.contains("apply_patch")
+            || text.contains("[Tool result: apply_patch]"),
         mentions_write_created: text.contains("Created test/harness-tools"),
         mentions_patch_applied: text.contains("Patched test/harness-tools"),
     };

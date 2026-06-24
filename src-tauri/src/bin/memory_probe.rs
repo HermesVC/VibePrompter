@@ -1,10 +1,7 @@
 //! Headless memory recall probe — same pipeline as chat + debug panel.
 
 use std::collections::HashSet;
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use app_lib::app::probe::build_probe_state;
 use app_lib::chat::{
@@ -52,7 +49,8 @@ struct TraceSink {
 
 impl ChatRunEventSink for TraceSink {
     fn status(&mut self, status: ChatRunStatus) {
-        self.trace.push(serde_json::json!({ "type": "status", "status": status }));
+        self.trace
+            .push(serde_json::json!({ "type": "status", "status": status }));
     }
 
     fn token(&mut self, _generation: u32, _delta: &str) {}
@@ -175,14 +173,14 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let rolling_memory = match compress_evicted_turns(&row, &cfg, "", &plan.evicted, context_limit).await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("compress_evicted_turns failed ({e}), using fallback merge");
-            fallback_merge_memory("", &plan.evicted, context_limit)
-        }
-    };
+    let rolling_memory =
+        match compress_evicted_turns(&row, &cfg, "", &plan.evicted, context_limit).await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("compress_evicted_turns failed ({e}), using fallback merge");
+                fallback_merge_memory("", &plan.evicted, context_limit)
+            }
+        };
 
     let mut indexed_hashes: HashSet<String> = state
         .chat_memory
@@ -213,8 +211,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!(
         "Phase 1 done: evicted={evicted_count} summary_chars={} secret_in_summary={}",
-        phase1_report.session_summary_chars,
-        phase1_report.summary_contains_secret
+        phase1_report.session_summary_chars, phase1_report.summary_contains_secret
     );
 
     println!("Phase 2: vector recall only (no session_summary)…");
@@ -236,6 +233,7 @@ async fn main() -> anyhow::Result<()> {
             chat_context: None,
             session_summary: None,
             session_id: Some(session_id.clone()),
+            disable_rolling_memory: true,
             ..Default::default()
         },
         cancel,
@@ -276,7 +274,11 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!(
             "FAIL: vector recall — answer_secret={answer_contains_secret} \
              retrieved_secret={} chunks_used={} answer={answer}",
-            phase2.retrieved_memory.as_deref().unwrap_or("").contains(SECRET_CODE),
+            phase2
+                .retrieved_memory
+                .as_deref()
+                .unwrap_or("")
+                .contains(SECRET_CODE),
             phase2.vector_chunks_used.unwrap_or(0)
         );
     }

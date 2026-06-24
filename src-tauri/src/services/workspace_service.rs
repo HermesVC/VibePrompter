@@ -8,8 +8,8 @@ use crate::workspace::symbols::{format_outline_text, outline_for_file};
 use crate::workspace::{
     compose_system_prompt, compose_system_prompt_with_opts, extract_snippet_output,
     list_dir_recursive, list_modifiers, read_file_range, write_file_checked, ChatContextPayload,
-    ChatModifierInfo, FileContentDto, FolderScopeDto, PolicyDecision,
-    PolicyEngine, WorkspaceSettings, WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
+    ChatModifierInfo, FileContentDto, FolderScopeDto, PolicyDecision, PolicyEngine,
+    WorkspaceSettings, WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
 
 #[derive(Clone)]

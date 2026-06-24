@@ -28,10 +28,7 @@ pub struct VerifyOutcome {
     pub kind: String,
 }
 
-pub async fn run_verify_spec(
-    workspace_root: &Path,
-    spec: &VerifySpec,
-) -> AppResult<VerifyOutcome> {
+pub async fn run_verify_spec(workspace_root: &Path, spec: &VerifySpec) -> AppResult<VerifyOutcome> {
     let outcome = match spec.kind.as_str() {
         "file_contains" => verify_file_contains(workspace_root, spec)?,
         "file_not_contains" => verify_file_not_contains(workspace_root, spec)?,
@@ -93,7 +90,11 @@ async fn verify_php_lint(root: &Path, spec: &VerifySpec) -> AppResult<VerifyOutc
     let message = if ok {
         format!("php -l OK for {path}")
     } else {
-        format!("php -l failed for {path}: {}{}", stdout.trim(), stderr.trim())
+        format!(
+            "php -l failed for {path}: {}{}",
+            stdout.trim(),
+            stderr.trim()
+        )
     };
     Ok(VerifyOutcome {
         ok,
@@ -180,8 +181,7 @@ fn require_needle(spec: &VerifySpec) -> AppResult<String> {
 
 fn read_workspace_file(root: &Path, rel: &str) -> AppResult<String> {
     let abs = resolve_under_workspace(root, rel)?;
-    std::fs::read_to_string(&abs)
-        .map_err(|e| AppError::Validation(format!("read {rel}: {e}")))
+    std::fs::read_to_string(&abs).map_err(|e| AppError::Validation(format!("read {rel}: {e}")))
 }
 
 fn resolve_under_workspace(root: &Path, rel: &str) -> AppResult<PathBuf> {

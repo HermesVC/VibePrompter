@@ -52,7 +52,12 @@ pub fn execution_user_message(plan: &AutonomousPlan, step: &PlanStep) -> String 
          If a tool returns ERROR, set step status=\"failed\". \
          When finished, output `<{STEP_RESULT_TAG} step=\"{}\" status=\"done|failed\">` \
          (step id must be {}) and `<plan-step-summary>` with `step: {} / {}`.",
-        step.id, step.title, step.id, step.id, step.id, plan.steps.len()
+        step.id,
+        step.title,
+        step.id,
+        step.id,
+        step.id,
+        plan.steps.len()
     )
 }
 

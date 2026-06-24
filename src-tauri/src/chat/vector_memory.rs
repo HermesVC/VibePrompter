@@ -892,7 +892,10 @@ fn skip_leading_code_fence(s: &str) -> &str {
         return s;
     }
     let after_ticks = s.get(3..).unwrap_or("");
-    let content_start = after_ticks.find('\n').map(|i| i + 1).unwrap_or(after_ticks.len());
+    let content_start = after_ticks
+        .find('\n')
+        .map(|i| i + 1)
+        .unwrap_or(after_ticks.len());
     let inner = &after_ticks[content_start..];
     inner
         .find("```")
@@ -903,8 +906,7 @@ fn skip_leading_code_fence(s: &str) -> &str {
 
 fn should_skip_evicted_message_content(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("<plan-step-summary>")
-        || lower.contains("</plan-step-summary>")
+    lower.contains("<plan-step-summary>") || lower.contains("</plan-step-summary>")
 }
 
 fn prepare_message_text_for_memory(role: &str, text: &str) -> Option<String> {
@@ -933,8 +935,14 @@ fn format_apply_patch_memory_note(r: &crate::tools::ToolExecutionResult) -> Stri
     let mut lines = vec![format!("PATCH: {path}")];
     if let Some(edits) = r.output.get("memoryEdits").and_then(|v| v.as_array()) {
         for edit in edits {
-            let old = edit.get("oldPreview").and_then(|v| v.as_str()).unwrap_or("");
-            let new = edit.get("newPreview").and_then(|v| v.as_str()).unwrap_or("");
+            let old = edit
+                .get("oldPreview")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new = edit
+                .get("newPreview")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if !old.is_empty() || !new.is_empty() {
                 lines.push(format!("  {old} → {new}"));
             }

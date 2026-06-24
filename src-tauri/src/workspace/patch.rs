@@ -68,7 +68,9 @@ pub struct PatchValidation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchError {
-    EmptyOldText { edit_index: usize },
+    EmptyOldText {
+        edit_index: usize,
+    },
     NotFound {
         edit_index: usize,
         old_preview: String,
@@ -194,9 +196,7 @@ impl WorkspaceSettings {
         PatchLimits {
             max_old_lines: max_old,
             max_new_lines: max_old.saturating_add(15),
-            max_old_chars: max_old
-                .saturating_mul(200)
-                .clamp(1_500, 20_000),
+            max_old_chars: max_old.saturating_mul(200).clamp(1_500, 20_000),
             rewrite_min_lines: (max_old.saturating_mul(3) / 5).clamp(12, 50),
             rewrite_change_ratio: defaults.rewrite_change_ratio,
         }
@@ -282,7 +282,9 @@ fn positional_changed_lines(old: &str, new: &str) -> usize {
     let old_l: Vec<&str> = old.lines().collect();
     let new_l: Vec<&str> = new.lines().collect();
     let max_len = old_l.len().max(new_l.len());
-    (0..max_len).filter(|i| old_l.get(*i) != new_l.get(*i)).count()
+    (0..max_len)
+        .filter(|i| old_l.get(*i) != new_l.get(*i))
+        .count()
 }
 
 #[cfg(test)]
@@ -377,7 +379,10 @@ mod tests {
 
     #[test]
     fn rejects_oversized_old_text() {
-        let big = (0..50).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let big = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let v = validate_patch_edits(
             &[PatchEdit {
                 old_text: big.clone(),
@@ -385,7 +390,10 @@ mod tests {
             }],
             PatchLimits::default(),
         );
-        assert!(v.violations.iter().any(|m| m.contains("old_text is 50 lines")));
+        assert!(v
+            .violations
+            .iter()
+            .any(|m| m.contains("old_text is 50 lines")));
     }
 
     #[test]

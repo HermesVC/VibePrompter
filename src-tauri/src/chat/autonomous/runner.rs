@@ -16,13 +16,13 @@ use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_retry_user_message,
     planning_user_message, replan_user_message, AUTONOMOUS_PROTOCOL,
 };
-use crate::workspace::{run_verify_spec, VerifyOutcome};
 use crate::chat::{
     is_step_retriable_error, run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus,
     DegradeLevel,
 };
 use crate::models::{ChatMessage, CompletionResult};
 use crate::utils::AppError;
+use crate::workspace::{run_verify_spec, VerifyOutcome};
 
 #[derive(Clone)]
 pub struct AutonomousRunRequest {
@@ -120,14 +120,7 @@ where
         return Err(AppError::Validation("goal is empty".into()));
     }
 
-    let workspace_root = PathBuf::from(
-        state
-            .workspace
-            .get_settings()
-            .await?
-            .workspace_root
-            .trim(),
-    );
+    let workspace_root = PathBuf::from(state.workspace.get_settings().await?.workspace_root.trim());
 
     let mut messages = request.base.messages.clone();
     let mut session_summary = request.base.session_summary.clone();
@@ -176,12 +169,7 @@ where
 
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
-            return Ok(cancelled_result(
-                plan,
-                records,
-                final_text,
-                replans_used,
-            ));
+            return Ok(cancelled_result(plan, records, final_text, replans_used));
         }
 
         if plan.all_done() {
@@ -219,7 +207,10 @@ where
             Some(format!("Step {}: {}", step.id, step.title)),
         );
 
-        let exec_msg = wrap_with_protocol(&execution_user_message(&plan, &step), Some(AUTONOMOUS_PROTOCOL));
+        let exec_msg = wrap_with_protocol(
+            &execution_user_message(&plan, &step),
+            Some(AUTONOMOUS_PROTOCOL),
+        );
         messages.push(ChatMessage {
             role: "user".into(),
             content: exec_msg,
@@ -242,12 +233,13 @@ where
         steps_executed += 1;
 
         for r in parse_all_step_results(&result.text) {
-            if r.step_id != step.id && !r.summary.is_empty() {
+            if r.step_id != step.id {
                 tracing::warn!(
                     "step-result for step {} while executing step {} — model may be ahead of orchestrator",
                     r.step_id,
                     step.id
                 );
+                continue;
             }
             plan.mark(
                 r.step_id,
@@ -276,11 +268,7 @@ where
                         verify_ok = Some(outcome.ok);
                         verify_message = Some(outcome.message.clone());
                         if !outcome.ok && step_status != StepStatus::Failed {
-                            plan.mark(
-                                step.id,
-                                StepStatus::Failed,
-                                Some(outcome.message.clone()),
-                            );
+                            plan.mark(step.id, StepStatus::Failed, Some(outcome.message.clone()));
                             emit_plan_snapshot(events, &plan);
                             records.push(AutonomousStepRecord {
                                 step_id: step.id,
@@ -580,6 +568,9 @@ where
             } else {
                 None
             },
+            force_context_limit: base.force_context_limit,
+            disable_rolling_memory: base.disable_rolling_memory,
+            disable_vector_retrieval: base.disable_vector_retrieval,
         };
 
         let mut adapter = SinkAdapter { inner: events };
@@ -590,8 +581,10 @@ where
                     content: result.text.clone(),
                     images: vec![],
                 });
-                if let Some(summary) =
-                    result.session_summary.as_ref().filter(|s| !s.trim().is_empty())
+                if let Some(summary) = result
+                    .session_summary
+                    .as_ref()
+                    .filter(|s| !s.trim().is_empty())
                 {
                     *session_summary = Some(summary.clone());
                 }
@@ -605,9 +598,8 @@ where
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        AppError::Validation("autonomous turn failed after retries".into())
-    }))
+    Err(last_err
+        .unwrap_or_else(|| AppError::Validation("autonomous turn failed after retries".into())))
 }
 
 fn build_degrade_anchor(goal: &str, plan: Option<&AutonomousPlan>) -> String {
@@ -632,10 +624,7 @@ fn current_step_id(plan: &AutonomousPlan) -> Option<u32> {
         .or_else(|| plan.next_pending().map(|s| s.id))
 }
 
-fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
-    events: &mut E,
-    plan: &AutonomousPlan,
-) {
+fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(events: &mut E, plan: &AutonomousPlan) {
     events.autonomous_plan(AutonomousPlanSnapshot {
         progress: plan.progress_label(),
         current_step_id: current_step_id(plan),
@@ -653,7 +642,11 @@ fn emit_plan_snapshot<E: AutonomousRunEventSink + ?Sized>(
 
 /// Require `<step-result step="N">` for the orchestrator step — no silent done.
 fn resolve_current_step_status(text: &str, executing_step_id: u32) -> StepStatus {
-    match parse_step_result(text).filter(|r| r.step_id == executing_step_id) {
+    match parse_all_step_results(text)
+        .into_iter()
+        .rev()
+        .find(|r| r.step_id == executing_step_id)
+    {
         Some(r) => r.status,
         None => {
             if let Some(wrong) = parse_step_result(text) {
@@ -673,13 +666,11 @@ fn preview(text: &str) -> String {
 
 /// Assistant turn included at least one failed tool execution.
 fn tool_results_indicate_failure(text: &str) -> bool {
-    text.split("[Tool result:")
-        .skip(1)
-        .any(|chunk| {
-            chunk.contains("ERROR:")
-                || chunk.contains("\"ok\": false")
-                || chunk.contains("\"ok\":false")
-        })
+    text.split("[Tool result:").skip(1).any(|chunk| {
+        chunk.contains("ERROR:")
+            || chunk.contains("\"ok\": false")
+            || chunk.contains("\"ok\":false")
+    })
 }
 
 fn cancelled_result(
@@ -710,5 +701,34 @@ fn failed_result(
         steps,
         final_text,
         replans_used,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_step_status_uses_matching_step_not_first_tag() {
+        let text = r#"
+<step-result step="3" status="done">future</step-result>
+<step-result step="2" status="done">current</step-result>
+"#;
+        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Done);
+    }
+
+    #[test]
+    fn current_step_status_uses_last_matching_tag() {
+        let text = r#"
+<step-result step="2" status="failed">old failure</step-result>
+<step-result step="2" status="done">fixed</step-result>
+"#;
+        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Done);
+    }
+
+    #[test]
+    fn wrong_step_result_does_not_count_as_current_success() {
+        let text = r#"<step-result step="9" status="done">wrong</step-result>"#;
+        assert_eq!(resolve_current_step_status(text, 2), StepStatus::Failed);
     }
 }

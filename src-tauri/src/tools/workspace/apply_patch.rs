@@ -102,7 +102,8 @@ pub async fn execute(
     }
 
     let file = ctx.workspace.read_file(&path, None, None).await?;
-    let patched = apply_patches(&file.content, &edits).map_err(|e| AppError::Validation(e.message()))?;
+    let patched =
+        apply_patches(&file.content, &edits).map_err(|e| AppError::Validation(e.message()))?;
 
     let root = std::path::PathBuf::from(ctx.settings.workspace_root.trim());
     let hash = write_file_checked(
@@ -207,10 +208,7 @@ fn parse_edit_object(item: &Value) -> AppResult<PatchEdit> {
         .get("old_text")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("edit.old_text is required".into()))?;
-    let new_text = item
-        .get("new_text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let new_text = item.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
     Ok(PatchEdit {
         old_text: old_text.to_string(),
         new_text: new_text.to_string(),

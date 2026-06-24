@@ -112,8 +112,7 @@ pub fn scope_enables_tools(scope: &ChatScope) -> bool {
 
 /// True when scope and connection format both support the workspace agent tool loop.
 pub fn connection_tools_active(scope: &ChatScope, prompt_format_id: &str) -> bool {
-    scope_enables_tools(scope)
-        && prompt_format::resolve(prompt_format_id).supports_tool_calling()
+    scope_enables_tools(scope) && prompt_format::resolve(prompt_format_id).supports_tool_calling()
 }
 
 pub fn workspace_tool_definitions() -> Vec<ToolDefinition> {
@@ -480,10 +479,7 @@ where
         let failures: Vec<_> = last_tool_results.iter().filter(|r| !r.ok).collect();
         if !failures.is_empty() && !result.text.contains("ERROR:") {
             let err_block = format_tool_results_for_user(
-                &failures
-                    .iter()
-                    .map(|r| (*r).clone())
-                    .collect::<Vec<_>>(),
+                &failures.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
             );
             if !err_block.trim().is_empty() {
                 result.text = format!("{err_block}\n\n{}", result.text.trim());
@@ -516,9 +512,8 @@ fn format_tool_results_for_user(results: &[ToolExecutionResult]) -> String {
         .iter()
         .map(|r| {
             if r.ok {
-                let body = serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| {
-                    serde_json::Value::String(r.message.clone()).to_string()
-                });
+                let body = serde_json::to_string_pretty(&r.output)
+                    .unwrap_or_else(|_| serde_json::Value::String(r.message.clone()).to_string());
                 format!("[{}]\n{body}", r.name)
             } else {
                 format!("[{}] ERROR: {}", r.name, r.message)
@@ -547,8 +542,9 @@ where
     use crate::chat::{should_retry_for_context, WindowAggression};
 
     let mut aggression = WindowAggression::Normal;
-    let mut last_result: AppResult<crate::models::CompletionResult> =
-        Err(crate::utils::AppError::Validation("tool follow-up did not run".into()));
+    let mut last_result: AppResult<crate::models::CompletionResult> = Err(
+        crate::utils::AppError::Validation("tool follow-up did not run".into()),
+    );
 
     for attempt in 0..=MAX_COMPLETION_CONTEXT_RETRIES {
         if should_cancel() {
@@ -902,6 +898,7 @@ mod tests {
             retrieved_memory: None,
             vector_chunks_used: None,
             vector_memory_compressed: false,
+            memory_diagnostics: None,
         };
 
         apply_tool_output_truncation(&mut result, 120);

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 export interface ChatDebugMessage {
   role: 'user' | 'assistant' | 'system' | string;
   content: string;
-  images?: Array<{ mimeType: string; dataBase64: string }>;
+  images?: unknown[];
 }
 
 export interface ChatDebugScenarioInput {
@@ -17,6 +17,12 @@ export interface ChatDebugScenarioInput {
   degradeStart?: number | null;
   /** Anchor text for degrade level 6. */
   degradeAnchor?: string | null;
+  /** Debug override for context-window pressure scenarios. */
+  forceContextLimit?: number | null;
+  /** Debug flag: ignore rolling summary memory. */
+  disableRollingMemory?: boolean | null;
+  /** Debug flag: skip semantic/vector retrieval. */
+  disableVectorRetrieval?: boolean | null;
 }
 
 export interface ChatDebugScenarioOutput {

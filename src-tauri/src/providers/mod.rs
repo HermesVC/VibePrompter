@@ -191,9 +191,7 @@ fn should_send_disable_thinking(conn: &ConnectionRow, requested: bool) -> bool {
         return false;
     }
     let base = normalize_base(&conn.base_url).to_ascii_lowercase();
-    !(base.contains("localhost")
-        || base.contains("127.0.0.1")
-        || base.contains("[::1]"))
+    !(base.contains("localhost") || base.contains("127.0.0.1") || base.contains("[::1]"))
 }
 
 /// Apply user-configured per-connection headers to an outbound request. The
@@ -377,6 +375,7 @@ pub async fn complete(
         retrieved_memory: None,
         vector_chunks_used: None,
         vector_memory_compressed: false,
+        memory_diagnostics: None,
     })
 }
 
@@ -547,15 +546,7 @@ where
         }
     }
     let mut observer = TokenObserver { on_token };
-    complete_stream_with_observer(
-        conn,
-        messages,
-        params,
-        cfg,
-        &mut observer,
-        should_cancel,
-    )
-    .await
+    complete_stream_with_observer(conn, messages, params, cfg, &mut observer, should_cancel).await
 }
 
 /// Like [`complete_stream`], but also notifies `observer` before each Jinja retry.
@@ -594,9 +585,7 @@ where
                 }
                 observer.on_provider_retry(
                     attempt + 1,
-                    &provider_errors::prompt_template_error_summary(
-                        last_jinja.as_ref().unwrap(),
-                    ),
+                    &provider_errors::prompt_template_error_summary(last_jinja.as_ref().unwrap()),
                 );
                 if attempt == 0 {
                     omit_thinking_kwargs = true;
@@ -775,6 +764,7 @@ where
                 retrieved_memory: None,
                 vector_chunks_used: None,
                 vector_memory_compressed: false,
+                memory_diagnostics: None,
             });
         }
         let event = match event {
@@ -833,9 +823,8 @@ where
                     text.push_str(delta);
                     observer.on_token(delta);
                 }
-            } else if let Some(reasoning) = delta_obj
-                .get("reasoning_content")
-                .and_then(|t| t.as_str())
+            } else if let Some(reasoning) =
+                delta_obj.get("reasoning_content").and_then(|t| t.as_str())
             {
                 if !reasoning.is_empty() {
                     text.push_str(reasoning);
@@ -896,6 +885,30 @@ where
     if stream_incomplete && stream_broken {
         let detail = stream_error.unwrap_or_else(|| "stream ended before terminal chunk".into());
         let partial_chars = text.chars().count();
+        if partial_chars > 0 {
+            tracing::warn!(
+                "stream interrupted after {partial_chars} chars; returning partial for continuation: {detail}"
+            );
+            return Ok(CompletionResult {
+                text,
+                model,
+                latency_ms: started.elapsed().as_millis() as u64,
+                usage,
+                context_window_size: None,
+                scoped_text: None,
+                session_summary: None,
+                memory_compressed: false,
+                evicted_turns: None,
+                context_recovered: false,
+                stream_incomplete: true,
+                finish_reason: Some("stream_interrupted".into()),
+                output_truncated: true,
+                retrieved_memory: None,
+                vector_chunks_used: None,
+                vector_memory_compressed: false,
+                memory_diagnostics: None,
+            });
+        }
         return Err(AppError::Network(format!(
             "stream interrupted after {partial_chars} chars: {detail}"
         )));
@@ -919,6 +932,7 @@ where
         retrieved_memory: None,
         vector_chunks_used: None,
         vector_memory_compressed: false,
+        memory_diagnostics: None,
     })
 }
 

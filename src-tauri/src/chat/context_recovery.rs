@@ -125,6 +125,7 @@ mod tests {
             retrieved_memory: None,
             vector_chunks_used: None,
             vector_memory_compressed: false,
+            memory_diagnostics: None,
         }
     }
 

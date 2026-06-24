@@ -122,8 +122,7 @@ fn parse_call_segment(segment: &str) -> Option<ParsedToolCall> {
     if let Some(call) = parse_json_tool_call(args) {
         return Some(call);
     }
-    let mut arguments =
-        parse_relaxed_args(args).unwrap_or_else(|| serde_json::Map::new().into());
+    let mut arguments = parse_relaxed_args(args).unwrap_or_else(|| serde_json::Map::new().into());
     if name == "apply_patch" {
         if let Some(fixed) = parse_apply_patch_relaxed_body(args) {
             arguments = fixed;
@@ -347,12 +346,12 @@ pub fn parse_inline_file_edits_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     let mut search_from = 0usize;
     while let Some(rel) = lower[search_from..].find("file:") {
         let at = search_from + rel;
-        let line_end = text[at..]
-            .find('\n')
-            .map(|i| at + i)
-            .unwrap_or(text.len());
+        let line_end = text[at..].find('\n').map(|i| at + i).unwrap_or(text.len());
         let header_line = text[at..line_end].trim();
-        let path = header_line.strip_prefix("file:").map(str::trim).filter(|p| !p.is_empty());
+        let path = header_line
+            .strip_prefix("file:")
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
         let Some(path) = path else {
             search_from = at + 5;
             continue;
@@ -428,10 +427,7 @@ pub fn parse_inline_file_old_new_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     let mut search_from = 0usize;
     while let Some(rel) = lower[search_from..].find("file:") {
         let at = search_from + rel;
-        let line_end = text[at..]
-            .find('\n')
-            .map(|i| at + i)
-            .unwrap_or(text.len());
+        let line_end = text[at..].find('\n').map(|i| at + i).unwrap_or(text.len());
         let header_line = text[at..line_end].trim();
         let path = header_line
             .strip_prefix("file:")
@@ -495,7 +491,11 @@ fn strip_optional_code_fence(s: &str) -> String {
 
 /// `write_file{path:…,content:…}` — HTML/CSS often contains commas; take content to end of args.
 fn parse_write_file_relaxed_body(body: &str) -> Option<Value> {
-    let inner = body.trim().trim_start_matches('{').trim_end_matches('}').trim();
+    let inner = body
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
     if inner.is_empty() {
         return None;
     }
@@ -523,7 +523,11 @@ fn extract_relaxed_path_prefix(prefix: &str) -> Option<String> {
 
 /// `apply_patch{path:…,old_text:…,new_text:…}` — commas inside unquoted old/new are common.
 fn parse_apply_patch_relaxed_body(body: &str) -> Option<Value> {
-    let inner = body.trim().trim_start_matches('{').trim_end_matches('}').trim();
+    let inner = body
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
     if inner.is_empty() {
         return None;
     }
@@ -543,8 +547,12 @@ fn parse_apply_patch_relaxed_body(body: &str) -> Option<Value> {
     let old_start = old_pos + "old_text:".len();
     let old_text = unquote_relaxed_field(inner[old_start..new_pos].trim());
     let new_start = new_pos + "new_text:".len();
-    let new_text =
-        unquote_relaxed_field(inner[new_start..].trim().trim_end_matches('}').trim_end_matches(','));
+    let new_text = unquote_relaxed_field(
+        inner[new_start..]
+            .trim()
+            .trim_end_matches('}')
+            .trim_end_matches(','),
+    );
     Some(serde_json::json!({
         "path": path,
         "old_text": old_text,
@@ -841,9 +849,8 @@ mod tests {
 
     #[test]
     fn parses_relaxed_tool_call_blocks() {
-        let calls = parse_all_tool_calls(
-            r#"<tool_call>call:read_file{path:test/index.html}</tool_call>"#,
-        );
+        let calls =
+            parse_all_tool_calls(r#"<tool_call>call:read_file{path:test/index.html}</tool_call>"#);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["path"], "test/index.html");
     }
@@ -865,9 +872,7 @@ mod tests {
 
     #[test]
     fn parses_bare_call_without_markers() {
-        let calls = parse_all_tool_calls(
-            "I will read it.\ncall:read_file{path:test/index.html}\n",
-        );
+        let calls = parse_all_tool_calls("I will read it.\ncall:read_file{path:test/index.html}\n");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
     }
@@ -1024,18 +1029,16 @@ foreach ($projectUuids as $projectUuid) {
 
     #[test]
     fn expands_multi_edit_apply_patch_into_separate_calls() {
-        let expanded = expand_apply_patch_calls(vec![
-            ParsedToolCall {
-                name: "apply_patch".into(),
-                arguments: serde_json::json!({
-                    "path": "a.php",
-                    "edits": [
-                        {"old_text": "a", "new_text": "b"},
-                        {"old_text": "c", "new_text": "d"},
-                    ]
-                }),
-            },
-        ]);
+        let expanded = expand_apply_patch_calls(vec![ParsedToolCall {
+            name: "apply_patch".into(),
+            arguments: serde_json::json!({
+                "path": "a.php",
+                "edits": [
+                    {"old_text": "a", "new_text": "b"},
+                    {"old_text": "c", "new_text": "d"},
+                ]
+            }),
+        }]);
         assert_eq!(expanded.len(), 2);
         assert_eq!(expanded[0].arguments["old_text"], "a");
         assert_eq!(expanded[1].arguments["old_text"], "c");

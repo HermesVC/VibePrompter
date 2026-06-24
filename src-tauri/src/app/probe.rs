@@ -123,16 +123,15 @@ pub async fn probe_tool_call_live(state: &AppState) -> AppResult<(String, bool)>
         fn memory(&mut self, _: crate::chat::ChatRunMemoryUpdate) {}
     }
 
-    let mut trace = Trace {
-        tools_phase: false,
-    };
+    let mut trace = Trace { tools_phase: false };
     let result = run_chat(
         state,
         ChatRunRequest {
             messages: vec![ChatMessage {
                 role: "user".into(),
-                content: "Прочитай test/single-page-games/index.html и скажи содержимое тега title."
-                    .into(),
+                content:
+                    "Прочитай test/single-page-games/index.html и скажи содержимое тега title."
+                        .into(),
                 images: vec![],
             }],
             mode_id: Some("chat-developer".into()),
@@ -234,7 +233,10 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
     if revert.ok {
         Ok((true, "synthetic apply_patch fix+revert OK".into()))
     } else {
-        Ok((false, format!("fix OK but revert failed: {}", revert.message)))
+        Ok((
+            false,
+            format!("fix OK but revert failed: {}", revert.message),
+        ))
     }
 }
 
@@ -281,9 +283,8 @@ pub async fn probe_harness_fixture_bugfix(
     let settings = state.workspace.get_settings().await?;
     let root = settings.workspace_root.trim();
     harness_fixtures::reset_synthetic_buggy_api(PathBuf::from(root).as_path())?;
-    let abs = PathBuf::from(root).join(
-        SYNTHETIC_BUGGY_API_REL.replace('/', std::path::MAIN_SEPARATOR_STR),
-    );
+    let abs = PathBuf::from(root)
+        .join(SYNTHETIC_BUGGY_API_REL.replace('/', std::path::MAIN_SEPARATOR_STR));
     let before = std::fs::read_to_string(&abs)?;
     let had_bug_before = before.contains(BUG_NEEDLE);
 

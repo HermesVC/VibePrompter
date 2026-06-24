@@ -2,9 +2,9 @@
 
 use serde_json::{json, Value};
 
-use crate::workspace::{run_verify_spec, VerifySpec};
 use crate::providers::prompt_format::ToolDefinition;
 use crate::utils::AppResult;
+use crate::workspace::{run_verify_spec, VerifySpec};
 
 use super::super::context::ToolExecutionContext;
 use super::super::ToolExecutionResult;
@@ -17,7 +17,8 @@ pub fn tool_definition() -> ToolDefinition {
         name: NAME.into(),
         description: "Run a deterministic verification check. \
 Kinds: file_contains, file_not_contains, php_lint, cargo_check, vitest. \
-Use after apply_patch to confirm the fix.".into(),
+Use after apply_patch to confirm the fix."
+            .into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -43,7 +44,10 @@ Use after apply_patch to confirm the fix.".into(),
     }
 }
 
-pub async fn execute(ctx: &ToolExecutionContext, arguments: Value) -> AppResult<ToolExecutionResult> {
+pub async fn execute(
+    ctx: &ToolExecutionContext,
+    arguments: Value,
+) -> AppResult<ToolExecutionResult> {
     let spec = parse_spec(arguments)?;
     if let Some(path) = spec.path.as_deref() {
         ensure_readable_path(ctx, path)?;

@@ -7,8 +7,7 @@
 //! ```
 
 use app_lib::app::harness::{
-    probe_harness_audit, probe_react_scaffold_steps, run_deterministic_checks,
-    REACT_SCAFFOLD_DIR,
+    probe_harness_audit, probe_react_scaffold_steps, run_deterministic_checks, REACT_SCAFFOLD_DIR,
 };
 use app_lib::app::probe::build_probe_state;
 use serde::Serialize;

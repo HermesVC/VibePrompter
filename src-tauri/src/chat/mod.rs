@@ -18,19 +18,21 @@ mod sliding_window;
 mod vector_memory;
 
 pub use agent_tools::{
-    augment_system_for_tools, connection_tools_active, run_tool_followup_loop,
-    scope_enables_tools, scope_path_for_tools, ToolLoopMemoryHook,
-};
-pub use context_recovery::{is_context_overflow_error, is_step_retriable_error, should_retry_for_context};
-pub use degrade::{apply_message_degrade, preflight_needs_degrade, DegradeLevel};
-pub use memory_compress::{
-    compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
-    summarize_turn_for_memory,
+    augment_system_for_tools, connection_tools_active, run_tool_followup_loop, scope_enables_tools,
+    scope_path_for_tools, ToolLoopMemoryHook,
 };
 pub use autonomous::{
     run_autonomous, AutonomousPhase, AutonomousPlanSnapshot, AutonomousRunConfig,
     AutonomousRunEventSink, AutonomousRunRequest, AutonomousRunResult, AutonomousStepRecord,
     StepSnapshot,
+};
+pub use context_recovery::{
+    is_context_overflow_error, is_step_retriable_error, should_retry_for_context,
+};
+pub use degrade::{apply_message_degrade, preflight_needs_degrade, DegradeLevel};
+pub use memory_compress::{
+    compress_session_memory, fallback_compress_session_memory, session_memory_needs_compression,
+    summarize_turn_for_memory,
 };
 pub use run_service::{
     run_chat, ChatRunEventSink, ChatRunMemoryUpdate, ChatRunRequest, ChatRunStatus,

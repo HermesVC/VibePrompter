@@ -354,7 +354,9 @@ pub fn scope_user_context_block(scope: &ChatScope, tools_active: bool) -> String
                     "[Scoped file: {path} (lines {line_start}-{line_end}) — use read_file tool; do not expect file body in this message]"
                 )
             } else {
-                format!("[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```")
+                format!(
+                    "[Attached file: {path} (lines {line_start}-{line_end})]\n```\n{content}\n```"
+                )
             }
         }
         ChatScope::Workspace { tree_summary } => {
@@ -563,20 +565,14 @@ mod tests {
             modifiers: vec![],
             language_id: None,
         };
-        let with_tools = compose_system_prompt_with_opts(
-            "",
-            &ctx,
-            ComposeSystemOptions { tools_active: true },
-        );
+        let with_tools =
+            compose_system_prompt_with_opts("", &ctx, ComposeSystemOptions { tools_active: true });
         assert!(with_tools.contains("read_file"));
         assert!(!with_tools.contains("$secret"));
         assert!(!with_tools.contains("output ONLY the updated file body"));
 
-        let without_tools = compose_system_prompt_with_opts(
-            "",
-            &ctx,
-            ComposeSystemOptions::default(),
-        );
+        let without_tools =
+            compose_system_prompt_with_opts("", &ctx, ComposeSystemOptions::default());
         assert!(without_tools.contains("$secret"));
         assert!(without_tools.contains("output ONLY the updated file body"));
     }

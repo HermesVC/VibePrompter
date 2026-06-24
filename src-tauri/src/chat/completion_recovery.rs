@@ -53,8 +53,7 @@ where
             aggression,
         );
         let active = window.active;
-        let input_estimate =
-            estimate_completion_input_tokens(&active, params.system.as_deref());
+        let input_estimate = estimate_completion_input_tokens(&active, params.system.as_deref());
 
         last_result = run_once(active, aggression).await;
 

@@ -696,6 +696,12 @@ pub struct ChatDebugRunScenarioInput {
     degrade_start: Option<u8>,
     /// Anchor text for degrade level 6 (autonomous goal + plan).
     degrade_anchor: Option<String>,
+    /// Debug/testing override for small-window pressure scenarios.
+    force_context_limit: Option<i64>,
+    /// Debug/testing flag: do not append/compress rolling summary memory.
+    disable_rolling_memory: Option<bool>,
+    /// Debug/testing flag: do not retrieve semantic/vector memory.
+    disable_vector_retrieval: Option<bool>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -760,6 +766,9 @@ pub async fn chat_debug_run_scenario(
             session_id: input.session_id,
             degrade_start: input.degrade_start,
             degrade_anchor: input.degrade_anchor,
+            force_context_limit: input.force_context_limit,
+            disable_rolling_memory: input.disable_rolling_memory.unwrap_or(false),
+            disable_vector_retrieval: input.disable_vector_retrieval.unwrap_or(false),
         },
         cancel_flag,
         &mut events,
@@ -776,6 +785,7 @@ pub async fn chat_debug_run_scenario(
                 "vectorChunksUsed": result.vector_chunks_used,
                 "memoryCompressed": result.memory_compressed,
                 "vectorMemoryCompressed": result.vector_memory_compressed,
+                "memoryDiagnostics": result.memory_diagnostics,
                 "textChars": result.text.chars().count(),
             }));
             Ok(ChatDebugRunScenarioOutput {
@@ -1595,6 +1605,7 @@ mod chat_command_tests {
             retrieved_memory: None,
             vector_chunks_used: None,
             vector_memory_compressed: false,
+            memory_diagnostics: None,
         };
         let text = "```file src/app.ts\nexport const unfinished = ";
 

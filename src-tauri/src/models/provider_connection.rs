@@ -156,6 +156,25 @@ pub struct TokenUsage {
     pub output_tokens: u32,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDiagnostics {
+    pub rolling_summary_chars: usize,
+    pub evicted_turns: u32,
+    pub vector_available: bool,
+    pub vector_chunks_indexed: u32,
+    pub vector_chunks_retrieved: u32,
+    pub retrieval_query_preview: Option<String>,
+    pub retrieved_memory_chars: usize,
+    pub degrade_level_used: u8,
+    pub degrade_label: String,
+    pub input_estimate_first: u32,
+    pub input_estimate_final: u32,
+    pub context_limit: i64,
+    pub rolling_disabled: bool,
+    pub vector_retrieval_disabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionResult {
     pub text: String,
@@ -249,4 +268,11 @@ pub struct CompletionResult {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub vector_memory_compressed: bool,
+    /// Compact machine-readable memory/debug state for harnesses and UI badges.
+    #[serde(
+        rename = "memoryDiagnostics",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub memory_diagnostics: Option<MemoryDiagnostics>,
 }

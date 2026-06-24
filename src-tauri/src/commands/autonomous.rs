@@ -191,9 +191,7 @@ pub async fn autonomous_debug_run(
         }
     }
 
-    let mut events = TraceEvents {
-        trace: Vec::new(),
-    };
+    let mut events = TraceEvents { trace: Vec::new() };
     let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let request = AutonomousRunRequest {
@@ -225,7 +223,9 @@ pub async fn autonomous_debug_run(
         }
         Err(e) => {
             let msg = e.to_string();
-            events.trace.push(serde_json::json!({ "type": "error", "message": msg }));
+            events
+                .trace
+                .push(serde_json::json!({ "type": "error", "message": msg }));
             Ok(AutonomousDebugRunOutput {
                 trace: events.trace,
                 result: None,

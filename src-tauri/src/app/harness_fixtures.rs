@@ -40,9 +40,7 @@ pub fn reset_synthetic_buggy_api(workspace_root: &Path) -> AppResult<PathBuf> {
     let root = workspace_root;
     let dir = root.join(HARNESS_FIXTURES_DIR.replace('/', std::path::MAIN_SEPARATOR_STR));
     std::fs::create_dir_all(&dir)?;
-    let abs = root.join(
-        SYNTHETIC_BUGGY_API_REL.replace('/', std::path::MAIN_SEPARATOR_STR),
-    );
+    let abs = root.join(SYNTHETIC_BUGGY_API_REL.replace('/', std::path::MAIN_SEPARATOR_STR));
     std::fs::write(&abs, BUGGY_FIXTURE_SOURCE)?;
     Ok(abs)
 }
@@ -60,10 +58,7 @@ mod tests {
 
     #[test]
     fn reset_writes_fixture_under_temp_dir() {
-        let tmp = std::env::temp_dir().join(format!(
-            "vp-harness-fixture-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("vp-harness-fixture-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let abs = reset_synthetic_buggy_api(&tmp).expect("reset");
         assert!(abs.is_file());

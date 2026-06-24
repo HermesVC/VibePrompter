@@ -60,7 +60,10 @@ impl DegradeLevel {
         match self {
             Self::Normal => WindowAggression::Normal,
             Self::Aggressive => WindowAggression::Aggressive,
-            Self::Emergency | Self::NoRetrieved | Self::ToolSummaryOnly | Self::SingleTurn
+            Self::Emergency
+            | Self::NoRetrieved
+            | Self::ToolSummaryOnly
+            | Self::SingleTurn
             | Self::Anchor => WindowAggression::Emergency,
         }
     }
@@ -148,7 +151,8 @@ fn collapse_tool_results(content: &str) -> String {
     while let Some(idx) = rest.find(marker) {
         out.push_str(&rest[..idx]);
         rest = &rest[idx..];
-        let end = rest.find("\n\n[Tool result:")
+        let end = rest
+            .find("\n\n[Tool result:")
             .map(|i| i + 2)
             .or_else(|| rest.find("\n\n---"))
             .unwrap_or(rest.len());
@@ -210,11 +214,7 @@ mod tests {
     #[test]
     fn anchor_prepends_task_block() {
         let messages = vec![msg("user", "execute step 2")];
-        let out = apply_message_degrade(
-            messages,
-            DegradeLevel::Anchor,
-            Some("Goal: build app"),
-        );
+        let out = apply_message_degrade(messages, DegradeLevel::Anchor, Some("Goal: build app"));
         assert!(out[0].content.contains("## Task anchor"));
         assert!(out[0].content.contains("Goal: build app"));
     }
@@ -250,6 +250,37 @@ mod tests {
         let out = apply_message_degrade(messages, DegradeLevel::Anchor, None);
         assert!(!out[0].content.contains("## Task anchor"));
         assert_eq!(out[0].content, "execute step 2");
+    }
+
+    #[test]
+    fn tool_summary_only_never_expands_tool_payload() {
+        let tool = format!(
+            "[Tool result: read_file]\n{}\n\n[Tool result: read_file]\n{}",
+            "alpha ".repeat(2_000),
+            "beta ".repeat(2_000)
+        );
+        let messages = vec![msg("assistant", "before"), msg("user", &tool)];
+        let original_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+        let out = apply_message_degrade(messages, DegradeLevel::ToolSummaryOnly, None);
+        let degraded_chars: usize = out.iter().map(|m| m.content.chars().count()).sum();
+        assert!(
+            degraded_chars < original_chars,
+            "degraded={degraded_chars} original={original_chars}"
+        );
+    }
+
+    #[test]
+    fn degrade_single_turn_drops_prior_secret_even_when_anchor_exists() {
+        let messages = vec![
+            msg("user", "SECRET_SHOULD_NOT_SURVIVE"),
+            msg("assistant", "ok"),
+            msg("user", "continue current step"),
+        ];
+        let out = apply_message_degrade(messages, DegradeLevel::Anchor, Some("Goal: ship"));
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].content.contains("SECRET_SHOULD_NOT_SURVIVE"));
+        assert!(out[0].content.contains("Goal: ship"));
+        assert!(out[0].content.contains("continue current step"));
     }
 
     #[test]
