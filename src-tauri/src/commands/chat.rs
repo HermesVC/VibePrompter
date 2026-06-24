@@ -1005,17 +1005,9 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
         ChatScope::Folder {
             path,
             tree_summary,
-            files,
             ..
         } => {
-            let mut out = format!("[Attached folder: {path}]\n[Folder tree]\n{tree_summary}");
-            if !files.is_empty() {
-                out.push_str("\n\n[Folder files]\n");
-                for f in files {
-                    out.push_str(&format!("[File: {}]\n```\n{}\n```\n", f.path, f.content));
-                }
-            }
-            out
+            format!("[Attached folder: {path}]\n[Folder tree]\n{tree_summary}")
         }
     }
 }

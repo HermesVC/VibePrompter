@@ -7,7 +7,7 @@ use crate::utils::{AppError, AppResult};
 use crate::workspace::{
     compose_system_prompt, extract_snippet_output, list_dir_recursive,
     list_modifiers, read_file_range, write_file_checked, ChatContextPayload, ChatModifierInfo,
-    FileContentDto, FolderScopeDto, FolderScopeFile, PolicyDecision, PolicyEngine, WorkspaceSettings,
+    FileContentDto, FolderScopeDto, PolicyDecision, PolicyEngine, WorkspaceSettings,
     WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
 
@@ -79,12 +79,13 @@ impl WorkspaceService {
         Ok(cap_tree_lines(&entries, 10_000))
     }
 
-    /// Load folder scope: directory tree + file bodies up to a character budget.
+    /// Load folder scope: directory tree (file bodies loaded on demand via agent tools).
     pub async fn load_folder_scope(
         &self,
         path: &str,
         max_content_chars: u32,
     ) -> AppResult<FolderScopeDto> {
+        let _ = max_content_chars;
         let settings = self.get_settings().await?;
         let root = self.workspace_path(&settings);
         let rel = normalize_folder_scope_path(&root, path.trim().trim_matches('/'));
@@ -95,36 +96,6 @@ impl WorkspaceService {
             cap_tree_lines(&entries, 10_000)
         };
 
-        let max_chars = max_content_chars.max(1024) as usize;
-        let mut files = Vec::new();
-        let mut used = 0usize;
-        let mut truncated = false;
-
-        for entry in entries {
-            if entry.ends_with('/') {
-                continue;
-            }
-            if !file_extension_allowed(&settings, &entry) {
-                continue;
-            }
-            let file = match read_file_range(&root, &entry, None, None) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let entry_len = file.content.chars().count() + file.path.len() + 48;
-            if !files.is_empty() && used.saturating_add(entry_len) > max_chars {
-                truncated = true;
-                break;
-            }
-            used += entry_len;
-            files.push(FolderScopeFile {
-                path: file.path,
-                content: file.content,
-                content_hash: file.content_hash,
-                language_id: Some(file.language_id),
-            });
-        }
-
         Ok(FolderScopeDto {
             path: if rel.is_empty() {
                 ".".into()
@@ -132,8 +103,8 @@ impl WorkspaceService {
                 rel
             },
             tree_summary,
-            files,
-            truncated,
+            files: Vec::new(),
+            truncated: false,
         })
     }
 
@@ -234,20 +205,4 @@ fn normalize_folder_scope_path(workspace_root: &Path, path: &str) -> String {
     abs.strip_prefix(&root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| rel.to_string())
-}
-
-fn file_extension_allowed(settings: &WorkspaceSettings, path: &str) -> bool {
-    let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    let ext = format!(".{}", ext.to_ascii_lowercase());
-    let list = &settings.allow_extensions;
-    if list.is_empty() {
-        return matches!(
-            ext.as_str(),
-            ".md" | ".php" | ".ts" | ".tsx" | ".js" | ".jsx" | ".rs" | ".json" | ".yaml" | ".yml"
-                | ".toml" | ".css" | ".html" | ".sql"
-        );
-    }
-    list.iter().any(|e| e.eq_ignore_ascii_case(&ext))
 }

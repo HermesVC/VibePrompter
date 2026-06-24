@@ -183,7 +183,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
           active={ctx.scope.kind === 'folder'}
           disabled={disabled}
           onClick={attachFolder}
-          title="Pick a folder — tree + file bodies (within budget)"
+          title="Pick a folder — tree only; use tools to read file bodies"
         >
           Folder
         </ScopeBtn>

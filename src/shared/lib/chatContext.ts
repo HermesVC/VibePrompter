@@ -96,7 +96,6 @@ export function buildChatContextPayload(ctx: ChatContextState): {
 
 /** Duplicate scoped content into the user turn — local models often ignore system. */
 const SCOPE_TREE_MAX_CHARS = 10_000;
-const SCOPE_FILES_MAX_CHARS = 14_000;
 
 function capText(text: string, maxChars: number, label: string): string {
   if (text.length <= maxChars) return text;
@@ -114,21 +113,7 @@ export function formatScopeUserContext(scope: ChatScope): string {
         ? `[Workspace tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'workspace tree')}`
         : '';
     case 'folder': {
-      let out = `[Attached folder: ${scope.path}]\n[Folder tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'folder tree')}`;
-      if (scope.files.length) {
-        out += '\n\n[Folder files]\n';
-        let used = 0;
-        for (const f of scope.files) {
-          const block = `[File: ${f.path}]\n\`\`\`\n${f.content}\n\`\`\`\n`;
-          if (used > 0 && used + block.length > SCOPE_FILES_MAX_CHARS) {
-            out += `… (folder file bodies truncated, ${scope.files.length} total)\n`;
-            break;
-          }
-          out += block;
-          used += block.length;
-        }
-      }
-      return out;
+      return `[Attached folder: ${scope.path}]\n[Folder tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'folder tree')}`;
     }
     default:
       return '';
@@ -215,11 +200,8 @@ export function scopeLabel(scope: ChatScope): string | null {
     case 'workspace':
       return 'Workspace';
     case 'folder': {
-      const n = scope.files.length;
-      const suffix = scope.truncated ? ', truncated' : '';
-      return n > 0
-        ? `Folder · ${scope.path} (${n} files${suffix})`
-        : `Folder · ${scope.path}`;
+      const lines = scope.treeSummary.split('\n').filter((l) => l && !l.endsWith('/')).length;
+      return `Folder · ${scope.path} (${lines} files, tools)`;
     }
     default:
       return null;
