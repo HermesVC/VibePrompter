@@ -2,9 +2,11 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use tauri::State;
 
+use crate::app::AppState;
 use crate::providers::prompt_format::{self, ParsedToolCall, ToolDefinition};
-use crate::tools::{self, ToolExecutionResult};
+use crate::tools::{self, ToolExecutionContext, ToolExecutionResult};
 use crate::utils::AppError;
 
 #[tauri::command]
@@ -18,11 +20,30 @@ pub struct ExecuteAgentToolInput {
     pub name: String,
     #[serde(default)]
     pub arguments: Value,
+    /// Folder scope prefix — restricts workspace tools to this subtree.
+    #[serde(default)]
+    pub scope_path: Option<String>,
+}
+
+async fn build_tool_context(
+    state: &AppState,
+    scope_path: Option<String>,
+) -> Result<ToolExecutionContext, AppError> {
+    let settings = state.workspace.get_settings().await?;
+    Ok(ToolExecutionContext {
+        workspace: state.workspace.clone(),
+        settings,
+        scope_path,
+    })
 }
 
 #[tauri::command]
-pub fn execute_agent_tool(input: ExecuteAgentToolInput) -> Result<ToolExecutionResult, AppError> {
-    tools::execute_tool(&input.name, input.arguments)
+pub async fn execute_agent_tool(
+    state: State<'_, AppState>,
+    input: ExecuteAgentToolInput,
+) -> Result<ToolExecutionResult, AppError> {
+    let ctx = build_tool_context(&state, input.scope_path).await?;
+    tools::execute_tool(&ctx, &input.name, input.arguments).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +51,8 @@ pub fn execute_agent_tool(input: ExecuteAgentToolInput) -> Result<ToolExecutionR
 pub struct ExecuteToolCallsFromTextInput {
     pub format_id: String,
     pub text: String,
+    #[serde(default)]
+    pub scope_path: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -41,7 +64,8 @@ pub struct ExecuteToolCallsFromTextResult {
 
 /// Parse model output for tool calls (Gemma 4 etc.) and run each tool locally.
 #[tauri::command]
-pub fn execute_tool_calls_from_text(
+pub async fn execute_tool_calls_from_text(
+    state: State<'_, AppState>,
     input: ExecuteToolCallsFromTextInput,
 ) -> Result<ExecuteToolCallsFromTextResult, AppError> {
     let calls = prompt_format::resolve(&input.format_id).parse_tool_calls(&input.text);
@@ -49,7 +73,8 @@ pub fn execute_tool_calls_from_text(
         .iter()
         .map(|c| (c.name.clone(), c.arguments.clone()))
         .collect();
-    let results = tools::execute_many(&pairs);
+    let ctx = build_tool_context(&state, input.scope_path).await?;
+    let results = tools::execute_many(&ctx, &pairs).await;
     Ok(ExecuteToolCallsFromTextResult {
         tool_calls: calls,
         results,

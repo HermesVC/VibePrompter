@@ -19,18 +19,20 @@ export async function listAgentTools(): Promise<ToolDefinition[]> {
 
 export async function executeAgentTool(
   name: string,
-  args: Record<string, unknown> = {}
+  args: Record<string, unknown> = {},
+  scopePath?: string
 ): Promise<ToolExecutionResult> {
   return invoke<ToolExecutionResult>('execute_agent_tool', {
-    input: { name, arguments: args },
+    input: { name, arguments: args, scopePath },
   });
 }
 
 export async function executeToolCallsFromText(
   formatId: string,
-  text: string
+  text: string,
+  scopePath?: string
 ): Promise<ExecuteToolCallsFromTextResult> {
   return invoke<ExecuteToolCallsFromTextResult>('execute_tool_calls_from_text', {
-    input: { formatId, text },
+    input: { formatId, text, scopePath },
   });
 }

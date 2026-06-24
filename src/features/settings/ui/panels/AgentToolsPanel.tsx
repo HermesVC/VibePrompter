@@ -10,15 +10,22 @@ import type { ToolDefinition } from '@shared/lib/promptFormatApi';
 import { errorMessage } from '@shared/lib/utils';
 
 const SAMPLE_GEMMA_TOOL_CALL =
-  '<|tool_call>call:launch_chrome{url:<|"|>https://www.google.com<|"|>}<|tool_call|>';
+  '<|tool_call>call:list_dir{path:<|"|>.<|"|>}<|tool_call|>';
 
 export function AgentToolsPanel() {
   const toast = useToast();
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [url, setUrl] = useState('https://www.google.com');
+  const [listPath, setListPath] = useState('.');
+  const [readPath, setReadPath] = useState('');
+  const [readStart, setReadStart] = useState('');
+  const [readEnd, setReadEnd] = useState('');
+  const [scopePath, setScopePath] = useState('');
   const [modelOutput, setModelOutput] = useState(SAMPLE_GEMMA_TOOL_CALL);
   const [lastResults, setLastResults] = useState<ToolExecutionResult[]>([]);
   const [busy, setBusy] = useState(false);
+
+  const scope = scopePath.trim() || undefined;
 
   useEffect(() => {
     listAgentTools().then(setTools).catch(() => setTools([]));
@@ -27,7 +34,7 @@ export function AgentToolsPanel() {
   const runChrome = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await executeAgentTool('launch_chrome', { url, new_window: true });
+      const r = await executeAgentTool('launch_chrome', { url, new_window: true }, scope);
       setLastResults([r]);
       toast.ok(r.message, r.ok ? 'Tool OK' : 'Tool failed');
     } catch (e) {
@@ -35,12 +42,47 @@ export function AgentToolsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [toast, url]);
+  }, [toast, url, scope]);
+
+  const runListDir = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await executeAgentTool('list_dir', { path: listPath, depth: 2 }, scope);
+      setLastResults([r]);
+      toast.ok(r.message, r.ok ? 'list_dir OK' : 'list_dir failed');
+    } catch (e) {
+      toast.err(errorMessage(e), 'list_dir failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [toast, listPath, scope]);
+
+  const runReadFile = useCallback(async () => {
+    if (!readPath.trim()) {
+      toast.err('Enter a file path', 'read_file');
+      return;
+    }
+    setBusy(true);
+    try {
+      const args: Record<string, unknown> = { path: readPath.trim() };
+      const start = parseInt(readStart, 10);
+      const end = parseInt(readEnd, 10);
+      if (!Number.isNaN(start)) args.start_line = start;
+      if (!Number.isNaN(end)) args.end_line = end;
+      const r = await executeAgentTool('read_file', args, scope);
+      setLastResults([r]);
+      toast.ok(r.message, r.ok ? 'read_file OK' : 'read_file failed');
+    } catch (e) {
+      toast.err(errorMessage(e), 'read_file failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [toast, readPath, readStart, readEnd, scope]);
 
   const parseAndRun = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await executeToolCallsFromText('gemma4', modelOutput);
+      const r = await executeToolCallsFromText('gemma4', modelOutput, scope);
       setLastResults(r.results);
       if (r.toolCalls.length === 0) {
         toast.err('No tool calls found in text', 'Parse');
@@ -56,14 +98,14 @@ export function AgentToolsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [modelOutput, toast]);
+  }, [modelOutput, toast, scope]);
 
   return (
     <Group title="Agent tools (function calling test)">
       <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
         Local tools (MCP-style). Wire format: Gemma 4{' '}
         <span style={{ fontFamily: 'var(--font-mono, monospace)' }}>&lt;|tool_call|&gt;</span> on the
-        connection prompt format. The model must support tool calling in LM Studio.
+        connection prompt format. Workspace tools require a configured workspace root.
       </p>
 
       {tools.length > 0 && (
@@ -75,6 +117,52 @@ export function AgentToolsPanel() {
           ))}
         </ul>
       )}
+
+      <SettingRow
+        icon={<I.layers size={14} />}
+        label="Folder scope (optional)"
+        hint="Restrict list_dir / read_file to a workspace-relative folder prefix."
+        control={
+          <PhInput
+            mono
+            value={scopePath}
+            onChange={setScopePath}
+            placeholder="e.g. src/features"
+          />
+        }
+      />
+
+      <SettingRow
+        icon={<I.layers size={14} />}
+        label="list_dir"
+        hint="List files under a workspace path."
+        control={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 260 }}>
+            <PhInput mono value={listPath} onChange={setListPath} placeholder="." />
+            <PhButton size="sm" disabled={busy} onClick={() => void runListDir()}>
+              Run list_dir
+            </PhButton>
+          </div>
+        }
+      />
+
+      <SettingRow
+        icon={<I.text size={14} />}
+        label="read_file"
+        hint="Read a workspace file (optional line range)."
+        control={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 260 }}>
+            <PhInput mono value={readPath} onChange={setReadPath} placeholder="path/to/file.ts" />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <PhInput mono value={readStart} onChange={setReadStart} placeholder="start line" />
+              <PhInput mono value={readEnd} onChange={setReadEnd} placeholder="end line" />
+            </div>
+            <PhButton size="sm" disabled={busy} onClick={() => void runReadFile()}>
+              Run read_file
+            </PhButton>
+          </div>
+        }
+      />
 
       <SettingRow
         icon={<I.link size={14} />}
