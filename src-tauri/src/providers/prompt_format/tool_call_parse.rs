@@ -20,6 +20,9 @@ fn normalize_tool_call_text(text: &str) -> String {
         .replace('\u{2016}', "|") // double vertical line
         .replace("<｜", "<|")
         .replace("｜>", "|>")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Scan for bare `call:name{args}` outside explicit markers.
@@ -253,6 +256,21 @@ fn parse_relaxed_value(raw: &str) -> Value {
         }
     }
     Value::String(raw.to_string())
+}
+
+/// Last-resort extraction when markers are malformed but `call:name{...}` is visible.
+pub fn parse_loose_tool_calls(text: &str) -> Vec<ParsedToolCall> {
+    parse_bare_call_tool_calls(text)
+}
+
+/// True when assistant text is only tool wire markup (no user-facing answer).
+pub fn is_tool_call_only(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let stripped = strip_tool_call_markup(trimmed);
+    stripped.trim().is_empty() || parse_all_tool_calls(trimmed).len() > 0 && stripped.len() < 24
 }
 
 pub fn contains_tool_call_markup(text: &str) -> bool {

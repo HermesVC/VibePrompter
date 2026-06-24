@@ -10,6 +10,10 @@ import {
   memoryRecallOnlyScenario,
   memorySeedFactScenario,
 } from '@shared/lib/chatDebugMemoryScenarios';
+import {
+  interpretToolProbeTrace,
+  toolCallFolderReadScenario,
+} from '@shared/lib/chatDebugToolScenarios';
 import { errorMessage } from '@shared/lib/utils';
 
 const SAMPLE_SCENARIO = JSON.stringify(
@@ -57,6 +61,14 @@ export function ChatDebugPanel() {
     const result = output?.result as CompletionLike | null | undefined;
     if (!result?.text) return null;
     return interpretMemoryProbeResult(result);
+  }, [output]);
+
+  const toolVerdict = useMemo(() => {
+    if (!output?.trace?.length) return null;
+    return interpretToolProbeTrace(
+      output.trace as Array<Record<string, unknown>>,
+      output.result as CompletionLike | null | undefined
+    );
   }, [output]);
 
   const runScenario = useCallback(async () => {
@@ -124,6 +136,38 @@ export function ChatDebugPanel() {
             }}
           >
             {memoryVerdict.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </Group>
+
+      <Group title="Tool call probe">
+        <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
+          Проверка read_file через tool loop. Нужны workspace root и папка{' '}
+          <code>test/single-page-games/</code>. CLI:{' '}
+          <code>cargo run --bin tool_call_probe</code>.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          <PhButton
+            size="sm"
+            disabled={busy}
+            onClick={() => loadPreset(toolCallFolderReadScenario())}
+          >
+            Folder + read_file
+          </PhButton>
+        </div>
+        {toolVerdict && (
+          <ul
+            style={{
+              margin: '0 0 8px',
+              paddingLeft: 18,
+              fontSize: 11,
+              color: 'var(--fg-dim)',
+              lineHeight: 1.45,
+            }}
+          >
+            {toolVerdict.map((line) => (
               <li key={line}>{line}</li>
             ))}
           </ul>

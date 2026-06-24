@@ -1,0 +1,39 @@
+---
+description: Self-debug LLM/memory/tools via headless probes and Settings debug panel
+alwaysApply: true
+---
+
+# LLM self-debug (VibePrompter)
+
+When changing chat, memory, tools, or providers — **run probes yourself** before asking the user to retest.
+
+## Headless binaries (`src-tauri/`)
+
+```powershell
+cd E:\Software\OpenServer\domains\VibePrompter\src-tauri
+cargo run --bin memory_probe          # memory eviction + recall (needs LM Studio on :1234)
+cargo run --bin tool_call_probe       # parse + read_file execute (no LLM)
+$env:TOOL_PROBE_LIVE='1'; cargo run --bin tool_call_probe  # full run_chat + folder scope
+```
+
+## Settings → Advanced → Agent scenario runner
+
+- JSON scenarios via `chat_debug_run_scenario` — same pipeline as `chat_complete_stream`.
+- Presets: `chatDebugMemoryScenarios.ts`, `chatDebugToolScenarios.ts`.
+- Inspect `trace` (`status` phases: `tools`, `compressing_memory`), `result.text`, `result.sessionSummary`.
+
+## Logs
+
+`%AppData%\com.vibeprompter.app\logs\vibeprompter.log.*` — search `tool loop`, `tool follow-up`, `memory compression`.
+
+## Tool-call regressions
+
+1. `tool_call_probe` must parse Qwen `<|tool_call|>call:read_file{path:…}`.
+2. Live probe: `trace_tools_phase: true`, `contains_tool_markup: false` in final text.
+3. Workspace root must be set (Settings → Workspace) for `read_file` to succeed.
+
+## Patch edits (research)
+
+Today: model outputs full file in ` ```file path ` `` fences → `apply_workspace_write` replaces entire file.
+
+Target: **surgical patches** — model emits changed hunks only; backend applies unified diff or search/replace blocks. See `workspace/fs.rs::write_file_checked`, `generatedFiles.ts`. Candidate formats: ` ```patch path` ` `, `apply_patch` tool, or line-range ` ```file path:12-40` ``.

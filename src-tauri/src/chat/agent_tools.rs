@@ -199,7 +199,12 @@ where
             break;
         }
 
-        let calls = format.parse_tool_calls(&result.text);
+        let mut calls = format.parse_tool_calls(&result.text);
+        if calls.is_empty() {
+            calls = crate::providers::prompt_format::tool_call_parse::parse_loose_tool_calls(
+                &result.text,
+            );
+        }
         if calls.is_empty() {
             if tools_executed == 0
                 && crate::providers::prompt_format::tool_call_parse::contains_tool_call_markup(
@@ -254,7 +259,7 @@ where
             images: vec![],
         });
 
-        result = complete_stream_with_tool_auto_continue(
+        let followup = match complete_stream_with_tool_auto_continue(
             row,
             messages.clone(),
             params.clone(),
@@ -262,7 +267,32 @@ where
             &mut on_token,
             should_cancel.clone(),
         )
-        .await?;
+        .await
+        {
+            Ok(followup) => {
+                if followup.text.trim().is_empty()
+                    || crate::providers::prompt_format::tool_call_parse::is_tool_call_only(
+                        &followup.text,
+                    )
+                {
+                    tracing::warn!(
+                        "tool follow-up empty or tool-only; surfacing tool results to user"
+                    );
+                    let mut partial = result.clone();
+                    partial.text = format_tool_results_for_user(&tool_results);
+                    partial
+                } else {
+                    followup
+                }
+            }
+            Err(e) => {
+                tracing::warn!("tool follow-up stream failed: {e}; surfacing tool results to user");
+                let mut partial = result.clone();
+                partial.text = format_tool_results_for_user(&tool_results);
+                partial
+            }
+        };
+        result = followup;
 
         tracing::info!(
             "tool loop: executed {} tool(s), follow-up model={}",
@@ -278,6 +308,26 @@ where
     }
 
     Ok(result)
+}
+
+fn format_tool_results_for_user(results: &[ToolExecutionResult]) -> String {
+    if results.is_empty() {
+        return String::new();
+    }
+    results
+        .iter()
+        .map(|r| {
+            if r.ok {
+                let body = serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| {
+                    serde_json::Value::String(r.message.clone()).to_string()
+                });
+                format!("[{}]\n{body}", r.name)
+            } else {
+                format!("[{}] ERROR: {}", r.name, r.message)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 async fn complete_stream_with_tool_auto_continue<F, C>(
