@@ -5,8 +5,9 @@ use crate::services::ConnectionService;
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::AppResult;
 
-use super::session_summary::{summary_budget_chars, trim_summary_to_budget, SUMMARY_FRACTION};
 use super::memory_compress::enforce_memory_shrink;
+use super::session_summary::{summary_budget_chars, trim_summary_to_budget, SUMMARY_FRACTION};
+use super::token_budget::estimate_message_tokens;
 const MIN_ACTIVE_TURNS: usize = 2;
 const COMPRESS_TURN_MAX_CHARS: usize = 1_200;
 const COMPRESS_MAX_TURNS: usize = 24;
@@ -72,18 +73,12 @@ pub struct WindowPlan {
     pub evicted: Vec<ChatMessage>,
 }
 
-pub fn estimate_message_tokens(m: &ChatMessage) -> u32 {
-    let chars = m.content.chars().count();
-    let images = m.images.len() as u32;
-    ((chars + 3) / 4) as u32 + images * 500
-}
-
 fn estimate_summary_tokens(summary: &str) -> u32 {
     let chars = summary.trim().chars().count();
     if chars == 0 {
         return 0;
     }
-    ((chars + 3) / 4) as u32
+    ((chars as f64 / 3.5).ceil() as u32).max(1)
 }
 
 /// Split history into messages that fit the model window vs turns to compress into memory.

@@ -303,7 +303,7 @@ where
                 (crate::chat::format_retrieved_for_system(&retrieved), count)
             };
 
-            let input_estimate = estimate_chat_input_tokens(
+            let input_estimate = crate::chat::estimate_chat_input_tokens(
                 &api_messages,
                 system_prompt.as_deref(),
                 &memory,
@@ -426,7 +426,7 @@ where
             Some(retrieved_chunk_count as u32)
         };
 
-        let final_input_estimate = estimate_chat_input_tokens(
+        let final_input_estimate = crate::chat::estimate_chat_input_tokens(
             &api_messages,
             system_prompt.as_deref(),
             &memory,
@@ -1228,23 +1228,6 @@ async fn compress_evicted_turns_timed(
             crate::chat::fallback_merge_memory(memory, evicted, context_limit)
         }
     }
-}
-
-fn estimate_chat_input_tokens(
-    messages: &[ChatMessage],
-    base_system: Option<&str>,
-    memory: &str,
-    retrieved: &str,
-) -> u32 {
-    let msg_tokens: u32 = messages
-        .iter()
-        .map(crate::chat::estimate_message_tokens)
-        .sum();
-    let mut sys_chars = memory.chars().count() + retrieved.chars().count();
-    if let Some(s) = base_system {
-        sys_chars += s.chars().count();
-    }
-    msg_tokens + ((sys_chars + 3) / 4) as u32
 }
 
 fn preview_text(text: &str, max_chars: usize) -> String {

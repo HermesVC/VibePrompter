@@ -42,6 +42,8 @@ export interface AutonomousSendParams {
   }) => void;
   onComplete: (result: AutonomousRunResult) => void;
   onError: (message: string, cancelled: boolean) => void;
+  /** Continue from orchestrator snapshot instead of re-planning. */
+  resumePlan?: AutonomousPlanSnapshot | null;
 }
 
 export function useAutonomousChatRun() {
@@ -58,17 +60,27 @@ export function useAutonomousChatRun() {
     setStreamPhaseDetail(null);
   }, []);
 
-  const syncPlanFromStream = useCallback((streamText: string) => {
-    setPlan((prev) => {
-      const updated = applyStreamPlanProgress(prev, streamText);
-      if (!updated?.currentStepId) return updated ?? prev;
-      const step = updated.steps.find((s) => s.id === updated.currentStepId);
-      if (step) {
-        setStreamPhaseDetail(`Step ${step.id}: ${step.title}`);
-      }
-      return updated;
-    });
-  }, []);
+  const syncPlanFromStream = useCallback(
+    (
+      streamText: string,
+      options?: { recovering?: boolean; minStepId?: number }
+    ) => {
+      if (options?.recovering) return;
+      setPlan((prev) => {
+        const updated = applyStreamPlanProgress(prev, streamText, {
+          minStepId: options?.minStepId ?? prev?.currentStepId ?? undefined,
+          ignoreRegressions: true,
+        });
+        if (!updated?.currentStepId) return updated ?? prev;
+        const step = updated.steps.find((s) => s.id === updated.currentStepId);
+        if (step) {
+          setStreamPhaseDetail(`Step ${step.id}: ${step.title}`);
+        }
+        return updated;
+      });
+    },
+    []
+  );
 
   const sendAutonomous = useCallback(async (params: AutonomousSendParams) => {
     const sid = params.streamId;
@@ -79,10 +91,12 @@ export function useAutonomousChatRun() {
     const planEvent = `autonomous:${sid}:plan`;
     const phaseEvent = `autonomous:${sid}:phase`;
 
-    setPhase('planning');
+    const resuming = !!params.resumePlan?.steps?.length;
+
+    setPhase(resuming ? 'executing' : 'planning');
     setPhaseDetail(null);
     setStreamPhaseDetail(null);
-    setPlan(null);
+    setPlan(resuming ? params.resumePlan! : null);
 
     const unlistens: Array<() => void> = [];
     try {
@@ -139,6 +153,7 @@ export function useAutonomousChatRun() {
           verifySteps: true,
           maxStepRetries: 2,
         },
+        resumePlan: params.resumePlan ?? undefined,
       });
 
       setPhase(result.phase);

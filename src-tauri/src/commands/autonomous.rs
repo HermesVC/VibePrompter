@@ -25,6 +25,8 @@ pub struct AutonomousRunStreamInput {
     pub session_id: Option<String>,
     #[serde(default)]
     pub config: AutonomousRunConfig,
+    #[serde(default)]
+    pub resume_plan: Option<AutonomousPlanSnapshot>,
 }
 
 #[tauri::command]
@@ -105,6 +107,7 @@ pub async fn autonomous_run_stream(
             ..Default::default()
         },
         config: input.config,
+        resume_plan: input.resume_plan,
     };
 
     let result = run_autonomous(&state, request, cancel_flag.clone(), &mut events).await;
@@ -135,6 +138,8 @@ pub struct AutonomousDebugRunInput {
     pub session_id: Option<String>,
     #[serde(default)]
     pub config: AutonomousRunConfig,
+    #[serde(default)]
+    pub resume_plan: Option<AutonomousPlanSnapshot>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -206,6 +211,7 @@ pub async fn autonomous_debug_run(
             ..Default::default()
         },
         config: input.config,
+        resume_plan: input.resume_plan,
     };
 
     match run_autonomous(&state, request, cancel_flag, &mut events).await {

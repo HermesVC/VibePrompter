@@ -352,6 +352,66 @@ pub fn format_plan_for_prompt(plan: &AutonomousPlan) -> String {
     format!("<{PLAN_TAG}>\n{json}\n</{PLAN_TAG}>")
 }
 
+/// Rich anchor for context degrade / recovery — preserves orchestrator step progress.
+pub fn format_plan_progress_anchor(goal: &str, plan: &AutonomousPlan) -> String {
+    let done: Vec<_> = plan
+        .steps
+        .iter()
+        .filter(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped))
+        .collect();
+    let current = plan
+        .steps
+        .iter()
+        .find(|s| s.status == StepStatus::InProgress)
+        .or_else(|| plan.next_pending());
+
+    let goal_line: String = goal.lines().next().unwrap_or(goal).trim().chars().take(500).collect();
+
+    let mut out = format!("Goal: {goal_line}\n\n## Plan progress (orchestrator)\n");
+    out.push_str(&format!(
+        "Completed: {}/{} steps\n",
+        done.len(),
+        plan.steps.len()
+    ));
+
+    if !done.is_empty() {
+        out.push_str("Done (do NOT redo these steps):\n");
+        for s in done.iter().take(16) {
+            let title: String = s.title.chars().take(120).collect();
+            out.push_str(&format!("- {}: {title}\n", s.id));
+        }
+    }
+
+    if let Some(cur) = current {
+        let title: String = cur.title.chars().take(160).collect();
+        out.push_str(&format!(
+            "\nCurrent step: {} / {} — {title}\n\
+             Execute ONLY this step. Do not restart completed steps or emit a new `<{PLAN_TAG}>`.\n",
+            cur.id,
+            plan.steps.len(),
+        ));
+        if let Some(next) = plan.steps.iter().find(|s| {
+            s.id > cur.id && matches!(s.status, StepStatus::Pending | StepStatus::InProgress)
+        }) {
+            let next_title: String = next.title.chars().take(120).collect();
+            out.push_str(&format!("Next after current: {} — {next_title}\n", next.id));
+        }
+    }
+
+    out.push('\n');
+    out.push_str(&format_plan_for_prompt(plan));
+    out
+}
+
+/// Reset in-progress marker so `next_pending()` resumes the interrupted step.
+pub fn normalize_resumed_plan(plan: &mut AutonomousPlan) {
+    for step in &mut plan.steps {
+        if step.status == StepStatus::InProgress {
+            step.status = StepStatus::Pending;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StepResultTag {
     pub step_id: u32,
@@ -465,6 +525,48 @@ mod tests {
         assert_eq!(plan.steps.len(), 2);
         assert!(plan.steps[0].verify.is_none());
         assert!(plan.steps[1].verify.is_some());
+    }
+
+    #[test]
+    fn progress_anchor_lists_done_and_current_step() {
+        let plan = AutonomousPlan {
+            steps: vec![
+                PlanStep {
+                    id: 1,
+                    title: "Setup".into(),
+                    status: StepStatus::Done,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 2,
+                    title: "Implement".into(),
+                    status: StepStatus::Pending,
+                    verify: None,
+                    note: None,
+                },
+            ],
+        };
+        let anchor = format_plan_progress_anchor("build feature", &plan);
+        assert!(anchor.contains("Completed: 1/2"));
+        assert!(anchor.contains("Do NOT redo"));
+        assert!(anchor.contains("Current step: 2 / 2"));
+        assert!(anchor.contains("Implement"));
+    }
+
+    #[test]
+    fn normalize_resumed_plan_clears_in_progress() {
+        let mut plan = AutonomousPlan {
+            steps: vec![PlanStep {
+                id: 2,
+                title: "Step".into(),
+                status: StepStatus::InProgress,
+                verify: None,
+                note: None,
+            }],
+        };
+        normalize_resumed_plan(&mut plan);
+        assert_eq!(plan.steps[0].status, StepStatus::Pending);
     }
 
     #[test]

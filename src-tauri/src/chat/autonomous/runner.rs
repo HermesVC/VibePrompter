@@ -5,14 +5,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    best_autonomous_plan_from_texts, format_plan_for_prompt, merge_replanned_plan,
-    normalize_plan_for_goal, parse_all_step_results, parse_autonomous_plan, parse_step_result,
-    synthesize_plan_from_goal, AutonomousPlan, PlanStep, StepStatus,
+    best_autonomous_plan_from_texts, format_plan_for_prompt, format_plan_progress_anchor,
+    merge_replanned_plan, normalize_plan_for_goal, normalize_resumed_plan,
+    parse_all_step_results, parse_autonomous_plan, parse_step_result, synthesize_plan_from_goal,
+    AutonomousPlan, PlanStep, StepStatus,
 };
 use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_retry_user_message,
@@ -35,6 +36,8 @@ pub struct AutonomousRunRequest {
     pub goal: String,
     pub base: ChatRunRequest,
     pub config: AutonomousRunConfig,
+    /// Skip planning and continue from this orchestrator snapshot (regenerate / resume).
+    pub resume_plan: Option<AutonomousPlanSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -77,7 +80,7 @@ pub struct AutonomousRunResult {
     pub retrieved_memory: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutonomousPlanSnapshot {
     pub progress: String,
@@ -91,7 +94,7 @@ pub struct AutonomousPlanSnapshot {
     pub step_warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepSnapshot {
     pub id: u32,
@@ -164,7 +167,27 @@ where
 
     let mut planning_warning: Option<String> = None;
 
-    let mut plan = if config.planning_enabled {
+    let mut plan = if let Some(snapshot) = request.resume_plan.as_ref() {
+        spec_path = snapshot.spec_path.clone();
+        let mut plan = plan_from_snapshot(snapshot).ok_or_else(|| {
+            AppError::Validation("resume plan snapshot is empty or invalid".into())
+        })?;
+        if plan.all_done() {
+            return Err(AppError::Validation(
+                "resume plan is already complete".into(),
+            ));
+        }
+        normalize_resumed_plan(&mut plan);
+        if let Some(step) = plan.next_pending() {
+            events.autonomous_phase(
+                AutonomousPhase::Executing,
+                Some(format!("Resuming plan at step {}: {}", step.id, step.title)),
+            );
+        } else {
+            events.autonomous_phase(AutonomousPhase::Executing, Some("Resuming plan…".into()));
+        }
+        plan
+    } else if config.planning_enabled {
         events.autonomous_phase(
             AutonomousPhase::Planning,
             Some("Creating execution plan…".into()),
@@ -832,9 +855,28 @@ where
 
 fn build_degrade_anchor(goal: &str, plan: Option<&AutonomousPlan>) -> String {
     match plan {
-        Some(p) => format!("Goal: {goal}\n\n{}", format_plan_for_prompt(p)),
+        Some(p) => format_plan_progress_anchor(goal, p),
         None => format!("Goal: {goal}"),
     }
+}
+
+fn plan_from_snapshot(snapshot: &AutonomousPlanSnapshot) -> Option<AutonomousPlan> {
+    if snapshot.steps.is_empty() {
+        return None;
+    }
+    Some(AutonomousPlan {
+        steps: snapshot
+            .steps
+            .iter()
+            .map(|s| PlanStep {
+                id: s.id,
+                title: s.title.clone(),
+                status: s.status,
+                verify: None,
+                note: None,
+            })
+            .collect(),
+    })
 }
 
 fn wrap_with_protocol(user_content: &str, protocol: Option<&str>) -> String {

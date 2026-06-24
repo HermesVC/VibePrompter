@@ -1,8 +1,8 @@
 //! Shared context-window recovery for completions (tool follow-up and future unify with run_chat).
 
 use crate::chat::{
-    estimate_message_tokens, plan_sliding_window_with_aggression, should_retry_for_context,
-    WindowAggression,
+    estimate_message_tokens, estimate_system_tokens, plan_sliding_window_with_aggression,
+    should_retry_for_context, WindowAggression,
 };
 use crate::models::{ChatMessage, CompletionParams, CompletionResult};
 use crate::utils::{AppError, AppResult};
@@ -11,8 +11,7 @@ pub const MAX_COMPLETION_CONTEXT_RETRIES: usize = 2;
 
 pub fn estimate_completion_input_tokens(messages: &[ChatMessage], system: Option<&str>) -> u32 {
     let msg_tokens: u32 = messages.iter().map(estimate_message_tokens).sum();
-    let sys_chars = system.map(|s| s.chars().count()).unwrap_or(0);
-    msg_tokens + ((sys_chars + 3) / 4) as u32
+    msg_tokens.saturating_add(estimate_system_tokens(system, "", ""))
 }
 
 /// Run a completion with sliding-window degrade retries when context fails (OOM / empty / overflow).

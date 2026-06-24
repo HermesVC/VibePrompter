@@ -82,6 +82,8 @@ export interface AutonomousRunStreamInput {
   sessionSummary?: string | null;
   sessionId?: string | null;
   config?: AutonomousRunConfig;
+  /** Resume orchestrator plan without re-planning (regenerate / context recovery). */
+  resumePlan?: AutonomousPlanSnapshot | null;
 }
 
 export async function autonomousRunStream(

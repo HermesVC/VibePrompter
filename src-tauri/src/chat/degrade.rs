@@ -87,7 +87,8 @@ impl DegradeLevel {
 
 pub fn preflight_needs_degrade(input_estimate: u32, context_limit: i64) -> bool {
     let limit = context_limit.max(8192) as f64;
-    (input_estimate as f64) > limit * PREFLIGHT_THRESHOLD
+    let adjusted = super::token_budget::preflight_input_tokens(input_estimate) as f64;
+    adjusted > limit * PREFLIGHT_THRESHOLD
 }
 
 /// Apply level-specific transforms before sliding-window planning.

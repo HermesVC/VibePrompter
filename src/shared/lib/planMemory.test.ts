@@ -64,4 +64,17 @@ done: css
     const out = applyStreamPlanProgress(basePlan, text);
     expect(out).toEqual(basePlan);
   });
+
+  it('ignores stream regressions below orchestrator step', () => {
+    const plan = { ...basePlan, currentStepId: 2 };
+    const text = `<plan-step-summary>
+step: 1 / 3
+done: old
+</plan-step-summary>`;
+    const out = applyStreamPlanProgress(plan, text, {
+      minStepId: 2,
+      ignoreRegressions: true,
+    });
+    expect(out).toEqual(plan);
+  });
 });

@@ -15,6 +15,7 @@ mod retrieval_policy;
 mod run_service;
 mod session_summary;
 mod sliding_window;
+mod token_budget;
 mod vector_memory;
 
 pub use agent_tools::{
@@ -39,8 +40,12 @@ pub use run_service::{
 };
 pub use session_summary::append_memory_to_system;
 pub use sliding_window::{
-    compress_evicted_turns, estimate_message_tokens, fallback_merge_memory,
-    plan_sliding_window_with_aggression, WindowAggression,
+    compress_evicted_turns, fallback_merge_memory, plan_sliding_window_with_aggression,
+    WindowAggression,
+};
+pub use token_budget::{
+    estimate_chat_input_tokens, estimate_message_tokens, estimate_system_tokens,
+    preflight_input_tokens,
 };
 pub use vector_memory::{
     append_retrieved_to_system, extract_context_artifacts_from_text, format_retrieved_for_system,

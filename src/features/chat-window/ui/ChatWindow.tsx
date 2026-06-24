@@ -33,7 +33,8 @@ import {
   stripGeneratedFileBlocks,
   type GeneratedFileBlock,
 } from '@shared/lib/generatedFiles';
-import { extractPlanStepSummary } from '@shared/lib/planMemory';
+import { extractPlanStepSummary, formatPlanProgressAnchor } from '@shared/lib/planMemory';
+import type { AutonomousPlanSnapshot } from '@shared/lib/autonomousRunApi';
 
 import {
   clipboardHasAttachableFiles,
@@ -232,9 +233,15 @@ function isContextOverflowError(message: string): boolean {
   return CONTEXT_OVERFLOW_HINTS.some((hint) => lower.includes(hint));
 }
 
-function buildRegenerateAnchor(userContent: string): string {
+function buildRegenerateAnchor(
+  userContent: string,
+  plan?: AutonomousPlanSnapshot | null
+): string {
   const { userText } = splitUserMessageScope(userContent);
   const goal = userText.trim() || userContent.trim();
+  if (plan?.steps?.length) {
+    return formatPlanProgressAnchor(goal, plan);
+  }
   return goal.slice(0, 800);
 }
 
@@ -342,6 +349,14 @@ export function ChatWindow() {
     clearAutonomousUi,
   } = useAutonomousChatRun();
 
+  useEffect(() => {
+    isRecoveringContextRef.current = isRecoveringContext;
+  }, [isRecoveringContext]);
+
+  useEffect(() => {
+    autonomousPlanRef.current = autonomousPlan;
+  }, [autonomousPlan]);
+
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bufRef = useRef('');
@@ -352,6 +367,8 @@ export function ChatWindow() {
   const preRecoveryContentRef = useRef('');
   const streamSettledRef = useRef(false);
   const lastDegradeLevelRef = useRef(0);
+  const isRecoveringContextRef = useRef(false);
+  const autonomousPlanRef = useRef<AutonomousPlanSnapshot | null>(null);
   const modeConnSyncedRef = useRef(false);
   const activeConnIdRef = useRef('');
 
@@ -914,7 +931,8 @@ export function ChatWindow() {
       assistantId: string,
       sid: string,
       autonomousGoal: string | null,
-      recoveryOptions?: { degradeStart?: number; degradeAnchor?: string }
+      recoveryOptions?: { degradeStart?: number; degradeAnchor?: string },
+      resumePlan?: AutonomousPlanSnapshot | null
     ) => {
       const connForSend = resolveActiveConnection(conns, connectionId || activeConnIdRef.current);
       const contextLimit = effectiveContextLimit(connForSend);
@@ -939,11 +957,15 @@ export function ChatWindow() {
             chatContext: chatContextRef.current,
             sessionSummary: sessionSummaryRef.current,
             sessionId: sessionIdRef.current,
+            resumePlan: resumePlan ?? undefined,
             onToken: (generation, delta) => {
               if (generation !== streamGenerationRef.current || !delta) return;
               setProviderRetryWarning(null);
               bufRef.current += delta;
-              syncPlanFromStream(bufRef.current);
+              syncPlanFromStream(bufRef.current, {
+                recovering: isRecoveringContextRef.current,
+                minStepId: autonomousPlanRef.current?.currentStepId ?? undefined,
+              });
               scheduleFlush(assistantId);
             },
             onChatStatus: (payload) => {
@@ -1334,11 +1356,18 @@ export function ChatWindow() {
         assistant.meta?.lastDegradeLevel ?? lastDegradeLevelRef.current;
       const overflowRetry =
         !!assistant.error && isContextOverflowError(assistant.error);
+      const resumePlan =
+        autonomousMode &&
+        autonomousPlan?.steps?.some(
+          (s) => s.status === 'pending' || s.status === 'in_progress'
+        )
+          ? autonomousPlan
+          : null;
       const recoveryOptions =
         overflowRetry || priorLevel > 0
           ? {
               degradeStart: nextDegradeStart(priorLevel) ?? 1,
-              degradeAnchor: buildRegenerateAnchor(user.content),
+              degradeAnchor: buildRegenerateAnchor(user.content, resumePlan ?? autonomousPlan),
             }
           : undefined;
 
@@ -1360,7 +1389,7 @@ export function ChatWindow() {
       streamSettledRef.current = false;
       setAttachError(null);
 
-      if (autonomousMode) {
+      if (autonomousMode && !resumePlan) {
         clearAutonomousUi();
       }
 
@@ -1380,7 +1409,8 @@ export function ChatWindow() {
         assistantId,
         sid,
         autonomousGoal,
-        recoveryOptions
+        recoveryOptions,
+        resumePlan
       );
     },
     [
@@ -1388,6 +1418,7 @@ export function ChatWindow() {
       messages,
       voice,
       autonomousMode,
+      autonomousPlan,
       clearAutonomousUi,
       runAssistantCompletion,
     ]

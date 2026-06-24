@@ -459,7 +459,7 @@ pub async fn chat_complete_stream(
             Some(retrieved.len() as u32)
         };
 
-        let input_estimate = estimate_chat_input_tokens(
+        let input_estimate = crate::chat::estimate_chat_input_tokens(
             &api_messages,
             system_prompt.as_deref(),
             &memory,
@@ -1544,23 +1544,6 @@ async fn resolve_context_limit(
     } else {
         fallback
     }
-}
-
-fn estimate_chat_input_tokens(
-    messages: &[ChatMessage],
-    base_system: Option<&str>,
-    memory: &str,
-    retrieved: &str,
-) -> u32 {
-    let msg_tokens: u32 = messages
-        .iter()
-        .map(crate::chat::estimate_message_tokens)
-        .sum();
-    let mut sys_chars = memory.chars().count() + retrieved.chars().count();
-    if let Some(s) = base_system {
-        sys_chars += s.chars().count();
-    }
-    msg_tokens + ((sys_chars + 3) / 4) as u32
 }
 
 /// Scale output budget from mode floor, input size, and remaining context window.
