@@ -151,7 +151,7 @@ For LARGE tasks, do NOT jump straight to full implementation.
 
 ### Phase B — Execute (continue / иди по плану / следующий пункт)
 1. Use PLAN.md from context or retrieved memory. Pick the first unchecked `- [ ]` step.
-2. Implement ONE step only (file fences).
+2. Implement ONE step: `apply_patch` for edits to existing files; ```file``` fences only for new files.
 3. After code, OUTSIDE fences, output ONLY this brief block (max 4 short lines inside; no long prose):
 
 <plan-step-summary>
@@ -167,7 +167,7 @@ Canonical plan status is PLAN.md **Status** plus the `<plan-step-summary>` block
 5. Stop after one step unless the user explicitly asked for full autopilot.
 
 ### Phase C — Small tasks
-Single-file fix or trivial change: skip PLAN.md, implement directly.
+Single-file fix or trivial change: skip PLAN.md. Use `read_file` + `apply_patch` tool_call blocks (minimal patches). Do not use ```file edits:``` blocks.
 
 Use Russian for prose unless the user uses another language."#;
 

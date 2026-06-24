@@ -66,6 +66,10 @@ export const PRESETS: Record<string, Preset> = {
 export const DEFAULT_PROMPT_FORMAT = 'openai_messages';
 export const GEMMA4_PROMPT_FORMAT = 'gemma4';
 
+/** Shown under the prompt-format picker in connection advanced settings. */
+export const PROMPT_FORMAT_HINT =
+  'Qwen / LM Studio / most OpenAI-compatible locals: OpenAI messages. Gemma 4-it: Gemma 4 turn template. Wrong format → model emits ```file edits:``` instead of tool_call.';
+
 export const emptyDraft = (): ConnectionDraft => ({
   id: null,
   label: '',

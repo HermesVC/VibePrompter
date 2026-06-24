@@ -11,6 +11,8 @@ pub fn parse_all_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     out.extend(parse_qwen_piped_tool_calls(&text));
     out.extend(parse_relaxed_tool_calls(&text));
     out.extend(parse_bare_call_tool_calls(&text));
+    out.extend(parse_file_edits_fence_tool_calls(&text));
+    out.extend(parse_inline_file_edits_tool_calls(&text));
     dedupe_tool_calls(out)
 }
 
@@ -226,6 +228,11 @@ fn split_relaxed_top_level(s: &str) -> Vec<String> {
 
 fn parse_relaxed_value(raw: &str) -> Value {
     let raw = raw.trim().trim_end_matches(',');
+    if raw.starts_with('[') || raw.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(raw) {
+            return v;
+        }
+    }
     if raw.starts_with("<|\"|>") && raw.ends_with("<|\"|>") {
         return Value::String(
             raw.trim_start_matches("<|\"|>")
@@ -258,9 +265,209 @@ fn parse_relaxed_value(raw: &str) -> Value {
     Value::String(raw.to_string())
 }
 
+/// Models sometimes emit patch edits inside a markdown file fence instead of tool_call.
+pub fn parse_file_edits_fence_tool_calls(text: &str) -> Vec<ParsedToolCall> {
+    let mut out = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find("```") {
+        let fence_start = search_from + rel;
+        let after_ticks = fence_start + 3;
+        let Some(header_end_rel) = text[after_ticks..].find('\n') else {
+            break;
+        };
+        let header_end = after_ticks + header_end_rel;
+        let header = text[after_ticks..header_end].trim();
+        let content_start = header_end + 1;
+        let (content_end, close_len) = find_fence_content_end(&text[content_start..]);
+        let content = &text[content_start..content_start + content_end];
+        let next = content_start + content_end + close_len;
+        if let Some(call) = file_edits_fence_to_call(header, content) {
+            out.push(call);
+        }
+        search_from = next;
+    }
+    out
+}
+
+/// `file:path` + `edits:[...]` without markdown fences (common Qwen output).
+pub fn parse_inline_file_edits_tool_calls(text: &str) -> Vec<ParsedToolCall> {
+    let mut out = Vec::new();
+    let lower = text.to_ascii_lowercase();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find("file:") {
+        let at = search_from + rel;
+        let line_end = text[at..]
+            .find('\n')
+            .map(|i| at + i)
+            .unwrap_or(text.len());
+        let header_line = text[at..line_end].trim();
+        let path = header_line.strip_prefix("file:").map(str::trim).filter(|p| !p.is_empty());
+        let Some(path) = path else {
+            search_from = at + 5;
+            continue;
+        };
+        let after_line = line_end + 1;
+        let edits_region = &text[after_line..];
+        let Some(edits) = parse_edits_field(edits_region) else {
+            search_from = at + 5;
+            continue;
+        };
+        out.push(ParsedToolCall {
+            name: "apply_patch".into(),
+            arguments: serde_json::json!({ "path": path, "edits": edits }),
+        });
+        search_from = after_line + 1;
+    }
+    out
+}
+
+fn find_fence_content_end(slice: &str) -> (usize, usize) {
+    let mut candidates = Vec::new();
+    if let Some(i) = slice.find("```") {
+        candidates.push((i, 3usize));
+    }
+    if let Some(i) = slice.to_ascii_lowercase().find("</file>") {
+        candidates.push((i, 7usize));
+    }
+    if let Some((i, len)) = candidates.into_iter().min_by_key(|(i, _)| *i) {
+        (i, len)
+    } else {
+        (slice.len(), 0usize)
+    }
+}
+
+fn file_edits_fence_to_call(header: &str, content: &str) -> Option<ParsedToolCall> {
+    let path = parse_file_fence_header_path(header)?;
+    let edits = parse_edits_field(content)?;
+    Some(ParsedToolCall {
+        name: "apply_patch".into(),
+        arguments: serde_json::json!({
+            "path": path,
+            "edits": edits,
+        }),
+    })
+}
+
+fn parse_file_fence_header_path(header: &str) -> Option<String> {
+    let header = header.trim();
+    if let Some(rest) = header.strip_prefix("file:") {
+        let path = rest.trim();
+        return (!path.is_empty()).then(|| path.to_string());
+    }
+    let lower = header.to_ascii_lowercase();
+    if lower == "file" {
+        return None;
+    }
+    if lower.starts_with("file ") {
+        let path = header[4..].trim();
+        return (!path.is_empty()).then(|| path.to_string());
+    }
+    None
+}
+
+fn parse_edits_field(content: &str) -> Option<Value> {
+    let content = content.trim();
+    let rest = content
+        .strip_prefix("edits:")
+        .or_else(|| content.strip_prefix("edits :"))?
+        .trim();
+    let array_json = extract_balanced_json_array(rest)?;
+    serde_json::from_str(array_json).ok()
+}
+
+fn extract_balanced_json_array(s: &str) -> Option<&str> {
+    let s = s.trim();
+    let start = s.find('[')?;
+    let end = matching_bracket_end(s, start)?;
+    Some(&s[start..end])
+}
+
+fn matching_bracket_end(s: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let tail = s.get(open_idx..)?;
+    for (offset, ch) in tail.char_indices() {
+        if let Some(q) = quote {
+            if ch == q && !is_json_escape_before(tail, offset) {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_idx + offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_json_escape_before(s: &str, quote_offset: usize) -> bool {
+    let mut slashes = 0usize;
+    let mut i = quote_offset;
+    while i > 0 {
+        i -= 1;
+        if s.as_bytes().get(i) == Some(&b'\\') {
+            slashes += 1;
+        } else {
+            break;
+        }
+    }
+    slashes % 2 == 1
+}
+
+/// Expand `apply_patch` with multiple `edits[]` into one call per edit (partial apply).
+pub fn expand_apply_patch_calls(calls: Vec<ParsedToolCall>) -> Vec<ParsedToolCall> {
+    let mut out = Vec::new();
+    for call in calls {
+        if call.name != "apply_patch" {
+            out.push(call);
+            continue;
+        }
+        let Some(edits) = call.arguments.get("edits").and_then(|v| v.as_array()) else {
+            out.push(call);
+            continue;
+        };
+        if edits.len() <= 1 {
+            out.push(call);
+            continue;
+        }
+        let path = call.arguments.get("path").cloned();
+        let expected_hash = call.arguments.get("expected_hash").cloned();
+        for edit in edits {
+            let mut args = serde_json::Map::new();
+            if let Some(p) = path.clone() {
+                args.insert("path".into(), p);
+            }
+            if let Some(h) = expected_hash.clone() {
+                args.insert("expected_hash".into(), h);
+            }
+            if let Some(obj) = edit.as_object() {
+                if let Some(v) = obj.get("old_text") {
+                    args.insert("old_text".into(), v.clone());
+                }
+                if let Some(v) = obj.get("new_text") {
+                    args.insert("new_text".into(), v.clone());
+                }
+            }
+            out.push(ParsedToolCall {
+                name: "apply_patch".into(),
+                arguments: Value::Object(args),
+            });
+        }
+    }
+    out
+}
+
 /// Last-resort extraction when markers are malformed but `call:name{...}` is visible.
 pub fn parse_loose_tool_calls(text: &str) -> Vec<ParsedToolCall> {
-    parse_bare_call_tool_calls(text)
+    parse_all_tool_calls(text)
 }
 
 /// True when assistant text is only tool wire markup (no user-facing answer).
@@ -279,6 +486,46 @@ pub fn contains_tool_call_markup(text: &str) -> bool {
         || lower.contains("<|tool_call")
         || lower.contains("call:read_file{")
         || lower.contains("call:list_dir{")
+        || lower.contains("call:apply_patch{")
+        || lower.contains("edits:[")
+        || (lower.contains("file:") && lower.contains("edits:"))
+}
+
+/// Remove tool_call and patch-fence wire markup from assistant-visible text after tools ran.
+pub fn strip_assistant_wire_markup(text: &str) -> String {
+    strip_patch_fence_markup(&strip_tool_call_markup(text))
+}
+
+fn strip_patch_fence_markup(text: &str) -> String {
+    let mut out = String::new();
+    let mut search_from = 0usize;
+    while search_from < text.len() {
+        let Some(rel) = text[search_from..].find("```") else {
+            out.push_str(&text[search_from..]);
+            break;
+        };
+        let fence_start = search_from + rel;
+        out.push_str(&text[search_from..fence_start]);
+        let after_ticks = fence_start + 3;
+        let Some(header_end_rel) = text[after_ticks..].find('\n') else {
+            out.push_str(&text[fence_start..]);
+            break;
+        };
+        let header_end = after_ticks + header_end_rel;
+        let header = text[after_ticks..header_end].trim();
+        let content_start = header_end + 1;
+        if parse_file_fence_header_path(header).is_some() {
+            let (content_end, close_len) = find_fence_content_end(&text[content_start..]);
+            search_from = content_start + content_end + close_len;
+            continue;
+        }
+        // keep non-patch fences
+        let (content_end, close_len) = find_fence_content_end(&text[content_start..]);
+        let end = content_start + content_end + close_len;
+        out.push_str(&text[fence_start..end]);
+        search_from = end;
+    }
+    out.trim().to_string()
 }
 
 /// Remove tool_call wire markup from assistant-visible text after tools ran.
@@ -413,5 +660,61 @@ mod tests {
         );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
+    }
+
+    #[test]
+    fn parses_apply_patch_with_json_edits_array() {
+        let calls = parse_all_tool_calls(
+            r#"<|tool_call|>call:apply_patch{path:vp/a.php,edits:[{"old_text":"$a","new_text":"$b"}]}</|tool_call|>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "apply_patch");
+        assert_eq!(calls[0].arguments["path"], "vp/a.php");
+        assert!(calls[0].arguments["edits"].is_array());
+    }
+
+    #[test]
+    fn parses_file_fence_with_edits_as_apply_patch() {
+        let calls = parse_all_tool_calls(
+            r#"Fix:
+```file:vp/src/a.php
+edits:[{"old_text":"$uids","new_text":"$uuids"}]
+```"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "apply_patch");
+        assert_eq!(calls[0].arguments["path"], "vp/src/a.php");
+        let edits = calls[0].arguments["edits"].as_array().expect("edits");
+        assert_eq!(edits[0]["old_text"], "$uids");
+    }
+
+    #[test]
+    fn parses_file_fence_closed_with_xml_file_tag() {
+        let calls = parse_all_tool_calls(
+            r#"```file:vp/src/a.php
+edits:[{"old_text":"foreach ($projectUids as $x)","new_text":"foreach ($projectUuids as $x)"}]</file>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "apply_patch");
+        assert_eq!(calls[0].arguments["path"], "vp/src/a.php");
+    }
+
+    #[test]
+    fn expands_multi_edit_apply_patch_into_separate_calls() {
+        let expanded = expand_apply_patch_calls(vec![
+            ParsedToolCall {
+                name: "apply_patch".into(),
+                arguments: serde_json::json!({
+                    "path": "a.php",
+                    "edits": [
+                        {"old_text": "a", "new_text": "b"},
+                        {"old_text": "c", "new_text": "d"},
+                    ]
+                }),
+            },
+        ]);
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(expanded[0].arguments["old_text"], "a");
+        assert_eq!(expanded[1].arguments["old_text"], "c");
     }
 }

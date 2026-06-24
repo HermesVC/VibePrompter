@@ -33,6 +33,11 @@ function scanGeneratedFileBlocks(text: string): GeneratedFileBlock[] {
     const rawContent = text.slice(contentStart, contentEnd).replace(/\r\n/g, '\n');
     const content = complete ? rawContent.replace(/\n$/, '') : rawContent;
 
+    if (isPatchEditsFenceContent(content)) {
+      FENCE_RE.lastIndex = endOffset;
+      continue;
+    }
+
     blocks.push({
       path: normalizeGeneratedPath(parsed.path),
       language: parsed.language,
@@ -67,8 +72,11 @@ function parseFenceInfo(info: string): { path: string; language?: string } | nul
   if (!tokens.length) return null;
 
   const first = tokens[0].toLowerCase();
-  if (first === 'file') {
-    const path = readPathToken(tokens.slice(1), info.replace(/^file\s+/i, ''));
+  if (first === 'file' || first.startsWith('file:')) {
+    const path =
+      first.startsWith('file:')
+        ? unquote(tokens[0].slice(5))
+        : readPathToken(tokens.slice(1), info.replace(/^file\s+/i, ''));
     return path ? { path, language: languageFromPath(path) } : null;
   }
 
@@ -106,6 +114,11 @@ function unquote(s: string | undefined): string | null {
   const value = (s ?? '').trim().replace(/^["'`]|["'`]$/g, '');
   if (!value || value.includes('\0')) return null;
   return value;
+}
+
+/** Patch wire format (`edits:[...]`) — not a full-file body; handled via apply_patch tools. */
+export function isPatchEditsFenceContent(content: string): boolean {
+  return /^\s*edits\s*:\s*[\[{]/i.test(content.trim());
 }
 
 export function normalizeGeneratedPath(path: string): string {

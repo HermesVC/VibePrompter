@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { I, PhButton, PhInput, FreeKeyCallout, GetKeyLink } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { listPromptFormats, type PromptFormatInfo } from '@shared/lib/promptFormatApi';
 import { Field } from './Field';
-import { PRESETS, type ConnectionDraft } from './connection';
+import { PRESETS, PROMPT_FORMAT_HINT, type ConnectionDraft } from './connection';
 import { isValidBaseUrl, isValidJsonObject, keyFormatHint } from './validation';
 
 interface ConnectionEditorProps {
@@ -32,6 +33,13 @@ export function ConnectionEditor({
   onFetchModels,
   onSave,
 }: ConnectionEditorProps) {
+  const [promptFormats, setPromptFormats] = useState<PromptFormatInfo[]>([]);
+  useEffect(() => {
+    listPromptFormats()
+      .then(setPromptFormats)
+      .catch(() => setPromptFormats([]));
+  }, []);
+
   const presetEntries = useMemo(() => Object.entries(PRESETS), []);
   // Match the draft's base URL back to a preset id so we can deep-link to that
   // vendor's API-key page. Null for custom/unknown endpoints.
@@ -329,12 +337,40 @@ export function ConnectionEditor({
             {advancedOpen ? '− hide' : '+ show'}
           </span>
           <span className="text-[11px]" style={{ color: 'var(--fg-dim)' }}>
-            Custom headers · pricing · notes
+            Prompt format · custom headers · pricing · notes
           </span>
         </button>
 
         {advancedOpen && (
           <>
+            <Field label="Prompt format (chat template)">
+              <select
+                value={draft.promptFormat}
+                onChange={(e) => setDraft({ ...draft, promptFormat: e.target.value })}
+                className="w-full text-[12.5px] rounded-md px-3 py-2 outline-none"
+                style={{
+                  background: 'var(--bg-2)',
+                  border: '.5px solid var(--border-strong)',
+                  color: 'var(--fg)',
+                }}
+              >
+                {promptFormats.length > 0 ? (
+                  promptFormats.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                      {!f.supportsToolCalling ? ' (no tools)' : ''}
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="openai_messages">OpenAI messages</option>
+                    <option value="gemma4">Gemma 4 turn template</option>
+                  </>
+                )}
+              </select>
+              <span className="text-[11px] text-fg-dim mt-1">{PROMPT_FORMAT_HINT}</span>
+            </Field>
+
             <Field label='Custom headers (JSON)'>
               <textarea
                 value={draft.extraHeaders}

@@ -276,7 +276,8 @@ export function ProvidersPanel() {
           c.notes?.trim() ||
           (c.priceInputPerM ?? 0) > 0 ||
           (c.priceOutputPerM ?? 0) > 0 ||
-          (c.contextWindowSize ?? 0) > 0
+          (c.contextWindowSize ?? 0) > 0 ||
+          (c.promptFormat && c.promptFormat !== DEFAULT_PROMPT_FORMAT)
       )
     );
   };

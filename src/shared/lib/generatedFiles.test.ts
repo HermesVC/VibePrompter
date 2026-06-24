@@ -78,4 +78,16 @@ describe('parseGeneratedFileBlocks', () => {
     const text = 'Intro\n```file src/a.ts\nx\n```\nDone';
     expect(stripGeneratedFileBlocks(text)).toBe('Intro\nDone');
   });
+
+  it('ignores file fences that only contain patch edits', () => {
+    const files = parseGeneratedFileBlocks(
+      '```file:vp/src/a.php\nedits:[{"old_text":"$a","new_text":"$b"}]\n```'
+    );
+    expect(files).toHaveLength(0);
+  });
+
+  it('parses file:path header without space', () => {
+    const files = parseGeneratedFileBlocks('```file:src/a.ts\nexport const a = 1;\n```');
+    expect(files[0]?.path).toBe('src/a.ts');
+  });
 });

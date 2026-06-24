@@ -27,14 +27,36 @@ Use relative paths from the workspace root. Prefer `read_file` before editing.
 Include 1–2 lines of context so `old_text` is unique; never paste a whole method, case block, or file.
 If the tool returns "patch too large", shrink `old_text` to the smallest unique fragment and retry.
 For typo / one-line fixes, `old_text` should be 1–3 lines. Do not paste whole files unless creating new ones.
+
+### Correct vs wrong (existing files)
+
+GOOD — one-line typo fix:
+<|tool_call|>call:apply_patch{path:vp/src/api/Foo.php,old_text:foreach ($projectUids as $id),new_text:foreach ($projectUuids as $id)}</|tool_call|>
+
+GOOD — read then patch:
+<|tool_call|>call:read_file{path:vp/src/api/Foo.php}</|tool_call|>
+(then after tool results)
+<|tool_call|>call:apply_patch{path:vp/src/api/Foo.php,old_text:exact unique lines,new_text:fixed lines}</|tool_call|>
+
+BAD — not executed as tools (do NOT use for patches):
+```file:path/to/File.php
+edits:[{"old_text":"...whole method...","new_text":"..."}]
+```
+
+BAD — whole case/method in old_text (rejected by patch size limits).
+
+**Never** use markdown ` ```file:...` fences with `edits:` for existing files. Use tool_call only.
+One small fix = one apply_patch call. Split multiple bugs into separate tool_call blocks.
+
 When you need to inspect files, emit tool_call block(s) in one of these formats, then wait:
 
-Qwen / local models (preferred):
+Qwen / LM Studio (preferred):
 <|tool_call|>call:read_file{path:relative/path.ext}</|tool_call|>
-<|tool_call|>call:apply_patch{path:relative/path.ext,edits:[{old_text:lines to find,new_text:replacement}]}</|tool_call|>
+<|tool_call|>call:apply_patch{path:relative/path.ext,old_text:exact lines,new_text:replacement}</|tool_call|>
 
 Gemma 4:
 <|tool_call>call:read_file{path:<|"|>relative/path.ext<|"|>}<|tool_call|>
+<|tool_call>call:apply_patch{path:<|"|>relative/path.ext<|"|>,old_text:<|"|>old<|"|>,new_text:<|"|>new<|"|>}<|tool_call|>
 
 Alternative:
 <tool_call>call:read_file{path:relative/path.ext}</tool_call>
@@ -199,6 +221,7 @@ where
 
     let ctx = build_tool_context(state, scope_path).await?;
     let mut tools_executed = 0usize;
+    let mut last_tool_results: Vec<ToolExecutionResult> = Vec::new();
 
     for _ in 0..MAX_TOOL_ITERATIONS {
         if should_cancel() {
@@ -211,6 +234,7 @@ where
                 &result.text,
             );
         }
+        calls = crate::providers::prompt_format::tool_call_parse::expand_apply_patch_calls(calls);
         if calls.is_empty() {
             if tools_executed == 0
                 && crate::providers::prompt_format::tool_call_parse::contains_tool_call_markup(
@@ -218,7 +242,7 @@ where
                 )
             {
                 tracing::warn!(
-                    "model emitted tool_call markup but parser extracted 0 calls (len={})",
+                    "model emitted tool/patch markup but parser extracted 0 calls (len={})",
                     result.text.chars().count()
                 );
             }
@@ -241,6 +265,7 @@ where
             .collect();
         let tool_results = tools::execute_many(&ctx, &pairs).await;
         tools_executed += tool_results.len();
+        last_tool_results = tool_results.clone();
 
         if let Some(hook) = memory_hook.as_mut() {
             crate::chat::index_tool_results(
@@ -308,9 +333,21 @@ where
     }
 
     if tools_executed > 0 {
-        result.text = crate::providers::prompt_format::tool_call_parse::strip_tool_call_markup(
+        result.text = crate::providers::prompt_format::tool_call_parse::strip_assistant_wire_markup(
             &result.text,
         );
+        let failures: Vec<_> = last_tool_results.iter().filter(|r| !r.ok).collect();
+        if !failures.is_empty() && !result.text.contains("ERROR:") {
+            let err_block = format_tool_results_for_user(
+                &failures
+                    .iter()
+                    .map(|r| (*r).clone())
+                    .collect::<Vec<_>>(),
+            );
+            if !err_block.trim().is_empty() {
+                result.text = format!("{err_block}\n\n{}", result.text.trim());
+            }
+        }
     }
 
     Ok(result)
@@ -598,6 +635,8 @@ mod tests {
         let system = system.unwrap();
 
         assert!(system.contains("<|tool_call>call:read_file"));
+        assert!(system.contains("GOOD — one-line typo fix"));
+        assert!(system.contains("BAD — not executed"));
         assert!(system.contains("Do not say \"I will inspect/read/check\""));
     }
 
