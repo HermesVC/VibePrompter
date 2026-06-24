@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 fn default_max_step_retries() -> usize {
-    1
+    2
 }
 
 /// Tunable limits for an autonomous run (outer orchestration loop).
@@ -50,7 +50,7 @@ impl Default for AutonomousRunConfig {
             max_replans: 2,
             planning_enabled: true,
             verify_steps: true,
-            max_step_retries: 1,
+            max_step_retries: 2,
         }
     }
 }

@@ -10,9 +10,9 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::chat::autonomous::config::AutonomousRunConfig;
 use crate::chat::autonomous::plan::{
-    best_autonomous_plan_from_texts, format_plan_for_prompt, normalize_plan_for_goal,
-    parse_all_step_results, parse_autonomous_plan, parse_step_result, synthesize_plan_from_goal,
-    AutonomousPlan, PlanStep, StepStatus,
+    best_autonomous_plan_from_texts, format_plan_for_prompt, merge_replanned_plan,
+    normalize_plan_for_goal, parse_all_step_results, parse_autonomous_plan, parse_step_result,
+    synthesize_plan_from_goal, AutonomousPlan, PlanStep, StepStatus,
 };
 use crate::chat::autonomous::prompts::{
     completion_user_message, execution_user_message, planning_retry_user_message,
@@ -576,7 +576,12 @@ where
     .await?;
     *final_text = result.text.clone();
     if let Some(updated) = parse_autonomous_plan(&result.text) {
-        *plan = normalize_plan_for_goal(updated, goal);
+        *plan = merge_replanned_plan(plan, updated, failed_step.id);
+        tracing::info!(
+            "replan merged: {} steps (kept completed through step {})",
+            plan.steps.len(),
+            failed_step.id.saturating_sub(1)
+        );
         Ok(true)
     } else {
         Ok(false)
@@ -711,6 +716,22 @@ where
             tracing::warn!("autonomous turn outer retry {attempt}/{max_retries}");
         }
 
+        let msg_len: usize = messages.iter().map(|m| m.content.len()).sum();
+        let execution_turn = plan.is_some();
+        let degrade_start = if attempt > 0 {
+            Some(DegradeLevel::Anchor.as_u8())
+        } else if execution_turn {
+            Some(if msg_len > 24_000 {
+                DegradeLevel::ToolSummaryOnly.as_u8()
+            } else if messages.len() > 8 || msg_len > 12_000 {
+                DegradeLevel::Aggressive.as_u8()
+            } else {
+                DegradeLevel::Normal.as_u8()
+            })
+        } else {
+            None
+        };
+
         let req = ChatRunRequest {
             messages: messages.clone(),
             mode_id: base.mode_id.clone(),
@@ -718,19 +739,15 @@ where
             chat_context: base.chat_context.clone(),
             session_summary: session_summary.clone(),
             session_id: base.session_id.clone(),
-            degrade_anchor: if attempt > 0 {
+            degrade_anchor: if execution_turn || attempt > 0 {
                 Some(anchor.clone())
             } else {
                 None
             },
-            degrade_start: if attempt > 0 {
-                Some(DegradeLevel::Anchor.as_u8())
-            } else {
-                None
-            },
+            degrade_start,
             force_context_limit: base.force_context_limit,
             disable_rolling_memory: base.disable_rolling_memory,
-            disable_vector_retrieval: base.disable_vector_retrieval,
+            disable_vector_retrieval: base.disable_vector_retrieval || attempt > 0 || msg_len > 20_000,
             retrieval_query_override: if attempt == 0 {
                 retrieval_query_override.clone()
             } else {

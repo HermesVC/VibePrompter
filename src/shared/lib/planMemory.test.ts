@@ -55,4 +55,13 @@ done: css
     expect(out?.steps.find((s) => s.id === 1)?.status).toBe('done');
     expect(out?.steps.find((s) => s.id === 3)?.status).toBe('in_progress');
   });
+
+  it('ignores step numbers outside canonical plan', () => {
+    const text = `<plan-step-summary>
+step: 5 / 5
+done: css
+</plan-step-summary>`;
+    const out = applyStreamPlanProgress(basePlan, text);
+    expect(out).toEqual(basePlan);
+  });
 });

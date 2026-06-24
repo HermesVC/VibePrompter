@@ -21,7 +21,7 @@ pub fn tool_definition() -> ToolDefinition {
         name: NAME.into(),
         description: "Apply exact search/replace edits to an **existing** file. \
 For new files use write_file. \
-Prefer small anchors (1–3 lines) for typos; multi-line old_text is OK when the change spans a case/method block (see workspace patchMaxLines). \
+Prefer small unique anchors (1–3 lines) when possible; larger old_text is fine when the change spans a block. \
 Read the file first; pass contentHash as expected_hash when available."
             .into(),
         parameters: json!({

@@ -222,6 +222,8 @@ where
         Err(AppError::Validation("chat stream did not run".into()));
     let mut degrade_used_for_recovery = crate::chat::DegradeLevel::Normal;
     let mut skip_memory_commit = false;
+    let mut effective_disable_vector = request.disable_vector_retrieval;
+    let mut overflow_salvage_used = false;
 
     events.status(ChatRunStatus {
         phase: "preparing".into(),
@@ -285,7 +287,7 @@ where
             retrieval_query_preview = Some(preview_text(query_text, 240));
             let (retrieved_block, retrieved_chunk_count) = if degrade.omit_retrieved()
                 || session_id.trim().is_empty()
-                || request.disable_vector_retrieval
+                || effective_disable_vector
             {
                 (String::new(), 0usize)
             } else {
@@ -396,7 +398,7 @@ where
                 }
             }
 
-            if !request.disable_vector_retrieval
+            if !effective_disable_vector
                 && !window_plan.evicted.is_empty()
                 && !session_id.trim().is_empty()
                 && crate::chat::index_evicted_messages(
@@ -569,6 +571,29 @@ where
             }
             o.result
         });
+
+        if let Err(ref e) = result {
+            if !overflow_salvage_used
+                && degrade_anchor.as_ref().is_some_and(|a| !a.trim().is_empty())
+                && crate::chat::is_context_overflow_error(e)
+            {
+                overflow_salvage_used = true;
+                memory.clear();
+                effective_disable_vector = true;
+                degrade = crate::chat::DegradeLevel::Anchor;
+                degrade_used_for_recovery = degrade;
+                stream_generation += 1;
+                events.status(ChatRunStatus {
+                    phase: "recovering".into(),
+                    generation: stream_generation,
+                    kind: Some("overflow_salvage".into()),
+                    attempt: Some(crate::chat::DegradeLevel::Anchor.as_u8() as usize),
+                    message: Some("Context salvage: anchor-only retry".into()),
+                });
+                tracing::warn!("context overflow salvage: cleared memory, anchor-only retry");
+                continue;
+            }
+        }
         break;
     }
 
@@ -616,7 +641,7 @@ where
                 input_estimate_final,
                 context_limit,
                 rolling_disabled: request.disable_rolling_memory,
-                vector_retrieval_disabled: request.disable_vector_retrieval,
+                vector_retrieval_disabled: effective_disable_vector,
             });
             if let Some(ctx) = request.chat_context.as_ref() {
                 use crate::workspace::ChatScope;

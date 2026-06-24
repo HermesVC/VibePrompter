@@ -38,7 +38,6 @@ Prefer `read_file` before editing existing files.
 **New vs existing:** `list_dir` first if unsure. **New path** → `write_file`. **Existing path** → `read_file` then `apply_patch`. Never use apply_patch with empty old_text to create a file.
 **Patch sizing:** prefer the smallest unique `old_text` (often 1–3 lines for typos). Multi-line `old_text` is fine when the fix genuinely spans a case block, method, or branch — include enough context that the anchor is unique once in the file.
 Do not paste a whole file unless creating a new one. Split unrelated fixes into separate apply_patch calls.
-If the tool returns "patch too large", narrow the anchor or split into sequential edits.
 
 ### Correct vs wrong (existing files)
 

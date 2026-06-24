@@ -126,6 +126,72 @@ pub fn synthesize_plan_from_goal(goal: &str) -> AutonomousPlan {
     }
 }
 
+/// Merge replan proposal into the canonical plan — never drop completed steps.
+pub fn merge_replanned_plan(
+    current: &AutonomousPlan,
+    proposed: AutonomousPlan,
+    failed_step_id: u32,
+) -> AutonomousPlan {
+    let mut merged: Vec<PlanStep> = current
+        .steps
+        .iter()
+        .filter(|s| {
+            s.id < failed_step_id || matches!(s.status, StepStatus::Done | StepStatus::Skipped)
+        })
+        .cloned()
+        .collect();
+
+    let max_kept_id = merged.iter().map(|s| s.id).max().unwrap_or(0);
+
+    let tail: Vec<PlanStep> = proposed
+        .steps
+        .iter()
+        .filter(|s| s.id >= failed_step_id)
+        .cloned()
+        .collect();
+
+    let tail = if tail.is_empty() {
+        let failed_idx = current
+            .steps
+            .iter()
+            .position(|s| s.id == failed_step_id)
+            .unwrap_or(0);
+        proposed
+            .steps
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (i >= failed_idx).then(|| s.clone()))
+            .collect()
+    } else {
+        tail
+    };
+
+    if tail.is_empty() {
+        for s in current.steps.iter().filter(|s| s.id >= failed_step_id) {
+            if merged.iter().any(|m| m.id == s.id) {
+                continue;
+            }
+            let mut copy = s.clone();
+            if copy.id == failed_step_id {
+                copy.status = StepStatus::Pending;
+            }
+            merged.push(copy);
+        }
+    } else {
+        let mut next_id = max_kept_id;
+        for mut step in tail {
+            next_id += 1;
+            step.id = next_id;
+            step.status = StepStatus::Pending;
+            step.note = None;
+            merged.push(step);
+        }
+    }
+
+    merged.sort_by_key(|s| s.id);
+    AutonomousPlan { steps: merged }
+}
+
 /// Ensure at least 2 concrete steps — never run with a single catch-all step.
 pub fn normalize_plan_for_goal(plan: AutonomousPlan, goal: &str) -> AutonomousPlan {
     if plan.steps.len() >= 2 {
@@ -457,5 +523,74 @@ Patched foreach line.
         };
         let out = normalize_plan_for_goal(one, "build game");
         assert!(out.steps.len() >= 4);
+    }
+
+    #[test]
+    fn merge_replan_keeps_completed_steps() {
+        let current = AutonomousPlan {
+            steps: vec![
+                PlanStep {
+                    id: 1,
+                    title: "A".into(),
+                    status: StepStatus::Done,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 2,
+                    title: "B".into(),
+                    status: StepStatus::Done,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 3,
+                    title: "C".into(),
+                    status: StepStatus::Failed,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 4,
+                    title: "D".into(),
+                    status: StepStatus::Pending,
+                    verify: None,
+                    note: None,
+                },
+            ],
+        };
+        let proposed = AutonomousPlan {
+            steps: vec![
+                PlanStep {
+                    id: 1,
+                    title: "new A".into(),
+                    status: StepStatus::Pending,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 2,
+                    title: "retry C".into(),
+                    status: StepStatus::Pending,
+                    verify: None,
+                    note: None,
+                },
+                PlanStep {
+                    id: 3,
+                    title: "finish".into(),
+                    status: StepStatus::Pending,
+                    verify: None,
+                    note: None,
+                },
+            ],
+        };
+        let merged = merge_replanned_plan(&current, proposed, 3);
+        assert_eq!(merged.steps.len(), 4);
+        assert_eq!(merged.steps[0].title, "A");
+        assert_eq!(merged.steps[0].status, StepStatus::Done);
+        assert_eq!(merged.steps[1].title, "B");
+        assert_eq!(merged.steps[1].status, StepStatus::Done);
+        assert_eq!(merged.steps[2].title, "retry C");
+        assert_eq!(merged.steps[2].status, StepStatus::Pending);
     }
 }

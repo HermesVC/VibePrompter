@@ -34,7 +34,7 @@ pub struct WorkspaceSettings {
 }
 
 fn default_patch_policy() -> String {
-    "strict".into()
+    "off".into()
 }
 
 fn default_patch_max_lines() -> u32 {

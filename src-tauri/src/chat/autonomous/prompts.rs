@@ -67,6 +67,7 @@ pub fn execution_user_message(
     format!(
         "{plan_block}{spec_block}\n\
          Execute **only step {}**: {}\n\
+         Do **not** output a new `<{PLAN_TAG}>` during execution — the orchestrator keeps the canonical plan. \
          Do **not** start the next plan step in this turn — one step per orchestrator turn. \
          Use workspace tools (`write_file` for new files). Wait for `[Tool result: …]` before claiming success. \
          If a tool returns ERROR, set step status=\"failed\". \
@@ -93,8 +94,8 @@ pub fn replan_user_message(
     format!(
         "{plan_block}\n\n\
          Step {id} ({title}) failed.{verify_note}\n\
-         Output an **updated** `<{PLAN_TAG}>` JSON array with **at least 3 steps**: mark completed steps done, \
-         replace or add steps for the remainder. Keep ids stable when possible.",
+         Output an **updated** `<{PLAN_TAG}>` JSON array for steps **from step {id} onward** (completed steps are kept by the orchestrator). \
+         Include at least the failed step and 2+ follow-ups. Keep step titles concrete.",
         id = failed_step.id,
         title = failed_step.title,
     )

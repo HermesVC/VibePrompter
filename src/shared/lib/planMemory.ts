@@ -68,6 +68,12 @@ export function applyStreamPlanProgress(
   }
   if (activeStep == null) return plan;
 
+  const stepIds = new Set(plan.steps.map((s) => s.id));
+  const maxStepId = Math.max(...plan.steps.map((s) => s.id));
+  if (!stepIds.has(activeStep) || activeStep > maxStepId) {
+    return plan;
+  }
+
   const steps = plan.steps.map((s) => {
     let status: StepStatus = s.status;
     if (s.id < activeStep!) {
