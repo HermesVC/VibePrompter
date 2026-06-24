@@ -38,7 +38,7 @@ impl ChatPromptFormat for Gemma4Format {
     }
 
     fn parse_tool_calls(&self, output: &str) -> Vec<ParsedToolCall> {
-        parse_gemma4_tool_calls(output)
+        super::tool_call_parse::parse_all_tool_calls(output)
     }
 }
 

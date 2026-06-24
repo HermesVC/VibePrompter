@@ -22,8 +22,17 @@ You can inspect the project with these tools (declare via tool_call blocks):
 - `read_symbol` — read a symbol body by name (`path`, `symbol`)
 
 Use relative paths from the workspace root. Prefer `read_file` with line ranges for large files.
-When you need to inspect files, output only tool_call blocks in this exact format, then wait:
+When you need to inspect files, emit tool_call block(s) in one of these formats, then wait:
+
+Qwen / local models (preferred):
+<|tool_call|>call:read_file{path:relative/path.ext}</|tool_call|>
+
+Gemma 4:
 <|tool_call>call:read_file{path:<|"|>relative/path.ext<|"|>}<|tool_call|>
+
+Alternative:
+<tool_call>call:read_file{path:relative/path.ext}</tool_call>
+
 Do not say "I will inspect/read/check" unless you also emit the needed tool_call block in the same turn.
 After a tool_call, wait for tool results before answering the user."#;
 
