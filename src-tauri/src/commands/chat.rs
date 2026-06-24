@@ -55,6 +55,8 @@ pub async fn chat_complete_stream(
     chat_context: Option<crate::workspace::ChatContextPayload>,
     session_summary: Option<String>,
     session_id: Option<String>,
+    degrade_start: Option<u8>,
+    degrade_anchor: Option<String>,
 ) -> Result<CompletionResult, AppError> {
     let token_event = format!("chat:{stream_id}:token");
     let done_event = format!("chat:{stream_id}:done");
@@ -107,6 +109,8 @@ pub async fn chat_complete_stream(
             chat_context: chat_context.clone(),
             session_summary: session_summary.clone(),
             session_id: session_id.clone(),
+            degrade_start,
+            degrade_anchor,
             ..Default::default()
         },
         cancel_flag.clone(),

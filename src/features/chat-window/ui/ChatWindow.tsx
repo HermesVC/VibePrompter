@@ -80,7 +80,7 @@ interface ChatMessage {
   images?: ChatImage[];
   streaming?: boolean;
   error?: string;
-  meta?: { model: string; latencyMs: number };
+  meta?: { model: string; latencyMs: number; lastDegradeLevel?: number };
 }
 
 interface DonePayload {
@@ -206,6 +206,35 @@ function parseTokenDelta(payload: string | TokenPayload): { generation: number; 
   };
 }
 
+const CONTEXT_OVERFLOW_HINTS = [
+  'context length',
+  'context window',
+  'token limit',
+  'too many tokens',
+  'prompt is too long',
+  'prompt too long',
+  'maximum context',
+  'payload too large',
+  'n_ctx',
+  'num_ctx',
+];
+
+function isContextOverflowError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return CONTEXT_OVERFLOW_HINTS.some((hint) => lower.includes(hint));
+}
+
+function buildRegenerateAnchor(userContent: string): string {
+  const { userText } = splitUserMessageScope(userContent);
+  const goal = userText.trim() || userContent.trim();
+  return goal.slice(0, 800);
+}
+
+function nextDegradeStart(level: number | undefined): number | undefined {
+  if (level == null || level <= 0) return undefined;
+  return Math.min(level + 1, 6);
+}
+
 /** Persists the chat window's mode choice — independent of tray/global active mode. */
 const CHAT_MODE_STORAGE_KEY = 'vp_chat_window_mode_id';
 
@@ -313,6 +342,8 @@ export function ChatWindow() {
   const streamGenerationRef = useRef(0);
   const cancelledRef = useRef(false);
   const preRecoveryContentRef = useRef('');
+  const streamSettledRef = useRef(false);
+  const lastDegradeLevelRef = useRef(0);
   const modeConnSyncedRef = useRef(false);
   const activeConnIdRef = useRef('');
 
@@ -343,15 +374,69 @@ export function ChatWindow() {
     flushPendingRef.current = true;
     requestAnimationFrame(() => {
       flushPendingRef.current = false;
-      const streamText = preRecoveryContentRef.current
-        ? preRecoveryContentRef.current + bufRef.current
-        : bufRef.current;
-      const text = stripVpSummaryForDisplay(streamText);
+      const text = stripVpSummaryForDisplay(
+        preRecoveryContentRef.current + bufRef.current
+      );
       setMessages((prev) =>
         prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m))
       );
     });
   }, []);
+
+  const getPartialStreamContent = useCallback(
+    () => stripVpSummaryForDisplay(preRecoveryContentRef.current + bufRef.current),
+    []
+  );
+
+  const trackDegradeFromPayload = useCallback((level: number | undefined) => {
+    if (typeof level === 'number' && level > 0) {
+      lastDegradeLevelRef.current = level;
+    }
+  }, []);
+
+  const beginContextRecovery = useCallback((generation?: number) => {
+    if (typeof generation === 'number') {
+      streamGenerationRef.current = generation;
+    } else {
+      streamGenerationRef.current += 1;
+    }
+    preRecoveryContentRef.current += bufRef.current;
+    bufRef.current = '';
+    flushPendingRef.current = false;
+    setIsRecoveringContext(true);
+    setIsContinuingOutput(false);
+    setProviderRetryWarning(null);
+    setMemoryDebugLabel('Context degrade: rebuilding…');
+  }, []);
+
+  const applyStreamFailure = useCallback(
+    (assistantId: string, errMsg: string, cancelled: boolean) => {
+      if (streamSettledRef.current) return;
+      streamSettledRef.current = true;
+      setIsRecoveringContext(false);
+      setIsContinuingOutput(false);
+      setProviderRetryWarning(null);
+      if (cancelled) cancelledRef.current = true;
+      const partial = getPartialStreamContent();
+      const degradeLevel = lastDegradeLevelRef.current;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: partial || m.content,
+                streaming: false,
+                error: cancelled ? 'Cancelled' : errMsg,
+                meta: m.meta
+                  ? { ...m.meta, lastDegradeLevel: degradeLevel }
+                  : { model: '', latencyMs: 0, lastDegradeLevel: degradeLevel },
+              }
+            : m
+        )
+      );
+    },
+    [getPartialStreamContent]
+  );
 
   useEffect(() => {
     const html = document.documentElement;
@@ -820,7 +905,8 @@ export function ChatWindow() {
       }>,
       assistantId: string,
       sid: string,
-      autonomousGoal: string | null
+      autonomousGoal: string | null,
+      recoveryOptions?: { degradeStart?: number; degradeAnchor?: string }
     ) => {
       const connForSend = resolveActiveConnection(conns, connectionId || activeConnIdRef.current);
       const contextLimit = effectiveContextLimit(connForSend);
@@ -831,6 +917,7 @@ export function ChatWindow() {
       setMemoryDebugLabel('Preparing request...');
       setTokenUsage(null);
       preRecoveryContentRef.current = '';
+      streamSettledRef.current = false;
       setStreaming(true);
 
       if (autonomousMode && autonomousGoal) {
@@ -887,12 +974,7 @@ export function ChatWindow() {
                 return;
               }
               if (payload.phase === 'recovering') {
-                preRecoveryContentRef.current = bufRef.current;
-                bufRef.current = '';
-                flushPendingRef.current = false;
-                setIsRecoveringContext(true);
-                setIsContinuingOutput(false);
-                setMemoryDebugLabel('Context degrade: rebuilding…');
+                beginContextRecovery(payload.generation);
                 return;
               }
               if (payload.phase === 'continuing') {
@@ -909,14 +991,17 @@ export function ChatWindow() {
                 payload.vectorChunksUsed != null ||
                 payload.memoryCompressed
               ) {
+                trackDegradeFromPayload(payload.memoryDiagnostics?.degradeLevelUsed);
                 applyMemoryDebugFromPayload(payload);
                 applyRetrievedMemoryFromPayload(payload.retrievedMemory);
               }
             },
             onComplete: (result) => {
-              if (cancelledRef.current) return;
+              if (cancelledRef.current || streamSettledRef.current) return;
+              streamSettledRef.current = true;
               preRecoveryContentRef.current = '';
               bufRef.current = '';
+              trackDegradeFromPayload(result.memoryDiagnostics?.degradeLevelUsed ?? undefined);
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -924,47 +1009,38 @@ export function ChatWindow() {
                         ...m,
                         content: result.finalText,
                         streaming: false,
-                        meta: { model: 'autonomous', latencyMs: 0 },
+                        error: undefined,
+                        meta: {
+                          model: 'autonomous',
+                          latencyMs: 0,
+                          lastDegradeLevel:
+                            result.memoryDiagnostics?.degradeLevelUsed ??
+                            lastDegradeLevelRef.current,
+                        },
                       }
                     : m
                 )
               );
+              setIsRecoveringContext(false);
+              setIsContinuingOutput(false);
               void refreshFolderScope();
               processScopedCompletion({ text: result.finalText });
               applyMemoryDebugFromPayload({
                 vectorChunksUsed: result.vectorChunksUsed ?? undefined,
                 memoryDiagnostics: result.memoryDiagnostics ?? undefined,
+                contextRecovered: result.memoryDiagnostics?.degradeLevelUsed
+                  ? (result.memoryDiagnostics.degradeLevelUsed ?? 0) > 0
+                  : undefined,
               });
               applyRetrievedMemoryFromPayload(result.retrievedMemory ?? undefined);
             },
             onError: (msg, cancelled) => {
-              setIsRecoveringContext(false);
-              setIsContinuingOutput(false);
-              setProviderRetryWarning(null);
-              if (cancelled) cancelledRef.current = true;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? {
-                        ...m,
-                        content: cancelled ? stripVpSummaryForDisplay(bufRef.current) : '',
-                        streaming: false,
-                        error: cancelled ? 'Cancelled' : msg,
-                      }
-                    : m
-                )
-              );
+              applyStreamFailure(assistantId, msg, cancelled);
             },
           });
         } catch (e) {
-          if (!cancelledRef.current) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, streaming: false, error: errorMessage(e) }
-                  : m
-              )
-            );
+          if (!cancelledRef.current && !streamSettledRef.current) {
+            applyStreamFailure(assistantId, errorMessage(e), false);
           }
         } finally {
           setStreaming(false);
@@ -1037,17 +1113,9 @@ export function ChatWindow() {
               return;
             }
             if (e.payload.phase !== 'recovering') return;
-            if (typeof e.payload.generation !== 'number') {
-              streamGenerationRef.current += 1;
-            } else {
-              streamGenerationRef.current = e.payload.generation;
-            }
-            preRecoveryContentRef.current = bufRef.current;
-            bufRef.current = '';
-            flushPendingRef.current = false;
-            setIsRecoveringContext(true);
-            setIsContinuingOutput(false);
-            setMemoryDebugLabel('Context degrade: rebuilding…');
+            beginContextRecovery(
+              typeof e.payload.generation === 'number' ? e.payload.generation : undefined
+            );
           }),
           listen<MemoryPayload>(memoryEvent, (e) => {
             if (assistantIdRef.current !== assistantId) return;
@@ -1069,15 +1137,18 @@ export function ChatWindow() {
               e.payload.vectorChunksUsed != null ||
               e.payload.memoryCompressed
             ) {
+              trackDegradeFromPayload(e.payload.memoryDiagnostics?.degradeLevelUsed);
               applyMemoryDebugFromPayload(e.payload);
               applyRetrievedMemoryFromPayload(e.payload.retrievedMemory);
             }
           }),
           listen<DonePayload>(doneEvent, (e) => {
             if (assistantIdRef.current !== assistantId) return;
-            if (cancelledRef.current) return;
+            if (cancelledRef.current || streamSettledRef.current) return;
+            streamSettledRef.current = true;
             preRecoveryContentRef.current = '';
             bufRef.current = '';
+            trackDegradeFromPayload(e.payload.memoryDiagnostics?.degradeLevelUsed);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
@@ -1086,9 +1157,13 @@ export function ChatWindow() {
                       content: e.payload.text,
                       scopedText: e.payload.scopedText,
                       streaming: false,
+                      error: undefined,
                       meta: {
                         model: e.payload.model,
                         latencyMs: e.payload.latencyMs,
+                        lastDegradeLevel:
+                          e.payload.memoryDiagnostics?.degradeLevelUsed ??
+                          lastDegradeLevelRef.current,
                       },
                     }
                   : m
@@ -1113,29 +1188,13 @@ export function ChatWindow() {
             applyMemoryDebugFromPayload(e.payload);
             applyContextNotice(e.payload, e.payload.contextWindowSize ?? contextLimit);
             processScopedCompletion(e.payload);
+            setIsRecoveringContext(false);
+            setIsContinuingOutput(false);
           }),
           listen<string>(errEvent, (e) => {
             if (assistantIdRef.current !== assistantId) return;
-            setIsRecoveringContext(false);
-            setIsContinuingOutput(false);
-            setProviderRetryWarning(null);
             const cancelled = e.payload === 'cancelled';
-            if (cancelled) cancelledRef.current = true;
-            const partial = stripVpSummaryForDisplay(
-              bufRef.current || preRecoveryContentRef.current
-            );
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? {
-                      ...m,
-                      content: partial || m.content,
-                      streaming: false,
-                      error: cancelled ? 'Cancelled' : e.payload,
-                    }
-                  : m
-              )
-            );
+            applyStreamFailure(assistantId, e.payload, cancelled);
           }),
         ]);
         unlistens.push(...listeners);
@@ -1148,13 +1207,17 @@ export function ChatWindow() {
           chatContext: buildChatContextPayload(chatContextRef.current),
           sessionSummary: sessionSummaryRef.current.trim() || undefined,
           sessionId: sessionIdRef.current,
+          degradeStart: recoveryOptions?.degradeStart,
+          degradeAnchor: recoveryOptions?.degradeAnchor,
         });
 
-        if (cancelledRef.current) return;
+        if (cancelledRef.current || streamSettledRef.current) return;
 
+        streamSettledRef.current = true;
         preRecoveryContentRef.current = '';
         bufRef.current = '';
 
+        trackDegradeFromPayload(result.memoryDiagnostics?.degradeLevelUsed);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -1163,7 +1226,14 @@ export function ChatWindow() {
                   content: result.text,
                   scopedText: result.scopedText,
                   streaming: false,
-                  meta: { model: result.model, latencyMs: result.latencyMs },
+                  error: undefined,
+                  meta: {
+                    model: result.model,
+                    latencyMs: result.latencyMs,
+                    lastDegradeLevel:
+                      result.memoryDiagnostics?.degradeLevelUsed ??
+                      lastDegradeLevelRef.current,
+                  },
                 }
               : m
           )
@@ -1187,31 +1257,17 @@ export function ChatWindow() {
         applyMemoryDebugFromPayload(result);
         applyContextNotice(result, result.contextWindowSize ?? contextLimit);
         processScopedCompletion(result);
-      } catch (e) {
         setIsRecoveringContext(false);
         setIsContinuingOutput(false);
-        setProviderRetryWarning(null);
-        if (cancelledRef.current) return;
+      } catch (e) {
+        if (cancelledRef.current || streamSettledRef.current) return;
         const msg = errorMessage(e);
         if (msg.toLowerCase().includes('cancelled')) {
           cancelledRef.current = true;
+          applyStreamFailure(assistantId, msg, true);
           return;
         }
-        const partial = stripVpSummaryForDisplay(
-          bufRef.current || preRecoveryContentRef.current
-        );
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  streaming: false,
-                  content: partial || m.content,
-                  error: msg,
-                }
-              : m
-          )
-        );
+        applyStreamFailure(assistantId, msg, false);
       } finally {
         unlistens.forEach((u) => u());
         setStreaming(false);
@@ -1236,6 +1292,9 @@ export function ChatWindow() {
       applyMemoryDebugFromPayload,
       applyContextNotice,
       processScopedCompletion,
+      beginContextRecovery,
+      applyStreamFailure,
+      trackDegradeFromPayload,
     ]
   );
 
@@ -1263,6 +1322,25 @@ export function ChatWindow() {
           })),
         }));
 
+      const priorLevel =
+        assistant.meta?.lastDegradeLevel ?? lastDegradeLevelRef.current;
+      const overflowRetry =
+        !!assistant.error && isContextOverflowError(assistant.error);
+      const recoveryOptions =
+        overflowRetry || priorLevel > 0
+          ? {
+              degradeStart: nextDegradeStart(priorLevel) ?? 1,
+              degradeAnchor: buildRegenerateAnchor(user.content),
+            }
+          : undefined;
+
+      if (recoveryOptions?.degradeStart) {
+        setContextTrimNotice(
+          `Повтор с degrade ${recoveryOptions.degradeStart} (контекст сжат, якорь задачи сохранён)`
+        );
+        setContextNoticeKind('info');
+      }
+
       const assistantId = crypto.randomUUID();
       assistantIdRef.current = assistantId;
       streamGenerationRef.current = 0;
@@ -1271,6 +1349,7 @@ export function ChatWindow() {
       setStreamId(sid);
       bufRef.current = '';
       preRecoveryContentRef.current = '';
+      streamSettledRef.current = false;
       setAttachError(null);
 
       if (autonomousMode) {
@@ -1288,7 +1367,13 @@ export function ChatWindow() {
           ? userText.trim() || user.content.trim()
           : null;
 
-      await runAssistantCompletion(apiMessages, assistantId, sid, autonomousGoal);
+      await runAssistantCompletion(
+        apiMessages,
+        assistantId,
+        sid,
+        autonomousGoal,
+        recoveryOptions
+      );
     },
     [
       streaming,
