@@ -1,6 +1,7 @@
 //! Semantic retrieval over evicted chat turns (per-session vector store).
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -29,6 +30,35 @@ const INDEX_BATCH: usize = 8;
 const MAX_SESSION_CHUNKS: i64 = 1_500;
 /// Embed models (nomic) truncate around 2048 tokens — keep query well under that.
 const EMBED_QUERY_MAX_CHARS: usize = 4_000;
+const VECTOR_EMBED_TIMEOUT: Duration = Duration::from_secs(6);
+
+async fn embed_texts_best_effort(
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    texts: &[String],
+    model: Option<&str>,
+    op: &str,
+) -> Option<Vec<Vec<f32>>> {
+    match tokio::time::timeout(
+        VECTOR_EMBED_TIMEOUT,
+        providers::embed_texts(conn, cfg, texts, model),
+    )
+    .await
+    {
+        Ok(Ok(v)) => Some(v),
+        Ok(Err(e)) => {
+            tracing::warn!("vector memory {op} skipped: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(
+                "vector memory {op} timed out after {}s; continuing without vector memory",
+                VECTOR_EMBED_TIMEOUT.as_secs()
+            );
+            None
+        }
+    }
+}
 const PLAN_CANONICAL_ROLE: &str = "plan-canonical";
 
 fn truncate_query_for_embed(query: &str) -> String {
@@ -127,12 +157,9 @@ pub async fn index_evicted_messages(
 
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
-        let embeddings = match providers::embed_texts(conn, cfg, &texts, None).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("vector memory index skipped: {e}");
-                return false;
-            }
+        let Some(embeddings) = embed_texts_best_effort(conn, cfg, &texts, None, "index").await
+        else {
+            return false;
         };
         for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
             match memory
@@ -191,12 +218,10 @@ pub async fn index_context_artifacts(
 
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
-        let embeddings = match providers::embed_texts(conn, cfg, &texts, None).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("context artifact memory skipped: {e}");
-                return;
-            }
+        let Some(embeddings) =
+            embed_texts_best_effort(conn, cfg, &texts, None, "context artifact index").await
+        else {
+            return;
         };
         for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
             match memory
@@ -321,12 +346,10 @@ async fn upsert_plan_canonical(
         version,
         &Utc::now().to_rfc3339(),
     );
-    let embeddings = match providers::embed_texts(conn, cfg, &[text.clone()], None).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("plan canonical memory index skipped: {e}");
-            return;
-        }
+    let Some(embeddings) =
+        embed_texts_best_effort(conn, cfg, &[text.clone()], None, "plan canonical index").await
+    else {
+        return;
     };
     let Some(embedding) = embeddings.into_iter().next() else {
         return;
@@ -465,12 +488,10 @@ pub async fn index_tool_results(
 
     for batch in pending.chunks(INDEX_BATCH) {
         let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
-        let embeddings = match providers::embed_texts(conn, cfg, &texts, None).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("workspace tool memory skipped: {e}");
-                return;
-            }
+        let Some(embeddings) =
+            embed_texts_best_effort(conn, cfg, &texts, None, "workspace tool index").await
+        else {
+            return;
         };
         for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
             match memory
@@ -542,12 +563,10 @@ pub async fn maybe_compress_vector_session(
     if parts.is_empty() {
         return Ok(false);
     }
-    let embeddings = match providers::embed_texts(conn, cfg, &parts, None).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("vector memory re-index after compression failed: {e}");
-            return Ok(false);
-        }
+    let Some(embeddings) =
+        embed_texts_best_effort(conn, cfg, &parts, None, "re-index after compression").await
+    else {
+        return Ok(false);
     };
     if embeddings.len() != parts.len() {
         tracing::warn!(
@@ -653,12 +672,11 @@ async fn insert_single_chunk(
     hash: &str,
     indexed_hashes: &mut HashSet<String>,
 ) {
-    let embeddings = match providers::embed_texts(conn, cfg, &[text.to_string()], None).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("workspace memory index skipped: {e}");
-            return;
-        }
+    let text_batch = [text.to_string()];
+    let Some(embeddings) =
+        embed_texts_best_effort(conn, cfg, &text_batch, None, "single chunk index").await
+    else {
+        return;
     };
     let Some(vec) = embeddings.into_iter().next() else {
         return;
@@ -697,12 +715,10 @@ pub async fn retrieve_relevant(
     let query_emb = if let Some(cached) = query_emb_cache {
         cached.clone()
     } else {
-        let emb = match providers::embed_texts(conn, cfg, &[query_for_embed], None).await {
-            Ok(v) => v.into_iter().next(),
-            Err(e) => {
-                tracing::warn!("vector memory retrieve skipped: {e}");
-                return Vec::new();
-            }
+        let query_batch = [query_for_embed];
+        let emb = match embed_texts_best_effort(conn, cfg, &query_batch, None, "retrieve").await {
+            Some(v) => v.into_iter().next(),
+            None => return Vec::new(),
         };
         let Some(emb) = emb else {
             return Vec::new();
