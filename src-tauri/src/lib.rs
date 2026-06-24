@@ -191,6 +191,7 @@ pub fn run() {
             commands::harness_run_deterministic,
             commands::harness_check_workspace_files,
             commands::harness_apply_generated_fences,
+            commands::harness_reset_synthetic_fixture,
             commands::list_prompt_formats,
             commands::render_prompt_format,
             commands::parse_prompt_tool_calls,

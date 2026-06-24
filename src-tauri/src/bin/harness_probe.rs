@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run --bin harness_probe
-//! HARNESS_LIVE=1 cargo run --bin harness_probe    # ProjectsAPI audit (LM Studio)
+//! HARNESS_LIVE=1 cargo run --bin harness_probe    # synthetic PHP fixture audit (LM Studio)
 //! HARNESS_REACT=1 cargo run --bin harness_probe   # 3-step React scaffold (LM Studio)
 //! ```
 
@@ -16,7 +16,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct HarnessProbeReport {
     deterministic: app_lib::app::harness::HarnessDeterministicReport,
-    audit: Option<app_lib::app::probe::ProjectsApiProbeResult>,
+    audit: Option<app_lib::app::probe::HarnessFixtureProbeResult>,
     react_scaffold: Option<Vec<app_lib::app::harness::ReactScaffoldStepReport>>,
 }
 

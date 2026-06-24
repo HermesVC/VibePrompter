@@ -3,22 +3,23 @@
 export const HARNESS_AUDIT_SESSION = 'harness-audit-probe';
 export const HARNESS_REACT_SESSION = 'harness-react-scaffold';
 export const REACT_SCAFFOLD_DIR = 'test/harness-react';
+export const HARNESS_FIXTURES_DIR = 'test/harness-fixtures';
+export const SYNTHETIC_BUGGY_API = `${HARNESS_FIXTURES_DIR}/SyntheticProjectsAPI.php`;
 
-const CONTROLLERS = 'vp/src/service/api/Controllers';
-
-/** Full mini-audit (folder scope, tools + patch + audit.md). */
+/** Live audit on synthetic PHP fixture (tools + apply_patch). */
 export function harnessAuditScenario() {
   return {
     modeId: 'chat-developer',
     sessionId: HARNESS_AUDIT_SESSION,
     chatContext: {
       scope: {
-        kind: 'folder',
-        path: CONTROLLERS,
-        treeSummary: `${CONTROLLERS}/ProjectsAPI.php`,
-        outlineSummary: '',
-        files: [],
-        truncated: false,
+        kind: 'file',
+        path: SYNTHETIC_BUGGY_API,
+        content: '',
+        contentHash: '',
+        lineStart: 1,
+        lineEnd: 1,
+        languageId: 'php',
       },
       modifiers: ['developer'],
       languageId: 'php',
@@ -26,16 +27,14 @@ export function harnessAuditScenario() {
     messages: [
       {
         role: 'user',
-        content: `Мини-аудит контроллеров в ${CONTROLLERS}.
+        content: `Синтетический harness-файл ${SYNTHETIC_BUGGY_API} (не трогай vp/).
 
-1) Сначала только tool_call: file_outline по ProjectsAPI.php и ещё одному PHP-файлу на выбор.
-2) read_file только нужные фрагменты.
-3) Найди минимум 2 реальных бага (логика/опечатки), не косметику.
-4) Каждый фикс — отдельный apply_patch с уникальным old_text.
-5) Создай notes/harness-audit.md с отчётом.
-6) Краткий ответ по-русски: что нашёл и исправил.
+1) read_file — метод getDolgomerInfo.
+2) Найди баг: foreach использует несуществующую переменную projectUids вместо projectUuids.
+3) Исправь через apply_patch с точным old_text (одна строка foreach).
+4) Кратко по-русски: что нашёл и что исправил.
 
-Запрещено: переписывать файлы целиком, \`\`\`file:\`\`\` для существующих PHP.`,
+Запрещено: переписывать файл целиком, \`\`\`file:\`\`\` для этого PHP.`,
         images: [],
       },
     ],
@@ -180,10 +179,10 @@ export function interpretHarnessMemoryRecall(result: { text?: string } | null | 
   const text = result?.text?.trim() ?? '';
   const lines: string[] = [];
   const mentionsProjects =
-    /ProjectsAPI|projectUuid/i.test(text) || /Controllers/i.test(text);
+    /SyntheticProjectsAPI|projectUuid/i.test(text) || /harness-fixtures/i.test(text);
   lines.push(
     mentionsProjects
-      ? '✓ Вспомнил контекст ProjectsAPI / переменные'
+      ? '✓ Вспомнил контекст synthetic fixture / переменные'
       : `✗ Нет явного recall: «${text.slice(0, 100)}»`
   );
   lines.push(

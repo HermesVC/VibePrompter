@@ -26,6 +26,7 @@ import {
   runHarnessDeterministic,
   harnessCheckWorkspaceFiles,
   harnessApplyGeneratedFences,
+  harnessResetSyntheticFixture,
 } from '@shared/lib/chatDebugApi';
 import {
   interpretToolProbeTrace,
@@ -190,6 +191,19 @@ export function ChatDebugPanel() {
     [checkReactFiles]
   );
 
+  const loadAuditPreset = useCallback(async () => {
+    setBusy(true);
+    try {
+      await harnessResetSyntheticFixture();
+      loadPreset(harnessAuditScenario());
+      toast.ok('Synthetic fixture reset', 'Harness');
+    } catch (e) {
+      toast.err(errorMessage(e), 'Fixture reset failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [loadPreset, toast]);
+
   return (
     <>
       <Group title="Memory probe (debug panel)">
@@ -237,7 +251,8 @@ export function ChatDebugPanel() {
 
       <Group title="Harness probe (full stack)">
         <p style={{ fontSize: 11, color: 'var(--fg-dim)', margin: '0 0 8px', lineHeight: 1.45 }}>
-          Deterministic: parser, prompts, patch limits, apply_patch smoke. CLI:{' '}
+          Deterministic: parser, prompts, patch limits, apply_patch smoke on{' '}
+          <code>test/harness-fixtures/</code>. CLI:{' '}
           <code>cargo run --bin harness_probe</code>. Live:{' '}
           <code>HARNESS_LIVE=1</code> / <code>HARNESS_REACT=1</code>.
         </p>
@@ -245,8 +260,8 @@ export function ChatDebugPanel() {
           <PhButton size="sm" disabled={busy} onClick={() => void runDeterministic()}>
             Run deterministic
           </PhButton>
-          <PhButton size="sm" disabled={busy} onClick={() => loadPreset(harnessAuditScenario())}>
-            Audit (folder)
+          <PhButton size="sm" disabled={busy} onClick={() => void loadAuditPreset()}>
+            Audit (synthetic PHP)
           </PhButton>
           <PhButton
             size="sm"

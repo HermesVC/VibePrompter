@@ -47,3 +47,7 @@ export async function harnessCheckWorkspaceFiles(
 export async function harnessApplyGeneratedFences(text: string): Promise<string[]> {
   return invoke<string[]>('harness_apply_generated_fences', { text });
 }
+
+export async function harnessResetSyntheticFixture(): Promise<string> {
+  return invoke<string>('harness_reset_synthetic_fixture');
+}

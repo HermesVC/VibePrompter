@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::app::probe::{probe_apply_patch_smoke, probe_projects_api_bugfix, ProjectsApiProbeResult};
+use crate::app::probe::{probe_apply_patch_smoke, probe_harness_fixture_bugfix, HarnessFixtureProbeResult};
 use crate::app::AppState;
 use crate::providers::prompt_format::tool_call_parse;
 use crate::utils::AppResult;
@@ -31,7 +31,7 @@ pub struct HarnessDeterministicReport {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HarnessLiveReport {
-    pub audit: Option<ProjectsApiProbeResult>,
+    pub audit: Option<HarnessFixtureProbeResult>,
     pub react_steps: Vec<ReactScaffoldStepReport>,
 }
 
@@ -162,9 +162,9 @@ foreach ($projectUuids as $x) {
     Ok(HarnessDeterministicReport { checks, all_pass })
 }
 
-/// Folder audit + ProjectsAPI fix (requires LM Studio). `HARNESS_LIVE=1`.
-pub async fn probe_harness_audit(state: &AppState) -> AppResult<ProjectsApiProbeResult> {
-    probe_projects_api_bugfix(state).await
+/// Live agent audit on synthetic PHP fixture (requires LM Studio). `HARNESS_LIVE=1`.
+pub async fn probe_harness_audit(state: &AppState) -> AppResult<HarnessFixtureProbeResult> {
+    probe_harness_fixture_bugfix(state).await
 }
 
 /// Multi-step React scaffold under `test/harness-react/` (requires LM Studio). `HARNESS_REACT=1`.

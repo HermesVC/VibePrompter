@@ -246,3 +246,16 @@ pub async fn harness_apply_generated_fences(
 ) -> Result<Vec<String>, AppError> {
     crate::app::harness::harness_apply_generated_fences(&state, &text).await
 }
+
+#[tauri::command]
+pub async fn harness_reset_synthetic_fixture(
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    use std::path::PathBuf;
+
+    let settings = state.workspace.get_settings().await?;
+    let root = settings.workspace_root.trim();
+    let abs =
+        crate::app::harness_fixtures::reset_synthetic_buggy_api(PathBuf::from(root).as_path())?;
+    Ok(abs.to_string_lossy().into_owned())
+}

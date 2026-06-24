@@ -8,14 +8,18 @@ import {
   interpretReactScaffoldStep,
   reactScaffoldStep1Scenario,
   REACT_SCAFFOLD_DIR,
+  SYNTHETIC_BUGGY_API,
 } from './chatDebugHarnessScenarios';
 
 describe('chatDebugHarnessScenarios', () => {
-  it('audit scenario uses folder controllers scope', () => {
+  it('audit scenario uses synthetic fixture file scope', () => {
     const s = harnessAuditScenario();
     expect(s.sessionId).toBe(HARNESS_AUDIT_SESSION);
-    expect(s.chatContext?.scope).toMatchObject({ kind: 'folder' });
-    expect(s.messages[0]?.content).toContain('ProjectsAPI.php');
+    expect(s.chatContext?.scope).toMatchObject({
+      kind: 'file',
+      path: SYNTHETIC_BUGGY_API,
+    });
+    expect(s.messages[0]?.content).toContain('SyntheticProjectsAPI');
     expect(s.messages[0]?.content).toContain('apply_patch');
   });
 
@@ -35,7 +39,7 @@ describe('chatDebugHarnessScenarios', () => {
   it('interpretHarnessAuditTrace detects tools phase', () => {
     const lines = interpretHarnessAuditTrace(
       [{ type: 'status', status: { phase: 'tools' } }],
-      { text: 'Исправил foreach в ProjectsAPI.' }
+      { text: 'Исправил foreach в SyntheticProjectsAPI.' }
     );
     expect(lines.some((l) => l.includes('tools phase'))).toBe(true);
     expect(lines.some((l) => l.startsWith('✓'))).toBe(true);

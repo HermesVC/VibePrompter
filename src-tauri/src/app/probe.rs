@@ -3,6 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::app::harness_fixtures::{
+    self, BUG_NEEDLE, FIX_NEEDLE, PATCH_NEW, PATCH_OLD, SYNTHETIC_BUGGY_API_REL,
+};
 use crate::app::AppState;
 use crate::config::Config;
 use crate::events::EventBus;
@@ -155,25 +158,24 @@ pub async fn probe_tool_call_live(state: &AppState) -> AppResult<(String, bool)>
     Ok((result.text, trace.tools_phase))
 }
 
-/// Deterministic apply_patch smoke test (bypasses LLM). Reverts the file after check.
+/// Deterministic apply_patch smoke on synthetic fixture (bypasses LLM). Reverts after check.
 pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, String)> {
     use crate::tools::{self, ToolExecutionContext};
 
-    const TARGET_REL: &str = "vp/src/service/api/Controllers/ProjectsAPI.php";
-    const OLD: &str = "foreach ($projectUids as $projectUuid)";
-    const NEW: &str = "foreach ($projectUuids as $projectUuid)";
-
     let settings = state.workspace.get_settings().await?;
+    let root = settings.workspace_root.trim();
+    harness_fixtures::reset_synthetic_buggy_api(PathBuf::from(root).as_path())?;
+
     let ctx = ToolExecutionContext {
         workspace: state.workspace.clone(),
         settings: settings.clone(),
-        scope_path: Some("vp/src/service/api/Controllers".into()),
+        scope_path: Some(harness_fixtures::HARNESS_FIXTURES_DIR.into()),
     };
 
     let read = tools::execute_tool(
         &ctx,
         "read_file",
-        serde_json::json!({ "path": TARGET_REL }),
+        serde_json::json!({ "path": SYNTHETIC_BUGGY_API_REL }),
     )
     .await?;
     if !read.ok {
@@ -185,16 +187,10 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if !content.contains(OLD) {
-        if content.contains(NEW) {
-            return Ok((
-                true,
-                "ProjectsAPI already contains fix; read_file OK (patch smoke skipped)".into(),
-            ));
-        }
+    if !content.contains(PATCH_OLD) {
         return Ok((
             false,
-            format!("old_text needle not in file and fix not found: {OLD:?}"),
+            format!("synthetic fixture missing patch needle: {PATCH_OLD:?}"),
         ));
     }
 
@@ -202,9 +198,9 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
         &ctx,
         "apply_patch",
         serde_json::json!({
-            "path": TARGET_REL,
-            "old_text": OLD,
-            "new_text": NEW
+            "path": SYNTHETIC_BUGGY_API_REL,
+            "old_text": PATCH_OLD,
+            "new_text": PATCH_NEW
         }),
     )
     .await?;
@@ -227,22 +223,22 @@ pub async fn probe_apply_patch_smoke(state: &AppState) -> AppResult<(bool, Strin
         &ctx,
         "apply_patch",
         serde_json::json!({
-            "path": TARGET_REL,
-            "old_text": NEW,
-            "new_text": OLD
+            "path": SYNTHETIC_BUGGY_API_REL,
+            "old_text": PATCH_NEW,
+            "new_text": PATCH_OLD
         }),
     )
     .await?;
 
     if revert.ok {
-        Ok((true, "apply_patch fix+revert OK".into()))
+        Ok((true, "synthetic apply_patch fix+revert OK".into()))
     } else {
         Ok((false, format!("fix OK but revert failed: {}", revert.message)))
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct ProjectsApiProbeResult {
+pub struct HarnessFixtureProbeResult {
     pub target: String,
     pub tools_phase: bool,
     pub trace_status_phases: Vec<String>,
@@ -255,17 +251,16 @@ pub struct ProjectsApiProbeResult {
     pub patch_smoke_message: Option<String>,
 }
 
-/// Scan ProjectsAPI.php for bugs and apply fix via agent tools.
-pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsApiProbeResult> {
+/// Live agent scenario on synthetic PHP fixture (requires LM Studio).
+pub async fn probe_harness_fixture_bugfix(
+    state: &AppState,
+) -> AppResult<HarnessFixtureProbeResult> {
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     use crate::chat::{run_chat, ChatRunEventSink, ChatRunRequest, ChatRunStatus};
     use crate::models::ChatMessage;
     use crate::workspace::{ChatContextPayload, ChatScope};
-
-    const TARGET_REL: &str = "vp/src/service/api/Controllers/ProjectsAPI.php";
-    const BUG_NEEDLE: &str = "$projectUids";
 
     struct Trace {
         phases: Vec<String>,
@@ -284,7 +279,10 @@ pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsAp
 
     let settings = state.workspace.get_settings().await?;
     let root = settings.workspace_root.trim();
-    let abs = format!("{root}\\{TARGET_REL}");
+    harness_fixtures::reset_synthetic_buggy_api(PathBuf::from(root).as_path())?;
+    let abs = PathBuf::from(root).join(
+        SYNTHETIC_BUGGY_API_REL.replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
     let before = std::fs::read_to_string(&abs)?;
     let had_bug_before = before.contains(BUG_NEEDLE);
 
@@ -299,9 +297,10 @@ pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsAp
             messages: vec![ChatMessage {
                 role: "user".into(),
                 content: format!(
-                    "Просканируй файл {TARGET_REL}, найди баги (особенно в case getDolgomerInfo) \
-и если есть — исправь через apply_patch. Сначала read_file, потом apply_patch с точным old_text. \
-Кратко опиши что нашёл и что исправил."
+                    "Просканируй синтетический тестовый файл {SYNTHETIC_BUGGY_API_REL} \
+(это harness-фикстура, не продакшен). В методе getDolgomerInfo найди баг с переменными \
+(projectUids vs projectUuids) и исправь через apply_patch. Сначала read_file, потом apply_patch \
+с точным old_text. Кратко опиши что нашёл и что исправил."
                 ),
                 images: vec![],
             }],
@@ -309,7 +308,7 @@ pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsAp
             connection_id: None,
             chat_context: Some(ChatContextPayload {
                 scope: ChatScope::File {
-                    path: TARGET_REL.into(),
+                    path: SYNTHETIC_BUGGY_API_REL.into(),
                     content: String::new(),
                     content_hash: String::new(),
                     line_start: 1,
@@ -320,7 +319,7 @@ pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsAp
                 language_id: Some("php".into()),
             }),
             session_summary: None,
-            session_id: Some("projects-api-probe".into()),
+            session_id: Some("harness-fixture-probe".into()),
         },
         Arc::new(AtomicBool::new(false)),
         &mut trace,
@@ -331,14 +330,14 @@ pub async fn probe_projects_api_bugfix(state: &AppState) -> AppResult<ProjectsAp
     let answer = result.text.clone();
     let agent_found_bug = answer.contains("projectUids") && answer.contains("projectUuids");
 
-    Ok(ProjectsApiProbeResult {
-        target: TARGET_REL.into(),
+    Ok(HarnessFixtureProbeResult {
+        target: SYNTHETIC_BUGGY_API_REL.into(),
         tools_phase: trace.tools_phase,
         trace_status_phases: trace.phases,
         answer_preview: answer.chars().take(800).collect(),
         had_bug_before,
         has_bug_after: after.contains(BUG_NEEDLE),
-        has_fix_after: after.contains("$projectUuids"),
+        has_fix_after: after.contains(FIX_NEEDLE),
         agent_found_bug,
         patch_smoke_ok: None,
         patch_smoke_message: None,
