@@ -344,7 +344,7 @@ where
             step_warning.as_deref(),
         );
 
-        let mut step_status = resolve_step_status(&result.text, step.id);
+        let step_status = resolve_step_status(&result.text, step.id);
 
         let mut verify_ok = None;
         let mut verify_message = None;

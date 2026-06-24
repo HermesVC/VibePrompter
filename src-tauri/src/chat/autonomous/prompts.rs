@@ -1,7 +1,7 @@
 //! Prompt builders for planning, execution, and replanning turns.
 
 use super::plan::{format_plan_for_prompt, AutonomousPlan, PlanStep, PLAN_TAG, STEP_RESULT_TAG};
-use crate::workspace::{spec_memory::SPEC_COMPLIANCE_TAG, spec_memory::DEFAULT_SPEC_PATH, VerifyOutcome};
+use crate::workspace::{spec_memory::SPEC_COMPLIANCE_TAG, VerifyOutcome};
 
 pub const AUTONOMOUS_PROTOCOL: &str = r#"## Autonomous task mode (active)
 
