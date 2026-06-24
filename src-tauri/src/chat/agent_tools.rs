@@ -192,6 +192,7 @@ where
     }
 
     let ctx = build_tool_context(state, scope_path).await?;
+    let mut tools_executed = 0usize;
 
     for _ in 0..MAX_TOOL_ITERATIONS {
         if should_cancel() {
@@ -200,14 +201,35 @@ where
 
         let calls = format.parse_tool_calls(&result.text);
         if calls.is_empty() {
+            if tools_executed == 0
+                && crate::providers::prompt_format::tool_call_parse::contains_tool_call_markup(
+                    &result.text,
+                )
+            {
+                tracing::warn!(
+                    "model emitted tool_call markup but parser extracted 0 calls (len={})",
+                    result.text.chars().count()
+                );
+            }
             break;
         }
+
+        tracing::info!(
+            "tool loop: parsed {} call(s): {}",
+            calls.len(),
+            calls
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         let pairs: Vec<(String, serde_json::Value)> = calls
             .iter()
             .map(|c| (c.name.clone(), c.arguments.clone()))
             .collect();
         let tool_results = tools::execute_many(&ctx, &pairs).await;
+        tools_executed += tool_results.len();
 
         if let Some(hook) = memory_hook.as_mut() {
             crate::chat::index_tool_results(
@@ -246,6 +268,12 @@ where
             "tool loop: executed {} tool(s), follow-up model={}",
             tool_results.len(),
             result.model
+        );
+    }
+
+    if tools_executed > 0 {
+        result.text = crate::providers::prompt_format::tool_call_parse::strip_tool_call_markup(
+            &result.text,
         );
     }
 

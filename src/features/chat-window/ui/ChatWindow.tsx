@@ -770,7 +770,16 @@ export function ChatWindow() {
             return;
           }
           if (e.payload.phase === 'tools') {
-            setMemoryDebugLabel('Vector memory: tools may index reads');
+            bufRef.current = '';
+            flushPendingRef.current = false;
+            setMemoryDebugLabel('Running workspace tools…');
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: '', streaming: true }
+                  : m
+              )
+            );
             return;
           }
           if (e.payload.phase === 'continuing') {

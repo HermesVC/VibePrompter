@@ -565,6 +565,9 @@ where
             if let Some(mt) = params.max_tokens {
                 body["max_tokens"] = serde_json::json!(mt);
             }
+            if params.disable_thinking == Some(true) {
+                body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+            }
             (url, body)
         }
         ConnectionKind::Anthropic => {
@@ -707,16 +710,25 @@ where
             }
         }
 
-        // OpenAI delta: choices[0].delta.content
-        if let Some(delta) = parsed
+        // OpenAI delta: choices[0].delta.content (+ reasoning for tool-parse, not streamed)
+        if let Some(delta_obj) = parsed
             .get("choices")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("delta"))
-            .and_then(|d| d.get("content"))
-            .and_then(|t| t.as_str())
         {
-            text.push_str(delta);
-            on_token(delta);
+            if let Some(delta) = delta_obj.get("content").and_then(|t| t.as_str()) {
+                if !delta.is_empty() {
+                    text.push_str(delta);
+                    on_token(delta);
+                }
+            } else if let Some(reasoning) = delta_obj
+                .get("reasoning_content")
+                .and_then(|t| t.as_str())
+            {
+                if !reasoning.is_empty() {
+                    text.push_str(reasoning);
+                }
+            }
         }
         // OpenAI final-usage chunk (sent when `stream_options.include_usage`
         // is set, or by OpenRouter in the last chunk). Lives alongside deltas.

@@ -6,26 +6,69 @@ use super::types::ParsedToolCall;
 
 /// Try every supported wire format; models often ignore the connection template id.
 pub fn parse_all_tool_calls(text: &str) -> Vec<ParsedToolCall> {
-    let mut out = super::gemma4::parse_gemma4_tool_calls(text);
-    out.extend(parse_qwen_piped_tool_calls(text));
-    out.extend(parse_relaxed_tool_calls(text));
+    let text = normalize_tool_call_text(text);
+    let mut out = super::gemma4::parse_gemma4_tool_calls(&text);
+    out.extend(parse_qwen_piped_tool_calls(&text));
+    out.extend(parse_relaxed_tool_calls(&text));
+    out.extend(parse_bare_call_tool_calls(&text));
     dedupe_tool_calls(out)
+}
+
+/// Normalize common LM Studio / Qwen token variants before parsing.
+fn normalize_tool_call_text(text: &str) -> String {
+    text.replace('\u{FF5C}', "|") // fullwidth vertical bar
+        .replace('\u{2016}', "|") // double vertical line
+        .replace("<｜", "<|")
+        .replace("｜>", "|>")
+}
+
+/// Scan for bare `call:name{args}` outside explicit markers.
+pub fn parse_bare_call_tool_calls(text: &str) -> Vec<ParsedToolCall> {
+    let mut out = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find("call:") {
+        let start = search_from + rel;
+        if let Some(call) = parse_call_segment(&text[start..]) {
+            out.push(call);
+        }
+        search_from = start.saturating_add(5);
+    }
+    out
 }
 
 /// Qwen / LM Studio: `<|tool_call|>call:name{args}</|tool_call|>`
 pub fn parse_qwen_piped_tool_calls(text: &str) -> Vec<ParsedToolCall> {
-    parse_marker_tool_calls(
+    let mut out = parse_marker_tool_calls(
         text,
         "<|tool_call|>",
-        &["</|tool_call|>", "<|tool_call|>", "</tool_call>", "<|tool_call>"],
-    )
+        &[
+            "</|tool_call|>",
+            "</|tool_call>",
+            "<|tool_call|>",
+            "</tool_call>",
+            "<|tool_call>",
+            "|tool_call|>",
+        ],
+    );
+    out.extend(parse_marker_tool_calls(
+        text,
+        "<|tool_calls|>",
+        &["</|tool_calls|>", "</|tool_calls>", "<|tool_calls|>"],
+    ));
+    out
 }
 
 pub fn parse_relaxed_tool_calls(text: &str) -> Vec<ParsedToolCall> {
     parse_marker_tool_calls(
         text,
         "<tool_call>",
-        &["</tool_call>", "<|tool_call|>", "<|tool_call>"],
+        &[
+            "</tool_call>",
+            "<|tool_call|>",
+            "<|tool_call>",
+            "<tool_calls>",
+            "</tool_calls>",
+        ],
     )
 }
 
@@ -53,7 +96,13 @@ fn parse_marker_tool_calls(text: &str, open: &str, closes: &[&str]) -> Vec<Parse
 
 fn parse_call_segment(segment: &str) -> Option<ParsedToolCall> {
     let segment = segment.trim();
+    if let Some(call) = parse_json_tool_call(segment) {
+        return Some(call);
+    }
     let segment = segment.strip_prefix("call:").unwrap_or(segment).trim();
+    if let Some(call) = parse_json_tool_call(segment) {
+        return Some(call);
+    }
     let brace = segment.find('{')?;
     let name = segment[..brace].trim();
     if name.is_empty() {
@@ -61,10 +110,40 @@ fn parse_call_segment(segment: &str) -> Option<ParsedToolCall> {
     }
     let args_end = matching_brace_end(segment, brace)?;
     let args = segment[brace..args_end].trim();
+    if let Some(call) = parse_json_tool_call(args) {
+        return Some(call);
+    }
     Some(ParsedToolCall {
         name: name.to_string(),
         arguments: parse_relaxed_args(args).unwrap_or_else(|| serde_json::Map::new().into()),
     })
+}
+
+fn parse_json_tool_call(segment: &str) -> Option<ParsedToolCall> {
+    let segment = segment.trim();
+    if !segment.starts_with('{') {
+        return None;
+    }
+    let json_end = matching_brace_end(segment, 0)?;
+    let value: Value = serde_json::from_str(segment[..json_end].trim()).ok()?;
+    let obj = value.as_object()?;
+    let name = obj
+        .get("name")
+        .or_else(|| obj.get("tool"))
+        .or_else(|| obj.get("function"))
+        .and_then(|v| v.as_str())?
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let arguments = obj
+        .get("arguments")
+        .or_else(|| obj.get("parameters"))
+        .or_else(|| obj.get("args"))
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    Some(ParsedToolCall { name, arguments })
 }
 
 fn matching_brace_end(s: &str, open_idx: usize) -> Option<usize> {
@@ -176,6 +255,64 @@ fn parse_relaxed_value(raw: &str) -> Value {
     Value::String(raw.to_string())
 }
 
+pub fn contains_tool_call_markup(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("tool_call")
+        || lower.contains("<|tool_call")
+        || lower.contains("call:read_file{")
+        || lower.contains("call:list_dir{")
+}
+
+/// Remove tool_call wire markup from assistant-visible text after tools ran.
+pub fn strip_tool_call_markup(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    const MARKERS: &[&str] = &[
+        "<|tool_call|>",
+        "<|tool_calls|>",
+        "<|tool_call>",
+        "<tool_call>",
+        "<tool_calls>",
+    ];
+    while !rest.is_empty() {
+        let next = MARKERS
+            .iter()
+            .filter_map(|marker| rest.find(marker).map(|idx| (idx, marker.len())))
+            .min_by_key(|(idx, _)| *idx);
+        let Some((start, open_len)) = next else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after = &rest[start + open_len..];
+        let close = [
+            "</|tool_call|>",
+            "</|tool_call>",
+            "</|tool_calls|>",
+            "</|tool_calls>",
+            "<|tool_call|>",
+            "<|tool_call>",
+            "</tool_call>",
+            "</tool_calls>",
+            "|tool_call|>",
+        ]
+        .iter()
+        .filter_map(|marker| after.find(marker).map(|idx| idx + marker.len()))
+        .min();
+        rest = if let Some(end) = close {
+            &after[end..]
+        } else {
+            break;
+        };
+    }
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        text.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn dedupe_tool_calls(calls: Vec<ParsedToolCall>) -> Vec<ParsedToolCall> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -225,5 +362,38 @@ mod tests {
         );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["path"], "test/index.html");
+    }
+
+    #[test]
+    fn parses_qwen_json_tool_call_blocks() {
+        let calls = parse_all_tool_calls(
+            r#"<tool_call>
+{"name": "read_file", "arguments": {"path": "test/single-page-games/index.html"}}
+</tool_call>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(
+            calls[0].arguments["path"],
+            "test/single-page-games/index.html"
+        );
+    }
+
+    #[test]
+    fn parses_bare_call_without_markers() {
+        let calls = parse_all_tool_calls(
+            "I will read it.\ncall:read_file{path:test/index.html}\n",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+    }
+
+    #[test]
+    fn parses_multiline_qwen_piped_close() {
+        let calls = parse_all_tool_calls(
+            "<|tool_call|>call:read_file{path:test/single-page-games/index.html}\n</|tool_call|>",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
     }
 }

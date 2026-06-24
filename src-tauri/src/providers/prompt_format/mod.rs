@@ -2,7 +2,7 @@
 
 pub mod gemma4;
 mod openai_messages;
-mod tool_call_parse;
+pub mod tool_call_parse;
 mod types;
 
 pub use types::*;

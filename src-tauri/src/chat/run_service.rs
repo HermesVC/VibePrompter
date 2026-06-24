@@ -322,6 +322,11 @@ where
         let effective_max_tokens =
             effective_chat_max_tokens(max_tokens, input_estimate, context_limit);
 
+        let tools_active = request
+            .chat_context
+            .as_ref()
+            .is_some_and(|ctx| crate::chat::scope_enables_tools(&ctx.scope));
+
         let mut request_system = system_prompt.clone();
         if let Some(sys) = request_system.as_mut() {
             crate::chat::append_memory_to_system(sys, Some(&memory), context_limit);
@@ -338,6 +343,7 @@ where
             temperature: Some(temperature),
             max_tokens: Some(effective_max_tokens),
             system: request_system.filter(|s| !s.trim().is_empty()),
+            disable_thinking: tools_active.then_some(true),
             ..Default::default()
         };
 
