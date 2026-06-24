@@ -37,6 +37,7 @@ export interface FolderScopeFileDto {
 export interface FolderScopeDto {
   path: string;
   treeSummary: string;
+  outlineSummary: string;
   files: FolderScopeFileDto[];
   truncated: boolean;
 }

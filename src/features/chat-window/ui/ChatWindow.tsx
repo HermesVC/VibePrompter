@@ -1219,6 +1219,8 @@ export function ChatWindow() {
           disabled={streaming}
           onChange={setChatContext}
           onError={setAttachError}
+          sessionId={sessionId}
+          connectionId={connectionId}
         />
 
         {contextTrimNotice && (

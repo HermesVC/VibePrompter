@@ -12,6 +12,7 @@ mod vector_memory;
 
 pub use agent_tools::{
     augment_system_for_tools, run_tool_followup_loop, scope_enables_tools, scope_path_for_tools,
+    ToolLoopMemoryHook,
 };
 pub use context_recovery::should_retry_for_context;
 pub use session_summary::append_memory_to_system;
@@ -21,7 +22,7 @@ pub use sliding_window::{
 };
 pub use vector_memory::{
     append_retrieved_to_system, format_retrieved_for_system, index_context_artifacts,
-    index_evicted_messages, retrieve_relevant,
+    index_evicted_messages, index_folder_outline, index_tool_results, retrieve_relevant,
 };
 
 use tauri::{AppHandle, Emitter, Manager};

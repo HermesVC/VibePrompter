@@ -15,6 +15,8 @@ const WORKSPACE_TOOLS_PROTOCOL: &str = r#"## Workspace file tools (active)
 You can inspect the project with these tools (declare via tool_call blocks):
 - `list_dir` — list files under a path (`path`, optional `depth`)
 - `read_file` — read a file or line range (`path`, optional `start_line`, `end_line`)
+- `file_outline` — list classes/methods/functions in PHP/JS/Python (`path`)
+- `read_symbol` — read a symbol body by name (`path`, `symbol`)
 
 Use relative paths from the workspace root. Prefer `read_file` with line ranges for large files.
 After a tool_call, wait for tool results before answering the user."#;
@@ -141,6 +143,15 @@ pub async fn build_tool_context(
     })
 }
 
+/// Optional hook to persist tool reads into session vector memory.
+pub struct ToolLoopMemoryHook<'a> {
+    pub session_id: &'a str,
+    pub memory: &'a crate::services::ChatMemoryService,
+    pub conn: &'a crate::storage::repositories::ConnectionRow,
+    pub cfg: &'a crate::providers::HttpConfig,
+    pub indexed_hashes: &'a mut std::collections::HashSet<String>,
+}
+
 /// After a model turn, run tool calls and re-prompt until no tools or limit hit.
 pub async fn run_tool_followup_loop<F, C>(
     state: &AppState,
@@ -153,6 +164,7 @@ pub async fn run_tool_followup_loop<F, C>(
     mut result: crate::models::CompletionResult,
     mut on_token: F,
     should_cancel: C,
+    mut memory_hook: Option<ToolLoopMemoryHook<'_>>,
 ) -> AppResult<crate::models::CompletionResult>
 where
     F: FnMut(&str) + Send,
@@ -180,6 +192,18 @@ where
             .map(|c| (c.name.clone(), c.arguments.clone()))
             .collect();
         let tool_results = tools::execute_many(&ctx, &pairs).await;
+
+        if let Some(hook) = memory_hook.as_mut() {
+            crate::chat::index_tool_results(
+                hook.memory,
+                hook.conn,
+                hook.cfg,
+                hook.session_id,
+                &tool_results,
+                hook.indexed_hashes,
+            )
+            .await;
+        }
 
         messages.push(crate::models::ChatMessage {
             role: "assistant".into(),

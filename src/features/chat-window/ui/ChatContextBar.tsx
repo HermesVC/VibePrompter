@@ -17,15 +17,25 @@ import {
   resolveWorkspaceFilePath,
   workspaceTreeSummary,
 } from '@shared/lib/workspaceApi';
+import { indexFolderOutline } from '@shared/lib/chatMemoryApi';
 
 interface ChatContextBarProps {
   ctx: ChatContextState;
   disabled?: boolean;
   onChange: Dispatch<SetStateAction<ChatContextState>>;
   onError: (msg: string | null) => void;
+  sessionId?: string;
+  connectionId?: string;
 }
 
-export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContextBarProps) {
+export function ChatContextBar({
+  ctx,
+  disabled,
+  onChange,
+  onError,
+  sessionId,
+  connectionId,
+}: ChatContextBarProps) {
   const [modifiers, setModifiers] = useState<ChatModifier[]>([]);
   const [capturing, setCapturing] = useState(false);
 
@@ -105,6 +115,7 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
         kind: 'folder',
         path: bundle.path,
         treeSummary: bundle.treeSummary,
+        outlineSummary: bundle.outlineSummary,
         files: bundle.files.map((f) => ({
           path: f.path,
           content: f.content,
@@ -113,10 +124,15 @@ export function ChatContextBar({ ctx, disabled, onChange, onError }: ChatContext
         })),
         truncated: bundle.truncated,
       });
+      if (sessionId?.trim() && bundle.outlineSummary.trim()) {
+        void indexFolderOutline(sessionId, bundle.path, bundle.outlineSummary, {
+          connectionId,
+        });
+      }
     } catch (e) {
       onError(errorMessage(e));
     }
-  }, [onError, setScope]);
+  }, [onError, setScope, sessionId, connectionId]);
 
   const attachWorkspace = useCallback(async () => {
     onError(null);

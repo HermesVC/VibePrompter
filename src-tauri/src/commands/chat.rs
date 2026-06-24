@@ -390,6 +390,17 @@ pub async fn chat_complete_stream(
                             );
                         },
                         move || cancel_for_stream.load(std::sync::atomic::Ordering::SeqCst),
+                        if session_id.trim().is_empty() {
+                            None
+                        } else {
+                            Some(crate::chat::ToolLoopMemoryHook {
+                                session_id: &session_id,
+                                memory: &state.chat_memory,
+                                conn: &row,
+                                cfg: &cfg,
+                                indexed_hashes: &mut indexed_chunk_hashes,
+                            })
+                        },
                     )
                     .await
                     {
@@ -804,6 +815,50 @@ pub async fn chat_index_context_artifacts(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FolderOutlineInput {
+    folder_path: String,
+    outline_summary: String,
+}
+
+/// Best-effort semantic memory for folder symbol outlines.
+#[tauri::command]
+pub async fn chat_index_folder_outline(
+    state: State<'_, AppState>,
+    session_id: String,
+    connection_id: Option<String>,
+    mode_id: Option<String>,
+    input: FolderOutlineInput,
+) -> Result<(), AppError> {
+    if session_id.trim().is_empty() || input.outline_summary.trim().is_empty() {
+        return Ok(());
+    }
+
+    let row = resolve_chat_connection_row(&state, connection_id, mode_id).await?;
+    let cfg = state.connections.http_config().await;
+    let mut indexed_hashes: std::collections::HashSet<String> = state
+        .chat_memory
+        .list_content_hashes(&session_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    crate::chat::index_folder_outline(
+        &state.chat_memory,
+        &row,
+        &cfg,
+        &session_id,
+        &input.folder_path,
+        &input.outline_summary,
+        &mut indexed_hashes,
+    )
+    .await;
+
+    Ok(())
+}
+
 async fn resolve_chat_connection_row(
     state: &AppState,
     connection_id: Option<String>,
@@ -1005,9 +1060,12 @@ fn scope_user_context_block(scope: &crate::workspace::ChatScope) -> String {
         ChatScope::Folder {
             path,
             tree_summary,
+            outline_summary,
             ..
         } => {
-            format!("[Attached folder: {path}]\n[Folder tree]\n{tree_summary}")
+            format!(
+                "[Attached folder: {path}]\n[Folder tree]\n{tree_summary}\n\n[Folder outline]\n{outline_summary}"
+            )
         }
     }
 }

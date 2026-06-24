@@ -48,6 +48,7 @@ export type ChatScope =
       kind: 'folder';
       path: string;
       treeSummary: string;
+      outlineSummary: string;
       files: Array<{
         path: string;
         content: string;
@@ -113,7 +114,7 @@ export function formatScopeUserContext(scope: ChatScope): string {
         ? `[Workspace tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'workspace tree')}`
         : '';
     case 'folder': {
-      return `[Attached folder: ${scope.path}]\n[Folder tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'folder tree')}`;
+      return `[Attached folder: ${scope.path}]\n[Folder tree]\n${capText(scope.treeSummary, SCOPE_TREE_MAX_CHARS, 'folder tree')}\n\n[Folder outline]\n${capText(scope.outlineSummary, SCOPE_TREE_MAX_CHARS, 'folder outline')}`;
     }
     default:
       return '';

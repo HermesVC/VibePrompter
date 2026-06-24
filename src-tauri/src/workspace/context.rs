@@ -253,20 +253,29 @@ pub fn compose_system_prompt(base_mode_sys: &str, ctx: &ChatContextPayload) -> S
         ChatScope::Folder {
             path,
             tree_summary,
+            outline_summary,
             files: _,
-            truncated: _,
+            truncated,
         } => {
-            let block = format!(
+            let mut block = format!(
                 "You are in FOLDER scoped session for `{path}`.\n\
                  Rules:\n\
-                 - The folder file tree is listed below — use workspace tools (`list_dir`, `read_file`) to inspect contents.\n\
+                 - The folder file tree and symbol outlines are below — use workspace tools to read bodies.\n\
+                 - Tools: list_dir, file_outline, read_symbol, read_file.\n\
                  - Refer to files by relative paths from the tree.\n\
                  - Do not claim to have read a file until you received it via a tool result.\n\
+                 - Prefer read_symbol over read_file for large PHP/JS/Python files.\n\
                  - Prefer small, targeted edits; use file fences with paths when changing multiple files.\n\
                  - For new or changed files in this folder, use ```file paths relative to the workspace root \
                  (prefix with `{path}/` when the scoped path is not `.`, e.g. `{path}/index.html`).\n\n\
-                 <folder-tree path=\"{path}\">\n{tree_summary}\n</folder-tree>"
+                 <folder-tree path=\"{path}\">\n{tree_summary}\n</folder-tree>\n\n\
+                 <folder-outline path=\"{path}\">\n{outline_summary}\n</folder-outline>"
             );
+            if *truncated {
+                block.push_str(
+                    "\n\n(Note: symbol outline truncated — use file_outline/read_symbol for missing files.)",
+                );
+            }
             parts.push(block);
         }
     }
@@ -408,6 +417,7 @@ mod tests {
         let folder_scope = ChatScope::Folder {
             path: "test/app".into(),
             tree_summary: "index.html".into(),
+            outline_summary: String::new(),
             files: vec![],
             truncated: false,
         };

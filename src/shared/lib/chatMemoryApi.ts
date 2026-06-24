@@ -19,3 +19,19 @@ export async function indexContextArtifacts(
     artifacts,
   });
 }
+
+/** Index folder symbol outline into session vector memory. */
+export async function indexFolderOutline(
+  sessionId: string,
+  folderPath: string,
+  outlineSummary: string,
+  opts?: { connectionId?: string; modeId?: string }
+): Promise<void> {
+  if (!sessionId.trim() || !outlineSummary.trim()) return;
+  await invoke('chat_index_folder_outline', {
+    sessionId,
+    connectionId: opts?.connectionId,
+    modeId: opts?.modeId,
+    input: { folderPath, outlineSummary },
+  });
+}

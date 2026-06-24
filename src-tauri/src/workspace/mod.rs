@@ -2,6 +2,7 @@ pub mod context;
 pub mod fs;
 pub mod language;
 pub mod policy;
+pub mod symbols;
 pub mod types;
 
 pub use context::{

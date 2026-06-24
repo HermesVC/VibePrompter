@@ -94,6 +94,8 @@ pub enum ChatScope {
         #[serde(default)]
         tree_summary: String,
         #[serde(default)]
+        outline_summary: String,
+        #[serde(default)]
         files: Vec<FolderScopeFile>,
         #[serde(default)]
         truncated: bool,
@@ -116,6 +118,7 @@ pub struct FolderScopeFile {
 pub struct FolderScopeDto {
     pub path: String,
     pub tree_summary: String,
+    pub outline_summary: String,
     pub files: Vec<FolderScopeFile>,
     pub truncated: bool,
 }

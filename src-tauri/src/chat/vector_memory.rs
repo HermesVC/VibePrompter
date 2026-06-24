@@ -199,6 +199,175 @@ pub async fn index_context_artifacts(
     }
 }
 
+/// Index folder symbol outline into session vector memory.
+pub async fn index_folder_outline(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    folder_path: &str,
+    outline: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    let outline = outline.trim();
+    if session_id.trim().is_empty() || outline.is_empty() {
+        return;
+    }
+    let text = format!(
+        "REPO OUTLINE: {folder_path}\n{outline}",
+        folder_path = folder_path.trim()
+    );
+    let hash = chunk_content_hash("symbol-index", &format!("{folder_path}\0{outline}"));
+    if indexed_hashes.contains(&hash) {
+        return;
+    }
+    insert_single_chunk(memory, conn, cfg, session_id, "symbol-index", &text, &hash, indexed_hashes)
+        .await;
+}
+
+/// Index workspace tool read results (read_file, read_symbol, file_outline).
+pub async fn index_tool_results(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    results: &[crate::tools::ToolExecutionResult],
+    indexed_hashes: &mut HashSet<String>,
+) {
+    if session_id.trim().is_empty() || results.is_empty() {
+        return;
+    }
+
+    let mut pending: Vec<(String, String, String)> = Vec::new();
+    for r in results {
+        if !r.ok {
+            continue;
+        }
+        let (role, text) = match r.name.as_str() {
+            "file_outline" => {
+                let path = r
+                    .output
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let symbols = r
+                    .output
+                    .get("symbols")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                if path.is_empty() {
+                    continue;
+                }
+                (
+                    "symbol-index",
+                    format!("REPO: {path}\nSYMBOLS:\n{symbols}"),
+                )
+            }
+            "read_file" | "read_symbol" => {
+                let path = r
+                    .output
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let content = r
+                    .output
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let symbol = r
+                    .output
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let line_start = r.output.get("lineStart").and_then(|v| v.as_u64());
+                let line_end = r.output.get("lineEnd").and_then(|v| v.as_u64());
+                if path.is_empty() || content.is_empty() {
+                    continue;
+                }
+                let header = if symbol.is_empty() {
+                    format!("CODE: {path}")
+                } else {
+                    format!("CODE: {path} symbol={symbol}")
+                };
+                let lines = match (line_start, line_end) {
+                    (Some(s), Some(e)) => format!("\nLINES: {s}-{e}"),
+                    _ => String::new(),
+                };
+                ("code-read", format!("{header}{lines}\n---\n{content}"))
+            }
+            _ => continue,
+        };
+        let hash = chunk_content_hash(role, &text);
+        if indexed_hashes.contains(&hash) {
+            continue;
+        }
+        pending.push((role.into(), text, hash));
+    }
+
+    if pending.is_empty() {
+        return;
+    }
+
+    for batch in pending.chunks(INDEX_BATCH) {
+        let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
+        let embeddings = match providers::embed_texts(conn, cfg, &texts, None).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("workspace tool memory skipped: {e}");
+                return;
+            }
+        };
+        for ((role, text, hash), vec) in batch.iter().zip(embeddings.into_iter()) {
+            match memory
+                .insert_chunk(session_id, role, text, hash, &vec)
+                .await
+            {
+                Ok(()) => {
+                    indexed_hashes.insert(hash.clone());
+                }
+                Err(e) => tracing::warn!("workspace tool memory insert: {e}"),
+            }
+        }
+        if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
+            tracing::warn!("vector memory prune: {e}");
+        }
+    }
+}
+
+async fn insert_single_chunk(
+    memory: &ChatMemoryService,
+    conn: &ConnectionRow,
+    cfg: &HttpConfig,
+    session_id: &str,
+    role: &str,
+    text: &str,
+    hash: &str,
+    indexed_hashes: &mut HashSet<String>,
+) {
+    let embeddings = match providers::embed_texts(conn, cfg, &[text.to_string()], None).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("workspace memory index skipped: {e}");
+            return;
+        }
+    };
+    let Some(vec) = embeddings.into_iter().next() else {
+        return;
+    };
+    match memory
+        .insert_chunk(session_id, role, text, hash, &vec)
+        .await
+    {
+        Ok(()) => {
+            indexed_hashes.insert(hash.to_string());
+        }
+        Err(e) => tracing::warn!("workspace memory insert: {e}"),
+    }
+    if let Err(e) = memory.prune_session(session_id, MAX_SESSION_CHUNKS).await {
+        tracing::warn!("vector memory prune: {e}");
+    }
+}
+
 /// Retrieve top-k chunks relevant to the current user turn.
 /// Reuses `query_emb_cache` across context-recovery retries for the same query.
 pub async fn retrieve_relevant(
@@ -366,6 +535,12 @@ fn messages_to_chunks(messages: &[ChatMessage]) -> Vec<(String, String)> {
 fn classify_memory(role: &str, text: &str) -> Option<MemoryKind> {
     if role == "artifact" {
         return Some(MemoryKind::ContextArtifact);
+    }
+    if role == "symbol-index" {
+        return Some(MemoryKind::RepoFact);
+    }
+    if role == "code-read" {
+        return Some(MemoryKind::Code);
     }
     let cleaned = compact_whitespace(text);
     let lower = cleaned.to_lowercase();

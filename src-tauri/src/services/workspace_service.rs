@@ -10,6 +10,7 @@ use crate::workspace::{
     FileContentDto, FolderScopeDto, PolicyDecision, PolicyEngine, WorkspaceSettings,
     WritePreviewDto, WriteResultDto, WORKSPACE_SETTINGS_KEY,
 };
+use crate::workspace::symbols::{format_outline_text, outline_for_file};
 
 #[derive(Clone)]
 pub struct WorkspaceService {
@@ -79,13 +80,13 @@ impl WorkspaceService {
         Ok(cap_tree_lines(&entries, 10_000))
     }
 
-    /// Load folder scope: directory tree (file bodies loaded on demand via agent tools).
+    /// Load folder scope: directory tree + symbol outlines for PHP/JS/Python files.
     pub async fn load_folder_scope(
         &self,
         path: &str,
         max_content_chars: u32,
     ) -> AppResult<FolderScopeDto> {
-        let _ = max_content_chars;
+        let max_chars = max_content_chars.max(1024) as usize;
         let settings = self.get_settings().await?;
         let root = self.workspace_path(&settings);
         let rel = normalize_folder_scope_path(&root, path.trim().trim_matches('/'));
@@ -96,6 +97,37 @@ impl WorkspaceService {
             cap_tree_lines(&entries, 10_000)
         };
 
+        let mut outline_parts: Vec<String> = Vec::new();
+        let mut used = 0usize;
+        let mut truncated = false;
+
+        for entry in &entries {
+            if entry.ends_with('/') {
+                continue;
+            }
+            let outline = match read_file_range(&root, entry, None, None) {
+                Ok(f) => outline_for_file(&f.path, &f.content),
+                Err(_) => continue,
+            };
+            if !outline.parseable {
+                continue;
+            }
+            let block = format_outline_text(&outline);
+            let block_len = block.chars().count() + 2;
+            if !outline_parts.is_empty() && used.saturating_add(block_len) > max_chars {
+                truncated = true;
+                break;
+            }
+            used += block_len;
+            outline_parts.push(block);
+        }
+
+        let outline_summary = if outline_parts.is_empty() {
+            "(no PHP/JS/Python symbol outlines in this folder)".into()
+        } else {
+            outline_parts.join("\n\n")
+        };
+
         Ok(FolderScopeDto {
             path: if rel.is_empty() {
                 ".".into()
@@ -103,8 +135,9 @@ impl WorkspaceService {
                 rel
             },
             tree_summary,
+            outline_summary,
             files: Vec::new(),
-            truncated: false,
+            truncated,
         })
     }
 

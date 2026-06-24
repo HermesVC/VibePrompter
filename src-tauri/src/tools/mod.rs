@@ -26,6 +26,8 @@ pub fn list_workspace_tools() -> Vec<ToolDefinition> {
     vec![
         workspace::list_dir::tool_definition(),
         workspace::read_file::tool_definition(),
+        workspace::file_outline::tool_definition(),
+        workspace::read_symbol::tool_definition(),
     ]
 }
 
@@ -44,6 +46,8 @@ pub async fn execute_tool(
     match name {
         workspace::LIST_DIR => workspace::list_dir::execute(ctx, arguments).await,
         workspace::READ_FILE => workspace::read_file::execute(ctx, arguments).await,
+        workspace::FILE_OUTLINE => workspace::file_outline::execute(ctx, arguments).await,
+        workspace::READ_SYMBOL => workspace::read_symbol::execute(ctx, arguments).await,
         chrome::NAME => chrome::execute(arguments),
         _ => Err(AppError::NotFound {
             entity: "agent_tool",

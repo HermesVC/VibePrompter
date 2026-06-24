@@ -42,6 +42,7 @@ describe('parseGeneratedFileBlocks', () => {
         kind: 'folder',
         path: 'test/qwentest',
         treeSummary: '',
+        outlineSummary: '',
         files: [],
       })
     ).toBe('test/qwentest/index.html');
@@ -53,6 +54,7 @@ describe('parseGeneratedFileBlocks', () => {
         kind: 'folder',
         path: 'test/qwentest',
         treeSummary: '',
+        outlineSummary: '',
         files: [],
       })
     ).toBe('test/qwentest/index.html');

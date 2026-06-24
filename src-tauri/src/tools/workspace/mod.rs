@@ -4,6 +4,10 @@ mod helpers;
 
 pub mod list_dir;
 pub mod read_file;
+pub mod file_outline;
+pub mod read_symbol;
 
 pub use list_dir::NAME as LIST_DIR;
 pub use read_file::NAME as READ_FILE;
+pub use file_outline::NAME as FILE_OUTLINE;
+pub use read_symbol::NAME as READ_SYMBOL;

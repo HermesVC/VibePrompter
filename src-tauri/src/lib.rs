@@ -167,6 +167,7 @@ pub fn run() {
             commands::chat_complete_stream,
             commands::chat_clear_session_memory,
             commands::chat_index_context_artifacts,
+            commands::chat_index_folder_outline,
             commands::write_clipboard_text,
             commands::read_clipboard_text,
             commands::capture_editor_selection,
